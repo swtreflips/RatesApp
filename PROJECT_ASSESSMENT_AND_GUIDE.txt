@@ -1,0 +1,787 @@
+================================================================================
+  RATESAPP — PROJECT ASSESSMENT, IMPROVEMENTS & DEPLOYMENT GUIDE
+  March 31, 2026
+================================================================================
+
+
+================================================================================
+  PART 1: CURRENT STATE → WHAT TO IMPROVE → HOW
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SHELL ISSUES
+────────────────────────────────────────────────────────────────────────────────
+
+1. TWO ICON LIBRARIES
+
+  Currently:
+    lucide-react used in Shell, Sidebar, TopNav, dashboards.
+    @mui/icons-material used only in NewRateRequest (4 icons).
+    Both ship to the browser.
+
+  Implication:
+    @mui/icons-material is a heavy package (~2MB raw). You're paying for
+    it to use 4 icons that Lucide already has equivalents for.
+    Two icon sets also means inconsistent icon styles across the app.
+
+  How to fix:
+    In NewRateRequest.jsx, replace:
+      DeleteOutlineIcon  →  Trash2 from lucide-react
+      UploadFileIcon     →  Upload from lucide-react
+      AddIcon            →  Plus from lucide-react
+      SendIcon           →  Send from lucide-react
+    Then run: npm uninstall @mui/icons-material
+    Use Lucide everywhere going forward.
+
+  Why it's better:
+    Smaller bundle, one consistent icon style, one less dependency to update.
+
+
+2. PLACEHOLDERPAGE BREAKS INSIDE CARDS
+
+  Currently:
+    PlaceholderPage.jsx uses min-h-[60vh] — works great as a full page.
+    But in RequesterRoot.jsx:47 and ProviderRoot.jsx:49, it's rendered
+    inside a card <div>. The 60vh minimum makes those cards huge with a
+    tiny centered message floating in empty space.
+
+  Implication:
+    The dashboards look visually broken — massive empty cards.
+
+  How to fix:
+    Add an optional compact prop to PlaceholderPage:
+
+      export default function PlaceholderPage({ title, description, phase, compact }) {
+        return (
+          <div className={`flex flex-col items-center justify-center text-center
+            ${compact ? 'py-12' : 'min-h-[60vh]'}`}>
+            ...
+
+    Then in dashboard cards, use: <PlaceholderPage compact ... />
+
+  Why it's better:
+    Same component, two modes. Cards get appropriate sizing.
+    Full-page placeholders (route-level) still fill the viewport.
+
+
+3. SIDEBAR HAS NO MOBILE BEHAVIOR
+
+  Currently:
+    On narrow screens the sidebar collapses to 56px (w-14) but never
+    fully hides. The toggle button overlaps main content via absolute
+    positioning. On a phone, the collapsed sidebar wastes screen space.
+
+  Implication:
+    The app is effectively unusable on mobile — sidebar eats space
+    and the toggle can overlap interactive elements.
+
+  How to fix:
+    Use a breakpoint check. Below md (768px):
+      - Default to sidebar closed (hidden, not collapsed)
+      - When opened, render as an overlay with a backdrop
+      - Clicking the backdrop or a nav link closes it
+    Above md: keep the current collapse/expand behavior.
+
+    In Shell.jsx, add a useEffect that listens to window width and
+    auto-closes the sidebar below the breakpoint.
+
+  Why it's better:
+    Standard responsive sidebar pattern. Doesn't require extra libraries.
+    Users on tablets or phones can actually use the app.
+
+
+4. TOPNAV BUTTONS DO NOTHING
+
+  Currently:
+    Sign out, Profile, Settings buttons have no onClick handlers.
+    Notification bell shows a permanent red unread dot with no interaction.
+
+  Implication:
+    Sign out is the worst offender — users click it expecting to log out,
+    nothing happens. The red dot implies notifications exist but never
+    resolves, creating false urgency.
+
+  How to fix:
+    Sign out: Wire it to supabase.auth.signOut() now. Even in dev mode
+    this is safe — it just clears the session.
+
+    Profile / Settings: Either remove these items from the dropdown until
+    they're functional, or navigate to a placeholder page with a
+    "Coming soon" message.
+
+    Notification dot: Remove the red dot entirely until you have a
+    notification system. A dot that never changes is worse than no dot.
+
+  Why it's better:
+    Every clickable element either does something or clearly communicates
+    that it will soon. No dead buttons.
+
+
+5. NO ROUTE GUARDS
+
+  Currently:
+    Both /requester/* and /provider/* routes are always mounted.
+    A requester can type /provider/lanes in the URL and see provider pages.
+
+  Implication:
+    Not a security issue yet (no real data), but it's a broken UX —
+    a requester on a provider page sees a confusing interface.
+
+  How to fix:
+    In RoleRouter.jsx, conditionally render routes:
+
+      {role === 'requester' && (
+        <Route path="/requester/*" element={<RequesterRoot />} />
+      )}
+      {role === 'provider' && (
+        <Route path="/provider/*" element={<ProviderRoot />} />
+      )}
+
+    The fallback <Route path="*"> already redirects to /, which
+    redirects based on role. So typing the wrong URL just sends
+    you back to your dashboard.
+
+  Why it's better:
+    Three lines of change. Users can only access their own domain.
+
+
+6. LOADINGSCREEN INLINE STYLE TAG
+
+  Currently:
+    LoadingScreen.jsx injects a <style> block with a @keyframes rule
+    directly into the DOM via JSX.
+
+  Implication:
+    The style tag is added/removed every time the component mounts/unmounts.
+    It's not a performance issue but it's messy — the animation definition
+    lives inside a component instead of in the stylesheet.
+
+  How to fix:
+    Move the keyframe to index.css:
+
+      @keyframes loading {
+        0%   { transform: translateX(-100%); }
+        100% { transform: translateX(400%); }
+      }
+
+    Remove the <style> block from LoadingScreen.jsx.
+    The Tailwind class animate-[loading_1.2s_ease-in-out_infinite] will
+    still find the keyframe because it's now globally defined.
+
+  Why it's better:
+    Animations live in CSS where they belong. No DOM manipulation.
+
+
+7. MISSING FAVICON
+
+  Currently:
+    index.html references /anchor.svg but there is no public/ directory
+    and no anchor.svg file anywhere in the project.
+
+  Implication:
+    Every page load triggers a 404 for the favicon. Browser tabs show
+    a broken icon or the default blank.
+
+  How to fix:
+    Create a public/ folder in the project root.
+    Add an anchor.svg file (you can grab one from Lucide's SVG source
+    or create a simple one).
+    Vite automatically serves files from public/ at the root path.
+
+  Why it's better:
+    No more 404. Professional appearance in browser tabs.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  NEWRATEREQUEST ISSUES
+────────────────────────────────────────────────────────────────────────────────
+
+8. MUI COMPONENTS AROUND THE DATAGRID
+
+  Currently:
+    NewRateRequest uses MUI Button, Stack, Snackbar, Alert, IconButton
+    for the toolbar and toast. The rest of the app uses Tailwind for these.
+
+  Implication:
+    Two different button styles, two spacing systems, colors don't match
+    (MUI blue #1976d2 vs your brand blue #2563eb). Visual inconsistency.
+
+  How to fix:
+    Replace the toolbar with plain Tailwind:
+      Stack         →  <div className="flex gap-2">
+      Button        →  <button className="...your tailwind button styles">
+      IconButton    →  <button className="p-1 rounded hover:bg-slate-100">
+      Snackbar/Alert → A simple toast component with Tailwind (position
+                       fixed, bottom center, auto-dismiss with setTimeout)
+
+    Keep ONLY @mui/x-data-grid and its required peer deps
+    (@mui/material, @emotion/react, @emotion/styled — DataGrid needs these).
+
+  Why it's better:
+    One design language. Buttons look the same everywhere.
+    You still get the DataGrid's full editing power.
+
+
+9. COLUMNS ARRAY RECREATES EVERY RENDER
+
+  Currently:
+    The columns array is defined inside the component body. It references
+    rows (for row numbers) and handleDeleteRow (for the delete button).
+    Every render creates a new array, so DataGrid thinks columns changed.
+
+  Implication:
+    DataGrid may re-render more than necessary. Not visible with 10 rows
+    but matters with large CSVs.
+
+  How to fix:
+    Wrap columns in useMemo:
+
+      const columns = useMemo(() => [
+        ... column definitions ...
+      ], [rows])
+
+    For handleDeleteRow inside renderCell, use the rows state updater
+    pattern (functional update) so the function doesn't depend on rows.
+
+  Why it's better:
+    DataGrid only re-processes columns when rows actually change.
+
+
+10. ROW NUMBER USES findIndex
+
+  Currently:
+    The # column calls rows.findIndex(r => r.id === params.row.id) to
+    compute the row number. This is O(n) per row, O(n^2) for the grid.
+
+  Implication:
+    With 500 rows from a CSV upload, that's 250,000 comparisons on
+    every render. Sluggish grid.
+
+  How to fix:
+    Use DataGrid's built-in API:
+      params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1
+
+    Or simpler — DataGrid can show row numbers natively. But if you
+    want a custom column, the API method is O(1).
+
+  Why it's better:
+    Grid stays fast regardless of row count.
+
+
+11. 'dev-user' HARDCODED FALLBACK
+
+  Currently:
+    user?.id ?? 'dev-user' is passed as requester_id.
+
+  Implication:
+    When Supabase is connected, requester_id is a UUID foreign key.
+    The string 'dev-user' will cause an insert error — Postgres will
+    reject it as an invalid UUID.
+
+  How to fix:
+    Option A: Disable the Post button when there's no authenticated user.
+      <Button disabled={!user || posting} ...>
+    Option B: Use a valid UUID constant for dev mode:
+      const DEV_USER_ID = '00000000-0000-0000-0000-000000000000'
+
+    Option A is cleaner — it makes the auth requirement explicit.
+
+  Why it's better:
+    The app won't silently fail when connected to a real database.
+
+
+12. NO CONFIRMATION BEFORE POSTING
+
+  Currently:
+    Clicking "Post Batch" immediately sends the request.
+
+  Implication:
+    In a business context, accidentally posting 50 lanes to freight
+    forwarders is a real mistake. No undo.
+
+  How to fix:
+    Show a simple confirmation. Can be as basic as:
+      if (!window.confirm(`Post ${valid.length} lanes?`)) return
+
+    Or build a small Tailwind modal for a more polished look.
+    Don't overcomplicate it — a browser confirm() is fine to start.
+
+  Why it's better:
+    One line of code prevents accidental submissions.
+
+
+13. NO DUPLICATE LANE DETECTION
+
+  Currently:
+    Same POL/FD pair can appear multiple times. No warning.
+
+  Implication:
+    Requesters may accidentally duplicate lanes, especially from CSV.
+    Providers receive duplicate requests, cluttering their view.
+
+  How to fix:
+    Before posting, check for duplicates:
+
+      const seen = new Set()
+      const dupes = valid.filter(r => {
+        const key = `${r.pol}|${r.fd}`
+        if (seen.has(key)) return true
+        seen.add(key)
+        return false
+      })
+      if (dupes.length > 0) {
+        showSnack('warning', `${dupes.length} duplicate lane(s) detected`)
+        return
+      }
+
+  Why it's better:
+    Catches mistakes before they reach the database. Simple logic.
+
+
+14. CSV PARSING DOESN'T VALIDATE DATA
+
+  Currently:
+    Any string is accepted for POL and FD from CSV files. No trimming
+    beyond the initial trim(), no format validation.
+
+  Implication:
+    Messy data gets into the system — "  shanghai  " vs "SHANGHAI"
+    vs "Shanghai" are three different lanes to the database.
+
+  How to fix:
+    Normalize after parsing:
+      pol: pol.trim().toUpperCase()
+      fd: fd.trim().toUpperCase()
+
+    If port codes follow a known format (UN/LOCODE: 5-letter codes like
+    CNSHA, USLAX), you could validate length/format. But even just
+    trimming and uppercasing helps a lot.
+
+  Why it's better:
+    Consistent data from day one. Prevents duplicate-by-formatting issues.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STRUCTURAL / CONFIG
+────────────────────────────────────────────────────────────────────────────────
+
+15. BRAND COLORS = DEFAULT BLUE
+
+  Currently:
+    tailwind.config.js defines brand-50 through brand-950, but every
+    value is identical to Tailwind's built-in blue palette.
+
+  Implication:
+    brand-600 and blue-600 render the same color. The alias works
+    fine for future rebranding but adds no visual value today.
+
+  How to fix:
+    No action required if you plan to rebrand later — the alias is
+    the right pattern. Just know it's a placeholder. If you want a
+    distinct identity now, change the brand values to a different hue
+    (teal, indigo, etc.).
+
+
+16. NO MUI THEME PROVIDER
+
+  Currently:
+    MUI components use their default theme. DataGrid focus rings,
+    selection colors, and any MUI buttons use #1976d2 (MUI blue).
+
+  Implication:
+    Visual clash between MUI blue and your brand blue (#2563eb).
+
+  How to fix:
+    If you keep DataGrid (you should), add a minimal theme provider.
+    In App.jsx or a new providers/ThemeProvider.jsx:
+
+      import { createTheme, ThemeProvider } from '@mui/material/styles'
+      const theme = createTheme({
+        palette: { primary: { main: '#2563eb' } },
+      })
+
+    Wrap your app (or just the requester feature) in <ThemeProvider>.
+    This makes DataGrid's interactive colors match your brand.
+
+  Why it's better:
+    One blue across the entire app. Minimal config.
+
+
+17. FONT LOADED VIA CSS @import
+
+  Currently:
+    index.css line 1: @import url('https://fonts.googleapis.com/...')
+    CSS @import is render-blocking — the browser must download the CSS
+    file before it can continue parsing your stylesheet.
+
+  How to fix:
+    Move to index.html <head>:
+
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" />
+
+    Remove line 1 from index.css.
+
+  Why it's better:
+    The browser starts fetching the font immediately instead of waiting
+    for CSS to load first. Faster first paint.
+
+
+================================================================================
+  PART 2: FROM LOCAL REACT DEV → SUPABASE → DEPLOYMENT
+================================================================================
+
+This section walks you through the three stages: developing locally with
+React, connecting to Supabase, and deploying to a DigitalOcean droplet.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STAGE 1: LOCAL REACT DEVELOPMENT (where you are now)
+────────────────────────────────────────────────────────────────────────────────
+
+What you have:
+  - npm run dev starts Vite dev server (usually localhost:5173)
+  - Hot module replacement reloads changes instantly
+  - Supabase client exists but uses placeholder credentials
+  - Dev role toggle lets you switch requester/provider without auth
+
+How state works right now:
+  - All data lives in React component state (useState)
+  - Refreshing the page resets everything
+  - The DataGrid rows, posting state, snackbar — all ephemeral
+  - Auth state is faked via localStorage dev_role
+
+This is fine for building and testing UI. You can keep working like this
+for all visual/layout work. State only needs to become "real" when you
+need data to persist between sessions.
+
+When to move to Stage 2:
+  - When you've finished the requester UI (NewRateRequest is solid,
+    My Requests page is built, dashboard is laid out)
+  - When you need to test: "did my data actually save?"
+  - When you start building the provider side (it needs to read
+    data the requester created — that requires a shared database)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STAGE 2: CONNECTING TO SUPABASE
+────────────────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Create the Supabase project
+
+    Go to supabase.com → New Project.
+    Pick a region close to your users.
+    Note your project URL and anon key from Settings → API.
+
+  STEP 2 — Configure environment variables
+
+    Create .env.local in your project root:
+
+      VITE_SUPABASE_URL=https://your-project-id.supabase.co
+      VITE_SUPABASE_ANON_KEY=eyJ...your-anon-key
+
+    This file is already in .gitignore (you have that covered).
+    Your existing supabase.js will pick these up automatically —
+    the code already reads import.meta.env.VITE_SUPABASE_URL.
+
+    Also create .env.example (not gitignored) so collaborators know
+    what's needed:
+
+      VITE_SUPABASE_URL=https://your-project.supabase.co
+      VITE_SUPABASE_ANON_KEY=your-anon-key
+
+  STEP 3 — Create database tables
+
+    In Supabase dashboard → SQL Editor, run:
+
+      create table rate_request_batches (
+        id uuid primary key default gen_random_uuid(),
+        requester_id uuid not null,
+        status text not null default 'posted',
+        created_at timestamptz not null default now()
+      );
+
+      create table rate_request_lanes (
+        id uuid primary key default gen_random_uuid(),
+        batch_id uuid not null references rate_request_batches(id),
+        pol text not null,
+        fd text not null,
+        created_at timestamptz not null default now()
+      );
+
+    This matches the schema already documented in rateRequestService.js.
+
+  STEP 4 — Test the connection
+
+    Restart your dev server (npm run dev) so Vite picks up the new env vars.
+    Go to New Rate Request, add a lane, click Post Batch.
+    Check Supabase dashboard → Table Editor — you should see the data.
+
+    If it fails, check the browser console. Common issues:
+      - Wrong URL or key (typo in .env.local)
+      - Table doesn't exist (SQL didn't run)
+      - RLS policies blocking inserts (see next step)
+
+  STEP 5 — Row Level Security (RLS)
+
+    By default, Supabase enables RLS on new tables, which blocks all
+    access unless you add policies. For initial development:
+
+    Option A (quick, dev only):
+      alter table rate_request_batches enable row level security;
+      create policy "Allow all" on rate_request_batches for all
+        using (true) with check (true);
+
+      (Same for rate_request_lanes)
+
+    Option B (proper, do this before going live):
+      create policy "Users can insert their own batches"
+        on rate_request_batches for insert
+        with check (auth.uid() = requester_id);
+
+      create policy "Users can read their own batches"
+        on rate_request_batches for select
+        using (auth.uid() = requester_id);
+
+    Start with Option A to unblock development. Switch to Option B
+    when you implement real auth.
+
+  STEP 6 — Build read flows
+
+    Now that data persists, build the read side:
+      - My Requests page: fetch batches with supabase.from('rate_request_batches').select()
+      - Dashboard stats: count queries
+      - These validate that your write → read cycle works end-to-end
+
+  STEP 7 — Authentication
+
+    When you're ready for real users:
+      - Enable Email auth in Supabase → Authentication → Providers
+      - Build a login page in your app
+      - Use supabase.auth.signUp() and supabase.auth.signInWithPassword()
+      - The AuthProvider you already have will pick up the session
+        automatically via onAuthStateChange
+
+    At this point, remove or gate the dev role toggle behind an
+    environment variable so it doesn't show in production.
+
+  THE DEVELOPMENT LOOP:
+
+    While connecting to Supabase, your workflow stays the same:
+      1. npm run dev
+      2. Write React code
+      3. Test in browser against your live Supabase project
+      4. Check Supabase dashboard to verify data
+
+    You're still developing locally — Supabase is just a remote
+    database your local dev server talks to.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STAGE 3: DEPLOYING TO A DIGITALOCEAN DROPLET
+────────────────────────────────────────────────────────────────────────────────
+
+  IMPORTANT CONTEXT:
+
+    Your app is a static React SPA (single-page application). Vite builds
+    it into plain HTML, CSS, and JS files. There is no Node.js server to
+    run. You just need a web server (like Nginx) to serve those files.
+
+    Supabase runs separately in the cloud — your droplet doesn't need
+    to host a database.
+
+
+  STEP 1 — Build the production bundle
+
+    On your local machine:
+      npm run build
+
+    This creates a dist/ folder with your compiled app.
+    Test it locally: npm run preview (serves the dist/ folder).
+
+
+  STEP 2 — Create a DigitalOcean droplet
+
+    On DigitalOcean:
+      - Create Droplet → Ubuntu 22.04 or 24.04
+      - Basic plan ($6/month is plenty for a static site)
+      - Choose a region close to your users
+      - Add your SSH key for secure access
+
+    Once created, note the droplet's IP address.
+
+
+  STEP 3 — Set up the server
+
+    SSH into your droplet:
+      ssh root@your-droplet-ip
+
+    Install Nginx:
+      apt update && apt install -y nginx
+
+    Create a directory for your app:
+      mkdir -p /var/www/ratesapp
+
+
+  STEP 4 — Upload your build
+
+    From your local machine:
+      scp -r dist/* root@your-droplet-ip:/var/www/ratesapp/
+
+    This copies your compiled files to the server.
+
+
+  STEP 5 — Configure Nginx
+
+    On the droplet, create a config file:
+      nano /etc/nginx/sites-available/ratesapp
+
+    Paste this:
+
+      server {
+          listen 80;
+          server_name your-domain.com;  # or the droplet IP
+
+          root /var/www/ratesapp;
+          index index.html;
+
+          # Handle SPA routing — all paths serve index.html
+          location / {
+              try_files $uri $uri/ /index.html;
+          }
+
+          # Cache static assets
+          location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+              expires 1y;
+              add_header Cache-Control "public, immutable";
+          }
+      }
+
+    The critical line is try_files $uri $uri/ /index.html — this makes
+    React Router work. Without it, refreshing on /requester/new would
+    return a 404 because there's no actual file at that path.
+
+    Enable the site:
+      ln -s /etc/nginx/sites-available/ratesapp /etc/nginx/sites-enabled/
+      rm /etc/nginx/sites-enabled/default
+      nginx -t          # test config
+      systemctl reload nginx
+
+
+  STEP 6 — Set environment variables in the build
+
+    IMPORTANT: Vite embeds environment variables at BUILD TIME, not runtime.
+    Your .env.local values are baked into the JS bundle during npm run build.
+
+    This means:
+      - You don't need to set env vars on the droplet
+      - Your Supabase URL and anon key are already in the compiled JS
+      - The anon key is safe to expose (it's a public key — RLS protects data)
+      - NEVER put service_role keys or secrets in VITE_ variables
+
+    If you need different env vars for production vs development:
+      - .env.local          → used by npm run dev
+      - .env.production     → used by npm run build
+    Create .env.production with your production Supabase credentials.
+
+
+  STEP 7 — Add HTTPS (required for production)
+
+    Install Certbot for free SSL via Let's Encrypt:
+      apt install -y certbot python3-certbot-nginx
+      certbot --nginx -d your-domain.com
+
+    This auto-modifies your Nginx config to handle HTTPS.
+    Certbot sets up auto-renewal too.
+
+    You need a domain name pointed at your droplet's IP for this.
+    If you're just testing with an IP, skip this step for now.
+
+
+  STEP 8 — Automate deployments (optional but recommended)
+
+    Manual scp works but gets tedious. Simple options:
+
+    Option A — Shell script on your machine:
+      Create deploy.sh:
+
+        #!/bin/bash
+        npm run build
+        scp -r dist/* root@your-droplet-ip:/var/www/ratesapp/
+
+      Run: bash deploy.sh
+
+    Option B — GitHub Actions (if you push to GitHub):
+      On every push to main, a GitHub Action can:
+        1. npm run build
+        2. SCP the dist/ to your droplet
+      This is a more advanced setup but fully automates deployment.
+
+
+  STEP 9 — Verify everything works
+
+    Visit http://your-droplet-ip (or https://your-domain.com).
+    You should see your app.
+    Test: navigate to /requester/new, refresh the page — it should
+    still work (thanks to the Nginx try_files rule).
+    Post a batch — data should appear in your Supabase dashboard.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  THE FULL PICTURE
+────────────────────────────────────────────────────────────────────────────────
+
+  Your architecture when deployed:
+
+    [User's Browser]
+        |
+        | loads static files (HTML/CSS/JS)
+        |
+    [DigitalOcean Droplet — Nginx]
+        serves your React app
+        (no backend code runs here)
+        |
+        | Supabase JS client makes API calls directly from browser
+        |
+    [Supabase Cloud]
+        - PostgreSQL database
+        - Auth service
+        - Edge Functions (future — for notifications, etc.)
+
+  Key insight: Your droplet is just a file server. All the "backend"
+  work (database, auth, server-side logic) happens on Supabase.
+  The browser talks to Supabase directly via the JS client.
+
+  This is why the deployment is simple — no Node.js server to run,
+  no process manager (PM2), no server-side rendering to configure.
+  Just static files served by Nginx.
+
+
+================================================================================
+  SUMMARY — PRIORITY IMPROVEMENTS TABLE
+================================================================================
+
+  #    Issue                                       Impact
+  ──   ──────────────────────────────────────────   ──────────────────────────
+  1    Drop @mui/icons-material, use Lucide only    Smaller bundle, one icon set
+  2    Fix PlaceholderPage min-height in cards      Dashboard looks correct
+  3    Wire sign-out or remove it                   No dead buttons
+  4    Add anchor.svg favicon                       No 404 on every load
+  5    Replace MUI Button/Stack/Snackbar w/Tailwind One design system
+  6    Move keyframe to index.css                   Clean, no inline styles
+  7    Fix 'dev-user' UUID fallback                 Won't break on real DB
+  8    Add mobile sidebar overlay                   App works on phones
+  9    Memoize DataGrid columns                     Better render performance
+  10   Move font to index.html <link>               Faster font loading
+  11   Add MUI ThemeProvider for DataGrid            Consistent brand colors
+  12   Add route guards                             Users stay in their domain
+  13   Add post confirmation                        Prevent accidental submissions
+  14   Detect duplicate lanes                       Cleaner data
+  15   Normalize CSV data (trim, uppercase)          Consistent port codes
+
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
