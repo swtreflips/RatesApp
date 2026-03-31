@@ -2,6 +2,7 @@ import React from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { FilePlus, ClipboardList, CheckSquare, TrendingUp } from 'lucide-react'
 import PlaceholderPage from '../../../components/shell/PlaceholderPage'
+import NewRateRequest from './NewRateRequest'
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
@@ -59,16 +60,7 @@ export default function RequesterRoot() {
   return (
     <Routes>
       <Route index element={<RequesterDashboard />} />
-      <Route
-        path="new"
-        element={
-          <PlaceholderPage
-            title="New Rate Request"
-            description="Build an RFQ batch by adding origin/destination lanes and sending to freight forwarders."
-            phase="Phase 2"
-          />
-        }
-      />
+      <Route path="new" element={<NewRateRequest />} />
       <Route
         path="requests"
         element={
