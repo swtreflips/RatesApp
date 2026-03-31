@@ -5,10 +5,7 @@ import Stack from '@mui/material/Stack'
 import Snackbar from '@mui/material/Snackbar'
 import Alert from '@mui/material/Alert'
 import IconButton from '@mui/material/IconButton'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
-import UploadFileIcon from '@mui/icons-material/UploadFile'
-import AddIcon from '@mui/icons-material/Add'
-import SendIcon from '@mui/icons-material/Send'
+import { Trash2, Upload, Plus, Send } from 'lucide-react'
 import Papa from 'papaparse'
 import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
@@ -68,7 +65,7 @@ export default function NewRateRequest() {
           onClick={() => handleDeleteRow(params.row.id)}
           tabIndex={-1}
         >
-          <DeleteOutlineIcon fontSize="small" />
+          <Trash2 size={16} />
         </IconButton>
       ),
     },
@@ -174,7 +171,7 @@ export default function NewRateRequest() {
         <Button
           size="small"
           variant="outlined"
-          startIcon={<AddIcon />}
+          startIcon={<Plus size={16} />}
           onClick={handleAddRow}
         >
           Add Row
@@ -182,7 +179,7 @@ export default function NewRateRequest() {
         <Button
           size="small"
           variant="outlined"
-          startIcon={<UploadFileIcon />}
+          startIcon={<Upload size={16} />}
           onClick={() => fileInputRef.current?.click()}
         >
           Upload CSV
@@ -200,7 +197,7 @@ export default function NewRateRequest() {
         <Button
           size="small"
           variant="contained"
-          startIcon={<SendIcon />}
+          startIcon={<Send size={16} />}
           onClick={handlePost}
           disabled={posting}
         >
