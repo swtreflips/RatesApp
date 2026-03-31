@@ -1,0 +1,429 @@
+================================================================================
+  DATA MODEL — RATE REQUESTS vs RATES
+  How to think about templates, submissions, and stored rates
+  March 31, 2026
+================================================================================
+
+
+________________________________________________________________________________
+1. THE THREE DISTINCT THINGS
+________________________________________________________________________________
+
+  You have three concepts that look similar but are NOT the same:
+
+  A) RATE REQUEST (template — the demand side)
+  B) RATE SUBMISSION (what providers fill into the template)
+  C) RATE (the normalized, one-per-carrier record stored in the DB)
+
+  They relate like this:
+
+    RATE REQUEST (you create)
+        │
+        │  providers fill in the template
+        ▼
+    RATE SUBMISSION (grouped view — one row per unique POD+LastCY+Price)
+        │
+        │  your app explodes multi-carrier rows into individual records
+        ▼
+    RATE (one row per carrier — the source of truth in your database)
+
+
+________________________________________________________________________________
+2. WHAT EACH ONE CONTAINS
+________________________________________________________________________________
+
+
+  A) RATE REQUEST — the template
+  ──────────────────────────────
+
+    Created by: You (requester)
+    Purpose: Tell providers "I need rates for these lanes"
+
+    Fields:
+      - Port of Loading (POL)       e.g., Nhava Sheva, India
+      - Final Destination (FD)      e.g., Seymour, IN
+      - Number of containers        e.g., 5 x 40HC
+      - (optional) Commodity, special requirements, etc.
+
+    What it does NOT contain:
+      - No POD (port of discharge) — that's for providers to fill in
+      - No Last CY — that's for providers to fill in
+      - No rate/price — that's for providers to fill in
+      - No carrier — that's for providers to fill in
+
+    Think of it as: "I need to get goods FROM here TO here.
+    You tell me HOW and at WHAT PRICE."
+
+    The rate request is deliberately incomplete. It defines the
+    origin and the final destination. Everything in between is
+    what providers compete on.
+
+
+  B) RATE SUBMISSION — the filled-in template (display layer)
+  ────────────────────────────────────────────────────────────
+
+    Created by: Providers
+    Purpose: Answer a rate request with routing and pricing
+
+    This is what the provider fills into the template:
+      - Port of Discharge (POD)     e.g., Norfolk, VA
+      - Last CY (Container Yard)    e.g., Cincinnati, OH
+      - Rate / Price                e.g., $2,850
+      - Carrier(s)                  e.g., [MSC, Hapag-Lloyd]
+
+    KEY NUANCE — the grouping rule:
+      If multiple carriers can do the SAME POD + SAME Last CY + SAME
+      Price, the provider enters them as ONE row with multiple carriers.
+
+      Example for Nhava Sheva → Seymour, IN:
+
+        ┌─────────────────┬──────────────┬────────┬─────────────────────┐
+        │ POD             │ Last CY      │ Rate   │ Carriers            │
+        ├─────────────────┼──────────────┼────────┼─────────────────────┤
+        │ Norfolk, VA     │ Cincinnati   │ $2,850 │ MSC, Hapag-Lloyd    │
+        │ Los Angeles, CA │ Louisville   │ $3,100 │ Evergreen           │
+        └─────────────────┴──────────────┴────────┴─────────────────────┘
+
+      This is a DISPLAY optimization. It keeps the template clean.
+      Two rows instead of three (because MSC and Hapag-Lloyd share
+      the same routing and price).
+
+    This view exists to simplify how providers enter data and how
+    requesters review submissions. It is NOT how data is stored.
+
+
+  C) RATE — the normalized record (database layer)
+  ─────────────────────────────────────────────────
+
+    Created by: Your app (computed from submissions)
+    Purpose: The actual, queryable, one-carrier-per-row data
+
+    When a provider submits the template above, your app creates:
+
+        ┌─────────────┬──────────────┬──────────┬────────┬──────────────┐
+        │ POL         │ POD          │ Last CY  │ Rate   │ Carrier      │
+        ├─────────────┼──────────────┼──────────┼────────┼──────────────┤
+        │ Nhava Sheva │ Norfolk, VA  │ Cinci    │ $2,850 │ MSC          │
+        │ Nhava Sheva │ Norfolk, VA  │ Cinci    │ $2,850 │ Hapag-Lloyd  │
+        │ Nhava Sheva │ Los Angeles  │ Louis    │ $3,100 │ Evergreen    │
+        └─────────────┴──────────────┴──────────┴────────┴──────────────┘
+
+      Three rows. One per carrier. This is your source of truth.
+
+    Why normalize:
+      - You can query "show me all rates via Norfolk" → instant
+      - You can query "show me all MSC rates" → instant
+      - You can compare carriers side-by-side
+      - You can sort by cheapest rate across all carriers
+      - If MSC changes their price later, you update one row
+      - Analytics, filtering, reporting — all work on flat rows
+
+    The grouped view (B) is just a UI convenience built FROM these
+    rows. You group by (POD + Last CY + Rate) at display time.
+
+
+________________________________________________________________________________
+3. HOW THEY MAP TO DATABASE TABLES
+________________________________________________________________________________
+
+  TABLE: rate_requests
+  ─────────────────────
+    This is the template. What YOU create.
+
+    id              uuid PK
+    batch_id        uuid FK → rate_request_batches
+    pol             text            "Nhava Sheva, India"
+    fd              text            "Seymour, IN"
+    container_count integer         5
+    container_type  text            "40HC"
+    status          text            "open" | "quoted" | "closed"
+    created_at      timestamptz
+
+    One row = one lane you need rates for.
+    This table has NO pricing, NO routing, NO carrier info.
+    It's purely demand.
+
+
+  TABLE: rates
+  ─────────────
+    This is the normalized, one-per-carrier rate. Your source of truth.
+
+    id              uuid PK
+    rate_request_id uuid FK → rate_requests (links back to the template)
+    provider_id     uuid FK → auth.users (which forwarder submitted this)
+    pol             text            "Nhava Sheva, India"
+    pod             text            "Norfolk, VA"
+    last_cy         text            "Cincinnati, OH"
+    fd              text            "Seymour, IN"
+    carrier         text            "MSC"
+    rate_amount     numeric         2850.00
+    currency        text            "USD"
+    transit_days    integer         28
+    valid_from      date
+    valid_until     date
+    created_at      timestamptz
+
+    One row = one carrier, one routing, one price.
+
+    Note: pol and fd are duplicated from rate_requests intentionally.
+    This makes the rates table self-contained — you can query rates
+    without joining to rate_requests every time. The rate_request_id
+    FK still links them for traceability.
+
+
+  TABLE: rate_request_batches (already exists in your code)
+  ──────────────────────────────
+    Groups multiple rate requests into one posting.
+
+    id              uuid PK
+    requester_id    uuid FK → auth.users
+    status          text            "posted" | "in_progress" | "closed"
+    created_at      timestamptz
+
+    One batch = one "send" action. "I posted 8 lanes to forwarders."
+
+
+________________________________________________________________________________
+4. THE SUBMISSION FLOW — WHAT ACTUALLY HAPPENS
+________________________________________________________________________________
+
+  STEP 1: You create rate requests
+  ─────────────────────────────────
+    You open NewRateRequest, add lanes:
+      Nhava Sheva → Seymour, IN (5 x 40HC)
+      Mundra → Dallas, TX (3 x 40GP)
+    Click Post Batch.
+
+    App creates:
+      1 row in rate_request_batches
+      2 rows in rate_requests (one per lane)
+
+    No rates exist yet. Templates are empty.
+
+
+  STEP 2: Provider sees open rate requests
+  ──────────────────────────────────────────
+    Your boss logs in as provider.
+    Sees the open rate requests:
+      Nhava Sheva → Seymour, IN (5 x 40HC)
+      Mundra → Dallas, TX (3 x 40GP)
+
+    He picks Nhava Sheva → Seymour and starts filling in.
+
+
+  STEP 3: Provider fills in the template
+  ────────────────────────────────────────
+    The UI shows the rate request as a form/grid where he adds rows:
+
+      Rate Request: Nhava Sheva → Seymour, IN
+      ┌──────────────┬──────────────┬────────┬─────────────────────┐
+      │ POD          │ Last CY      │ Rate   │ Carriers            │
+      ├──────────────┼──────────────┼────────┼─────────────────────┤
+      │ Norfolk, VA  │ Cincinnati   │ $2,850 │ MSC, Hapag-Lloyd    │  ← row 1
+      │ Los Angeles  │ Louisville   │ $3,100 │ Evergreen           │  ← row 2
+      └──────────────┴──────────────┴────────┴─────────────────────┘
+
+    He clicks Submit.
+
+
+  STEP 4: App explodes and stores
+  ────────────────────────────────
+    Your app takes the submission and normalizes it:
+
+      Row 1 has 2 carriers → create 2 rate records
+      Row 2 has 1 carrier  → create 1 rate record
+
+    INSERT into rates:
+      (rate_request_id, pol, pod, last_cy, fd, carrier, rate_amount, ...)
+      (req_1, Nhava Sheva, Norfolk,     Cincinnati, Seymour, MSC,         2850)
+      (req_1, Nhava Sheva, Norfolk,     Cincinnati, Seymour, Hapag-Lloyd, 2850)
+      (req_1, Nhava Sheva, Los Angeles, Louisville, Seymour, Evergreen,   3100)
+
+    This explosion happens in your React app (or a Supabase Edge Function)
+    BEFORE inserting into the database. The provider never sees this —
+    they submitted 2 rows, the DB has 3 rows. That's your app's job.
+
+
+  STEP 5: You review rates
+  ──────────────────────────
+    You open your dashboard or "Received Rates" page.
+
+    You have two ways to look at the data:
+
+    VIEW A — Rate Request view (grouped, template-style):
+      Shows the original rate request with submissions grouped.
+      This is the "filled-in template" view.
+      Built by querying rates WHERE rate_request_id = X
+      then GROUP BY (pod, last_cy, rate_amount)
+      and aggregate carriers into an array.
+
+      Nhava Sheva → Seymour, IN
+        Norfolk → Cincinnati  $2,850  [MSC, Hapag-Lloyd]
+        Los Angeles → Louisville  $3,100  [Evergreen]
+
+    VIEW B — Rates view (flat, every carrier separate):
+      Shows all individual rates across all requests.
+      No grouping. Filterable, sortable, comparable.
+
+      Nhava Sheva → Norfolk → Cincinnati → MSC → $2,850
+      Nhava Sheva → Norfolk → Cincinnati → Hapag-Lloyd → $2,850
+      Nhava Sheva → LA → Louisville → Evergreen → $3,100
+
+    Both views come from the SAME rates table.
+    View A groups. View B doesn't. That's the only difference.
+
+
+________________________________________________________________________________
+5. WHY THE RATE REQUEST IS "JUST A TEMPLATE"
+________________________________________________________________________________
+
+  The rate request says: "I need goods from A to B."
+  It does NOT dictate the routing.
+
+  This is intentional because:
+
+    1. You don't know the best routing — that's what providers know.
+       The same Nhava Sheva → Seymour lane could go through:
+         - Norfolk (east coast ocean, shorter inland)
+         - Los Angeles (west coast ocean, longer inland)
+         - Savannah (southeast, different inland cost)
+       Each routing has different pricing and transit times.
+
+    2. Providers compete on routing + carrier + price.
+       By leaving the template open, you let them show you OPTIONS
+       you might not have known about.
+
+    3. The template is reusable.
+       Next quarter, you post the same Nhava Sheva → Seymour request.
+       Different providers, different rates, same template.
+       Old rates stay in the DB as historical records.
+
+  The rate request is the QUESTION.
+  The rates are the ANSWERS.
+  You keep both, permanently.
+
+
+________________________________________________________________________________
+6. THE SCALABILITY ANGLE
+________________________________________________________________________________
+
+  You mentioned scalability. Here's how this model scales:
+
+  ADDING NEW PROVIDERS:
+    New forwarders see the same open rate requests. They submit rates.
+    More rows in the rates table. No schema changes.
+
+  ADDING NEW LANES:
+    You create more rate requests. Same flow. No schema changes.
+
+  BROWSING RATES INDEPENDENTLY:
+    Because rates are normalized (one carrier per row), you can:
+      - "Show me all rates from Norfolk" (filter by pod)
+      - "Show me all MSC rates" (filter by carrier)
+      - "Show me the cheapest way to Seymour" (sort by rate_amount)
+      - "Show me rates expiring this month" (filter by valid_until)
+    None of this requires touching rate_requests.
+
+  RATE REQUESTS AS RECURRING TEMPLATES:
+    Same lanes, new batch, new round of pricing.
+    Rate requests can be duplicated for the next quarter.
+    Historical rates stay attached to the old batch.
+
+  COVERAGE FILTERING (future):
+    Some providers only quote certain regions. When you add this,
+    it's a filter on WHICH rate requests they see — not a change
+    to the data model.
+
+
+________________________________________________________________________________
+7. THE CARRIER GROUPING RULE — CLEAR DEFINITION
+________________________________________________________________________________
+
+  When a provider submits rates into a rate request template, they
+  can put multiple carriers on ONE row ONLY IF all three match:
+
+    1. Same Port of Discharge (POD)
+    2. Same Last CY
+    3. Same Rate/Price
+
+  If ANY of these differ, it's a separate row.
+
+  VALID grouping (same POD, same Last CY, same price):
+    Norfolk → Cincinnati → $2,850 → [MSC, Hapag-Lloyd]
+
+  INVALID grouping (different prices — must be separate rows):
+    Norfolk → Cincinnati → $2,850 → MSC
+    Norfolk → Cincinnati → $3,000 → Hapag-Lloyd
+
+  INVALID grouping (different Last CY — must be separate rows):
+    Norfolk → Cincinnati → $2,850 → MSC
+    Norfolk → Columbus   → $2,850 → Hapag-Lloyd
+
+  This rule exists purely to simplify the provider's data entry
+  and the requester's review. The database always stores one
+  carrier per row regardless.
+
+
+________________________________________________________________________________
+8. HOW TO BUILD THIS IN PHASES
+________________________________________________________________________________
+
+  PHASE 1 (current — already done):
+    Rate request template: POL + FD in a DataGrid.
+    No rates yet. Just the demand side.
+
+  PHASE 2 (next):
+    Expand rate request fields: add container_count, container_type.
+    Build "My Requests" page: list posted batches with their lanes.
+    Connect to Supabase: rate_request_batches + rate_requests tables.
+
+  PHASE 3:
+    Build provider view: see open rate requests.
+    Build rate submission form: the template where providers fill in
+    POD + Last CY + Rate + Carriers per row.
+    Build the "explode" logic: multi-carrier rows → individual rate rows.
+    Create the rates table in Supabase.
+
+  PHASE 4:
+    Build requester "Received Rates" page with both views:
+      - Grouped (rate request template view)
+      - Flat (all rates, filterable)
+    Build dashboard stats from real data.
+
+  PHASE 5:
+    Rate comparison, historical tracking, coverage filtering,
+    recurring rate request templates.
+
+
+________________________________________________________________________________
+9. NAMING CLARIFICATION
+________________________________________________________________________________
+
+  To avoid confusion in your code and conversations:
+
+    "Rate Request"  = the template (POL + FD + volume)
+                      Table: rate_requests
+                      Created by: requester
+
+    "Rate"          = one carrier, one routing, one price
+                      Table: rates
+                      Created by: app (computed from submissions)
+
+    "Submission"    = the act of a provider filling in a template
+                      This is a UI concept, not necessarily its own table.
+                      The submission gets exploded into individual rates.
+
+    "Filled Template" = rate request + its submitted rates (grouped view)
+                        This is a QUERY result, not a separate table.
+                        Join rate_requests with rates, group by
+                        (pod, last_cy, rate_amount).
+
+  Use these terms consistently in your code:
+    - rateRequests (or lanes) for the template rows
+    - rates for the normalized carrier records
+    - Don't call both "rates" — that's where confusion starts
+
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
