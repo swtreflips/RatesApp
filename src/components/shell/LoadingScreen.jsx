@@ -17,12 +17,6 @@ export default function LoadingScreen() {
         <p className="text-sm text-slate-400">Loading session…</p>
       </div>
 
-      <style>{`
-        @keyframes loading {
-          0%   { transform: translateX(-100%); }
-          100% { transform: translateX(400%); }
-        }
-      `}</style>
     </div>
   )
 }

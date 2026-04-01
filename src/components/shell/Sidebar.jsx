@@ -60,11 +60,12 @@ const PROVIDER_NAV = [
 
 /* ─── Shared nav item component ──────────────────────────────────────── */
 
-function NavItem({ to, icon: Icon, label, collapsed, end }) {
+function NavItem({ to, icon: Icon, label, collapsed, end, onClick }) {
   return (
     <NavLink
       to={to}
       end={end}
+      onClick={onClick}
       className={({ isActive }) =>
         [
           'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
@@ -82,15 +83,20 @@ function NavItem({ to, icon: Icon, label, collapsed, end }) {
 
 /* ─── Sidebar ─────────────────────────────────────────────────────────── */
 
-export default function Sidebar({ open, onToggle }) {
+export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
   const { role } = useAuth()
   const navItems = role === 'provider' ? PROVIDER_NAV : REQUESTER_NAV
+
+  const desktopClasses = open ? 'w-56' : 'w-14'
+  const mobileClasses = open
+    ? 'fixed inset-y-0 left-0 z-40 w-56 shadow-xl'
+    : 'fixed inset-y-0 left-0 z-40 w-56 -translate-x-full'
 
   return (
     <aside
       className={[
-        'relative flex h-full shrink-0 flex-col border-r border-slate-200 bg-white transition-all duration-200',
-        open ? 'w-56' : 'w-14',
+        'flex h-full shrink-0 flex-col border-r border-slate-200 bg-white transition-all duration-200',
+        isMobile ? mobileClasses : `relative ${desktopClasses}`,
       ].join(' ')}
     >
       {/* Logo area */}
@@ -119,18 +125,20 @@ export default function Sidebar({ open, onToggle }) {
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto scrollbar-thin px-2 py-3 space-y-0.5">
         {navItems.map(item => (
-          <NavItem key={item.to} collapsed={!open} {...item} />
+          <NavItem key={item.to} collapsed={!open} onClick={onNavClick} {...item} />
         ))}
       </nav>
 
-      {/* Collapse toggle button */}
-      <button
-        onClick={onToggle}
-        className="absolute -right-3 top-16 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm hover:text-slate-600 transition-colors"
-        aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
-      >
-        {open ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
-      </button>
+      {/* Collapse toggle button — hidden on mobile */}
+      {!isMobile && (
+        <button
+          onClick={onToggle}
+          className="absolute -right-3 top-16 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm hover:text-slate-600 transition-colors"
+          aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+        >
+          {open ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
+        </button>
+      )}
 
       {/* Bottom spacer / footer */}
       <div className="border-t border-slate-100 p-3">

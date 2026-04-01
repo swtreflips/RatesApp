@@ -21,11 +21,11 @@ export default function RoleRouter() {
         element={<Navigate to={role === 'provider' ? '/provider' : '/requester'} replace />}
       />
 
-      {/* Requester feature domain */}
-      <Route path="/requester/*" element={<RequesterRoot />} />
+      {/* Requester feature domain — only mounted for requesters */}
+      {role === 'requester' && <Route path="/requester/*" element={<RequesterRoot />} />}
 
-      {/* Provider feature domain */}
-      <Route path="/provider/*" element={<ProviderRoot />} />
+      {/* Provider feature domain — only mounted for providers */}
+      {role === 'provider' && <Route path="/provider/*" element={<ProviderRoot />} />}
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
