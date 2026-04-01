@@ -10,6 +10,26 @@ import { postRateRequestBatch } from '../services/rateRequestService'
 let nextId = 1
 const makeEmptyRow = () => ({ id: nextId++, pol: '', fd: '' })
 
+function laneKey(r) {
+  return `${r.pol.trim().toLowerCase()}|${r.fd.trim().toLowerCase()}`
+}
+
+function dedup(rows) {
+  const seen = new Set()
+  const unique = []
+  let removed = 0
+  for (const r of rows) {
+    const key = laneKey(r)
+    if (!key || key === '|' || !seen.has(key)) {
+      if (key && key !== '|') seen.add(key)
+      unique.push(r)
+    } else {
+      removed++
+    }
+  }
+  return { unique, removed }
+}
+
 const TOAST_COLORS = {
   success: 'bg-green-600',
   warning: 'bg-amber-500',
@@ -45,10 +65,7 @@ export default function NewRateRequest() {
       width: 60,
       sortable: false,
       filterable: false,
-      renderCell: (params) => {
-        const index = rows.findIndex(r => r.id === params.row.id)
-        return index + 1
-      },
+      renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
     },
     {
       field: 'pol',
@@ -84,10 +101,19 @@ export default function NewRateRequest() {
 
   /* ── row editing ─────────────────────────────────────────────────────── */
 
-  const processRowUpdate = useCallback((newRow) => {
+  const processRowUpdate = useCallback((newRow, oldRow) => {
+    const newKey = laneKey(newRow)
+    // Only check for duplicates if both fields are filled
+    if (newKey && newKey !== '|') {
+      const isDuplicate = rows.some(r => r.id !== newRow.id && laneKey(r) === newKey)
+      if (isDuplicate) {
+        showToast('warning', 'Duplicate lane — this POL / FD pair already exists')
+        return oldRow
+      }
+    }
     setRows(prev => prev.map(r => (r.id === newRow.id ? newRow : r)))
     return newRow
-  }, [])
+  }, [rows])
 
   /* ── add / delete rows ───────────────────────────────────────────────── */
 
@@ -122,8 +148,10 @@ export default function NewRateRequest() {
           .filter(r => r.pol || r.fd) // drop fully empty rows
 
         if (parsed.length > 0) {
-          setRows(parsed)
-          showToast('success', `Loaded ${parsed.length} lane(s) from CSV`)
+          const { unique, removed } = dedup(parsed)
+          setRows(unique)
+          const msg = `Loaded ${unique.length} lane(s) from CSV`
+          showToast('success', removed > 0 ? `${msg} (${removed} duplicate(s) removed)` : msg)
         } else {
           showToast('warning', 'CSV had no valid rows. Expected columns: pol, fd')
         }
@@ -146,9 +174,12 @@ export default function NewRateRequest() {
       return
     }
 
+    // Safety dedup before posting
+    const { unique: dedupedValid } = dedup(valid)
+
     setPosting(true)
     const { batch, error } = await postRateRequestBatch(
-      valid.map(({ pol, fd }) => ({ pol, fd })),
+      dedupedValid.map(({ pol, fd }) => ({ pol, fd })),
       user?.id ?? 'dev-user'
     )
     setPosting(false)
@@ -156,7 +187,7 @@ export default function NewRateRequest() {
     if (error) {
       showToast('error', `Post failed: ${error.message}`)
     } else {
-      showToast('success', `Batch ${batch?.id ?? ''} posted — ${valid.length} lane(s)`)
+      showToast('success', `Batch ${batch?.id ?? ''} posted — ${dedupedValid.length} lane(s)`)
       setRows([makeEmptyRow()])
     }
   }
