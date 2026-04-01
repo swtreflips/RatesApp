@@ -43,6 +43,7 @@ function ProviderDashboard() {
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold text-slate-600">Open Lanes</h2>
         <PlaceholderPage
+          compact
           title="No open lanes yet"
           description="When requesters post rate inquiries, matching lanes will appear here for you to quote."
           phase="Phase 3"

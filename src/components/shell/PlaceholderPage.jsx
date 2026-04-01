@@ -5,9 +5,9 @@ import { Construction } from 'lucide-react'
  * Generic placeholder for pages not yet implemented.
  * Used throughout Phase 1 to fill route slots cleanly.
  */
-export default function PlaceholderPage({ title, description, phase }) {
+export default function PlaceholderPage({ title, description, phase, compact }) {
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
+    <div className={`flex flex-col items-center justify-center text-center ${compact ? 'py-12' : 'min-h-[60vh]'}`}>
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100">
         <Construction size={28} strokeWidth={1.5} className="text-slate-400" />
       </div>

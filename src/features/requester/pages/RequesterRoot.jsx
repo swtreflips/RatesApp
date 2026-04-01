@@ -45,6 +45,7 @@ function RequesterDashboard() {
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold text-slate-600">Recent Requests</h2>
         <PlaceholderPage
+          compact
           title="No requests yet"
           description="Create your first rate request to get started. Providers will be notified and can submit quotes."
           phase="Phase 2"
