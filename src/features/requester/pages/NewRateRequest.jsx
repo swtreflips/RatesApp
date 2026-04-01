@@ -159,7 +159,7 @@ export default function NewRateRequest() {
             const pol = row.pol ?? row.POL ?? row['Port of Loading'] ?? row['port_of_loading'] ?? ''
             const fd = row.fd ?? row.FD ?? row['Final Destination'] ?? row['final_destination'] ?? ''
             const containerType = row.containerType ?? row.container_type ?? row['Container Type'] ?? ''
-            const containerCount = row.containerCount ?? row.container_count ?? row['# Containers'] ?? row['containers'] ?? ''
+            const containerCount = row.containerCount ?? row.container_count ?? row['# of Containers'] ?? row['# Containers'] ?? row['containers'] ?? ''
             return { id: nextId++, pol: pol.trim(), fd: fd.trim(), containerType: containerType.toString().trim(), containerCount: containerCount === '' ? '' : Number(containerCount) || '' }
           })
           .filter(r => r.pol || r.fd) // drop fully empty rows

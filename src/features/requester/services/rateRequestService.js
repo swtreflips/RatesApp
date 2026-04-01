@@ -10,18 +10,20 @@ import { supabase } from '../../../lib/supabase'
   status        text  default 'posted'
 
   ── rate_request_lanes ────────────────────────────
-  id            uuid  PK  default gen_random_uuid()
-  batch_id      uuid  FK → rate_request_batches(id)
-  pol           text  not null
-  fd            text  not null
-  created_at    timestamptz  default now()
+  id               uuid  PK  default gen_random_uuid()
+  batch_id         uuid  FK → rate_request_batches(id)
+  pol              text  not null
+  fd               text  not null
+  container_type   text
+  container_count  integer
+  created_at       timestamptz  default now()
 */
 
 /**
  * Posts a batch of lanes to Supabase.
  * Creates a batch record, then inserts all lanes linked to that batch.
  *
- * @param {{ pol: string, fd: string }[]} lanes
+ * @param {{ pol: string, fd: string, containerType?: string, containerCount?: number }[]} lanes
  * @param {string} requesterId — auth user id
  * @returns {{ batch, lanes, error }}
  */
@@ -40,6 +42,8 @@ export async function postRateRequestBatch(lanes, requesterId) {
     batch_id: batch.id,
     pol: l.pol,
     fd: l.fd,
+    container_type: l.containerType || null,
+    container_count: l.containerCount || null,
   }))
 
   const { data: insertedLanes, error: lanesError } = await supabase
