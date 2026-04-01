@@ -8,7 +8,7 @@ import { postRateRequestBatch } from '../services/rateRequestService'
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
 let nextId = 1
-const makeEmptyRow = () => ({ id: nextId++, pol: '', fd: '' })
+const makeEmptyRow = () => ({ id: nextId++, pol: '', fd: '', containerType: '', containerCount: '' })
 
 function laneKey(r) {
   return `${r.pol.trim().toLowerCase()}|${r.fd.trim().toLowerCase()}`
@@ -82,6 +82,21 @@ export default function NewRateRequest() {
       editable: true,
     },
     {
+      field: 'containerType',
+      headerName: 'Container Type',
+      width: 140,
+      editable: true,
+      type: 'singleSelect',
+      valueOptions: ['20GP', '40GP', '40HC', '45HC', '20RF', '40RF'],
+    },
+    {
+      field: 'containerCount',
+      headerName: '# Containers',
+      width: 120,
+      editable: true,
+      type: 'number',
+    },
+    {
       field: 'actions',
       headerName: '',
       width: 50,
@@ -143,7 +158,9 @@ export default function NewRateRequest() {
             // flexible header matching: accept common variations
             const pol = row.pol ?? row.POL ?? row['Port of Loading'] ?? row['port_of_loading'] ?? ''
             const fd = row.fd ?? row.FD ?? row['Final Destination'] ?? row['final_destination'] ?? ''
-            return { id: nextId++, pol: pol.trim(), fd: fd.trim() }
+            const containerType = row.containerType ?? row.container_type ?? row['Container Type'] ?? ''
+            const containerCount = row.containerCount ?? row.container_count ?? row['# Containers'] ?? row['containers'] ?? ''
+            return { id: nextId++, pol: pol.trim(), fd: fd.trim(), containerType: containerType.toString().trim(), containerCount: containerCount === '' ? '' : Number(containerCount) || '' }
           })
           .filter(r => r.pol || r.fd) // drop fully empty rows
 
@@ -179,7 +196,7 @@ export default function NewRateRequest() {
 
     setPosting(true)
     const { batch, error } = await postRateRequestBatch(
-      dedupedValid.map(({ pol, fd }) => ({ pol, fd })),
+      dedupedValid.map(({ pol, fd, containerType, containerCount }) => ({ pol, fd, containerType, containerCount })),
       user?.id ?? 'dev-user'
     )
     setPosting(false)
