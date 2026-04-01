@@ -1,11 +1,6 @@
-import React, { useState, useRef, useCallback } from 'react'
+import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
-import Button from '@mui/material/Button'
-import Stack from '@mui/material/Stack'
-import Snackbar from '@mui/material/Snackbar'
-import Alert from '@mui/material/Alert'
-import IconButton from '@mui/material/IconButton'
-import { Trash2, Upload, Plus, Send } from 'lucide-react'
+import { Trash2, Upload, Plus, Send, X } from 'lucide-react'
 import Papa from 'papaparse'
 import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
@@ -15,6 +10,12 @@ import { postRateRequestBatch } from '../services/rateRequestService'
 let nextId = 1
 const makeEmptyRow = () => ({ id: nextId++, pol: '', fd: '' })
 
+const TOAST_COLORS = {
+  success: 'bg-green-600',
+  warning: 'bg-amber-500',
+  error:   'bg-red-600',
+}
+
 /* ── component ────────────────────────────────────────────────────────── */
 
 export default function NewRateRequest() {
@@ -23,7 +24,17 @@ export default function NewRateRequest() {
 
   const [rows, setRows] = useState([makeEmptyRow()])
   const [posting, setPosting] = useState(false)
-  const [snack, setSnack] = useState({ open: false, severity: 'success', message: '' })
+  const [toast, setToast] = useState(null)
+
+  /* ── auto-dismiss toast ──────────────────────────────────────────────── */
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(timer)
+  }, [toast])
+
+  const showToast = (severity, message) => setToast({ severity, message })
 
   /* ── columns ─────────────────────────────────────────────────────────── */
 
@@ -60,13 +71,13 @@ export default function NewRateRequest() {
       sortable: false,
       filterable: false,
       renderCell: (params) => (
-        <IconButton
-          size="small"
+        <button
+          className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
           onClick={() => handleDeleteRow(params.row.id)}
           tabIndex={-1}
         >
           <Trash2 size={16} />
-        </IconButton>
+        </button>
       ),
     },
   ]
@@ -112,13 +123,13 @@ export default function NewRateRequest() {
 
         if (parsed.length > 0) {
           setRows(parsed)
-          showSnack('success', `Loaded ${parsed.length} lane(s) from CSV`)
+          showToast('success', `Loaded ${parsed.length} lane(s) from CSV`)
         } else {
-          showSnack('warning', 'CSV had no valid rows. Expected columns: pol, fd')
+          showToast('warning', 'CSV had no valid rows. Expected columns: pol, fd')
         }
       },
       error() {
-        showSnack('error', 'Failed to parse CSV file')
+        showToast('error', 'Failed to parse CSV file')
       },
     })
 
@@ -131,7 +142,7 @@ export default function NewRateRequest() {
   const handlePost = async () => {
     const valid = rows.filter(r => r.pol.trim() && r.fd.trim())
     if (valid.length === 0) {
-      showSnack('warning', 'Add at least one lane with both POL and Final Destination')
+      showToast('warning', 'Add at least one lane with both POL and Final Destination')
       return
     }
 
@@ -143,16 +154,12 @@ export default function NewRateRequest() {
     setPosting(false)
 
     if (error) {
-      showSnack('error', `Post failed: ${error.message}`)
+      showToast('error', `Post failed: ${error.message}`)
     } else {
-      showSnack('success', `Batch ${batch?.id ?? ''} posted — ${valid.length} lane(s)`)
+      showToast('success', `Batch ${batch?.id ?? ''} posted — ${valid.length} lane(s)`)
       setRows([makeEmptyRow()])
     }
   }
-
-  /* ── snackbar helper ─────────────────────────────────────────────────── */
-
-  const showSnack = (severity, message) => setSnack({ open: true, severity, message })
 
   /* ── render ──────────────────────────────────────────────────────────── */
 
@@ -167,23 +174,21 @@ export default function NewRateRequest() {
       </div>
 
       {/* Toolbar */}
-      <Stack direction="row" spacing={1}>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<Plus size={16} />}
+      <div className="flex items-center gap-2">
+        <button
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
           onClick={handleAddRow}
         >
+          <Plus size={16} />
           Add Row
-        </Button>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<Upload size={16} />}
+        </button>
+        <button
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
           onClick={() => fileInputRef.current?.click()}
         >
+          <Upload size={16} />
           Upload CSV
-        </Button>
+        </button>
         <input
           ref={fileInputRef}
           type="file"
@@ -194,16 +199,15 @@ export default function NewRateRequest() {
 
         <div className="flex-1" />
 
-        <Button
-          size="small"
-          variant="contained"
-          startIcon={<Send size={16} />}
+        <button
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition-colors"
           onClick={handlePost}
           disabled={posting}
         >
+          <Send size={16} />
           {posting ? 'Posting…' : 'Post Batch'}
-        </Button>
-      </Stack>
+        </button>
+      </div>
 
       {/* DataGrid */}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm" style={{ width: '100%' }}>
@@ -222,21 +226,18 @@ export default function NewRateRequest() {
         />
       </div>
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snack.open}
-        autoHideDuration={4000}
-        onClose={() => setSnack(s => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert
-          severity={snack.severity}
-          variant="filled"
-          onClose={() => setSnack(s => ({ ...s, open: false }))}
-        >
-          {snack.message}
-        </Alert>
-      </Snackbar>
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg ${TOAST_COLORS[toast.severity]}`}>
+          <span>{toast.message}</span>
+          <button
+            className="rounded p-0.5 hover:bg-white/20 transition-colors"
+            onClick={() => setToast(null)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
