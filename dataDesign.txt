@@ -1,0 +1,1935 @@
+================================================================================
+  DATA DESIGN — RATE REQUESTS, SUBMISSIONS & RATES
+  How data flows, is stored, and powers each view
+  April 6, 2026
+================================================================================
+
+
+================================================================================
+  PART 1: THE THREE OBJECTS
+================================================================================
+
+  You have three distinct objects. Each has a clear owner, purpose,
+  and lifecycle. They are related but NOT interchangeable.
+
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                                                                 │
+  │   RATE REQUEST LANE (the template)                              │
+  │   Created by: Requester                                         │
+  │   Lifecycle: 14 days (TTL)                                      │
+  │   Contains: POL, FD, container type, container count            │
+  │   Does NOT contain: POD, LastCY, rate, carrier                  │
+  │   Purpose: "We want rates for this lane"                        │
+  │                                                                 │
+  │       │                                                         │
+  │       │  provider fills in the template                         │
+  │       ▼                                                         │
+  │                                                                 │
+  │   RATE SUBMISSION (the filled template)                         │
+  │   Created by: Provider                                          │
+  │   Lifecycle: visible for 30 days from lane posting              │
+  │   Contains: link to lane + link to provider + timestamp         │
+  │   Purpose: "I submitted rates for this rate request"            │
+  │                                                                 │
+  │       │                                                         │
+  │       │  individual rate rows extracted                          │
+  │       ▼                                                         │
+  │                                                                 │
+  │   RATE (the normalized record)                                  │
+  │   Created by: App (from submission data)                        │
+  │   Lifecycle: permanent (has its own valid_from / valid_until)    │
+  │   Contains: POL, POD, LastCY, FD, carrier, price, validity      │
+  │   Purpose: "This is what carrier X costs for this routing"      │
+  │                                                                 │
+  └─────────────────────────────────────────────────────────────────┘
+
+
+  WHY THREE AND NOT TWO:
+
+    Without the submission layer, you'd only have lanes and rates.
+    That works for storage, but it doesn't answer:
+      - "Has this provider responded to this rate request?" (yes/no)
+      - "When did they respond?" (timestamp)
+      - "Show me all rate requests I've filled in" (provider view)
+
+    The submission is the BRIDGE between the template (demand) and
+    the rates (supply). It's the event record: "Provider X responded
+    to Lane Y at time Z."
+
+    Without it, you'd have to derive "has this provider submitted?"
+    by checking if any rates exist for (provider_id + lane_id).
+    That works but is fragile — what if they submitted an empty
+    template? What if you want to track submission timestamps
+    separately from individual rate timestamps?
+
+    The submission table is lightweight (5 columns) and makes
+    every query cleaner.
+
+
+================================================================================
+  PART 2: DATABASE TABLES
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  TABLE 1: rate_request_batches (already exists in code)
+────────────────────────────────────────────────────────────────────────────────
+
+  Purpose: Groups multiple lane postings into one action.
+  "I posted 8 lanes at once."
+
+  ┌──────────────────┬───────────────┬─────────────────────────────────────┐
+  │ Column           │ Type          │ Notes                               │
+  ├──────────────────┼───────────────┼─────────────────────────────────────┤
+  │ id               │ uuid PK       │ default gen_random_uuid()           │
+  │ requester_id     │ uuid FK        │ → auth.users(id)                   │
+  │ created_at       │ timestamptz    │ default now()                      │
+  └──────────────────┴───────────────┴─────────────────────────────────────┘
+
+  Notes:
+    - Removed the "status" column from the original design.
+      The batch itself doesn't have a lifecycle — its LANES do.
+      A batch is just a container for "these lanes were posted together."
+    - You may never query by batch after initial posting.
+      The lane is the entity that matters.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  TABLE 2: rate_request_lanes (exists in code, needs new columns)
+────────────────────────────────────────────────────────────────────────────────
+
+  Purpose: The template. One row = one lane you want rates for.
+  This is what providers see and fill in.
+
+  ┌──────────────────┬───────────────┬─────────────────────────────────────┐
+  │ Column           │ Type          │ Notes                               │
+  ├──────────────────┼───────────────┼─────────────────────────────────────┤
+  │ id               │ uuid PK       │ default gen_random_uuid()           │
+  │ batch_id         │ uuid FK        │ → rate_request_batches(id)         │
+  │ pol              │ text NOT NULL  │ "Nhava Sheva, India"               │
+  │ fd               │ text NOT NULL  │ "Commerce, CA"                     │
+  │ container_type   │ text           │ "40HC", "20GP", etc.               │
+  │ container_count  │ integer        │ number of containers               │
+  │ posted_at        │ timestamptz    │ default now(). Updates on extend.  │
+  │ expires_at       │ timestamptz    │ posted_at + 14 days                │
+  │ period           │ integer        │ default 1. Increments on extend.   │
+  │ created_at       │ timestamptz    │ default now(). Never changes.      │
+  └──────────────────┴───────────────┴─────────────────────────────────────┘
+
+  Key behaviors:
+    - A lane is ACTIVE when expires_at > now()
+    - A lane is EXPIRED when expires_at <= now()
+    - On extension: posted_at = now(), expires_at = now() + 14 days,
+      period = period + 1
+    - One active lane per unique POL + FD (enforced at app level)
+
+  New columns vs. current code:
+    - posted_at: new (currently only created_at exists)
+    - expires_at: new (TTL anchor)
+    - period: new (tracks extension cycles)
+
+  SQL to create:
+
+    CREATE TABLE rate_request_lanes (
+      id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      batch_id        uuid NOT NULL REFERENCES rate_request_batches(id),
+      pol             text NOT NULL,
+      fd              text NOT NULL,
+      container_type  text,
+      container_count integer,
+      posted_at       timestamptz NOT NULL DEFAULT now(),
+      expires_at      timestamptz NOT NULL DEFAULT (now() + interval '14 days'),
+      period          integer NOT NULL DEFAULT 1,
+      created_at      timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX idx_lanes_expires ON rate_request_lanes(expires_at);
+    CREATE INDEX idx_lanes_pol_fd ON rate_request_lanes(pol, fd);
+
+
+────────────────────────────────────────────────────────────────────────────────
+  TABLE 3: rate_submissions (NEW)
+────────────────────────────────────────────────────────────────────────────────
+
+  Purpose: Records the event of a provider filling in a rate request.
+  Links a provider to a lane. Lightweight junction table.
+
+  ┌──────────────────┬───────────────┬─────────────────────────────────────┐
+  │ Column           │ Type          │ Notes                               │
+  ├──────────────────┼───────────────┼─────────────────────────────────────┤
+  │ id               │ uuid PK       │ default gen_random_uuid()           │
+  │ lane_id          │ uuid FK        │ → rate_request_lanes(id)           │
+  │ provider_id      │ uuid FK        │ → auth.users(id)                  │
+  │ period           │ integer        │ matches lane.period at submission  │
+  │ submitted_at     │ timestamptz    │ default now()                      │
+  └──────────────────┴───────────────┴─────────────────────────────────────┘
+
+  Key behaviors:
+    - One submission per (provider + lane + period)
+      If a provider re-submits during the same period, UPDATE the
+      existing submission's submitted_at timestamp and replace rates.
+    - When a lane is extended (new period), the old submission stays
+      but a new one is needed for the new period.
+    - This table is SMALL — one row per provider per lane per period.
+
+  Why not just check if rates exist?
+    - A submission with 0 rates is valid (provider looked, had nothing)
+    - Submission timestamp != rate created_at (submission is the event,
+      rates are the data within it)
+    - Querying "pending vs submitted" is a simple JOIN vs a subquery
+
+  SQL to create:
+
+    CREATE TABLE rate_submissions (
+      id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      lane_id       uuid NOT NULL REFERENCES rate_request_lanes(id),
+      provider_id   uuid NOT NULL,
+      period        integer NOT NULL,
+      submitted_at  timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(lane_id, provider_id, period)
+    );
+
+    CREATE INDEX idx_submissions_provider ON rate_submissions(provider_id);
+    CREATE INDEX idx_submissions_lane ON rate_submissions(lane_id);
+
+
+────────────────────────────────────────────────────────────────────────────────
+  TABLE 4: rates (NEW)
+────────────────────────────────────────────────────────────────────────────────
+
+  Purpose: Normalized rate records. One row = one carrier, one routing,
+  one price. This is your source of truth for all pricing data.
+
+  ┌──────────────────┬───────────────┬─────────────────────────────────────┐
+  │ Column           │ Type          │ Notes                               │
+  ├──────────────────┼───────────────┼─────────────────────────────────────┤
+  │ id               │ uuid PK       │ default gen_random_uuid()           │
+  │ submission_id    │ uuid FK        │ → rate_submissions(id)             │
+  │ lane_id          │ uuid FK        │ → rate_request_lanes(id)           │
+  │ provider_id      │ uuid FK        │ → auth.users(id)                  │
+  │ period           │ integer        │ matches lane.period at submission  │
+  │ pol              │ text NOT NULL  │ duplicated from lane for queries   │
+  │ pod              │ text           │ "Los Angeles, CA"                  │
+  │ last_cy          │ text           │ "Los Angeles, CA"                  │
+  │ fd               │ text NOT NULL  │ duplicated from lane for queries   │
+  │ carrier          │ text           │ "MSC", "Hapag-Lloyd", etc.         │
+  │ rate_amount      │ numeric        │ 2000.00                            │
+  │ currency         │ text           │ default 'USD'                      │
+  │ transit_days     │ integer        │ estimated transit time             │
+  │ valid_from       │ date           │ rate validity start                │
+  │ valid_until      │ date           │ rate validity end                  │
+  │ notes            │ text           │ free-text from provider            │
+  │ created_at       │ timestamptz    │ default now()                      │
+  └──────────────────┴───────────────┴─────────────────────────────────────┘
+
+  Key behaviors:
+    - Append-only. Never UPDATE a rate. New submission = delete old
+      rates for (submission_id) and insert new ones.
+    - pol and fd are duplicated from the lane intentionally.
+      This makes the rates table self-contained for queries like
+      "all rates from Nhava Sheva" without joining to lanes.
+    - provider_id and lane_id are duplicated from the submission
+      for the same reason — query convenience.
+    - Each rate has its OWN validity period (valid_from, valid_until)
+      independent of the lane's TTL. A rate can be valid for 30 days
+      even if the lane request expired after 14.
+
+  SQL to create:
+
+    CREATE TABLE rates (
+      id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      submission_id   uuid NOT NULL REFERENCES rate_submissions(id),
+      lane_id         uuid NOT NULL REFERENCES rate_request_lanes(id),
+      provider_id     uuid NOT NULL,
+      period          integer NOT NULL,
+      pol             text NOT NULL,
+      pod             text,
+      last_cy         text,
+      fd              text NOT NULL,
+      carrier         text,
+      rate_amount     numeric,
+      currency        text NOT NULL DEFAULT 'USD',
+      transit_days    integer,
+      valid_from      date,
+      valid_until     date,
+      notes           text,
+      created_at      timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX idx_rates_lane ON rates(lane_id);
+    CREATE INDEX idx_rates_provider ON rates(provider_id);
+    CREATE INDEX idx_rates_submission ON rates(submission_id);
+    CREATE INDEX idx_rates_pol_fd ON rates(pol, fd);
+
+
+================================================================================
+  PART 3: RELATIONSHIPS (Entity Diagram)
+================================================================================
+
+  rate_request_batches
+    │
+    │  1 batch → many lanes
+    │
+    ▼
+  rate_request_lanes
+    │
+    │  1 lane → many submissions (one per provider per period)
+    │
+    ▼
+  rate_submissions
+    │
+    │  1 submission → many rates (one per carrier/routing)
+    │
+    ▼
+  rates
+
+
+  In words:
+    - A batch contains multiple lanes (you posted 8 lanes at once)
+    - A lane receives submissions from multiple providers
+    - Each submission contains multiple individual rate rows
+      (one per carrier/routing combination)
+
+  Cardinality:
+    batch     →  lanes:        1 : many
+    lane      →  submissions:  1 : many (one per provider per period)
+    submission →  rates:       1 : many (one per carrier)
+    provider  →  submissions:  1 : many (across all lanes)
+
+
+================================================================================
+  PART 4: DATA FLOW — STEP BY STEP
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 1: REQUESTER POSTS LANES
+────────────────────────────────────────────────────────────────────────────────
+
+  You open NewRateRequest, add lanes:
+    Nhava Sheva, India → Commerce, CA (5 x 40HC)
+    Mundra, India → Dallas, TX (3 x 40GP)
+  Click Post Batch.
+
+  DATABASE WRITES:
+    INSERT rate_request_batches:
+      { id: batch_1, requester_id: you }
+
+    INSERT rate_request_lanes:
+      { id: lane_1, batch_id: batch_1, pol: "Nhava Sheva", fd: "Commerce",
+        container_type: "40HC", container_count: 5,
+        posted_at: now(), expires_at: now() + 14 days, period: 1 }
+      { id: lane_2, batch_id: batch_1, pol: "Mundra", fd: "Dallas",
+        container_type: "40GP", container_count: 3,
+        posted_at: now(), expires_at: now() + 14 days, period: 1 }
+
+  At this point:
+    rate_submissions: empty
+    rates: empty
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 2: PROVIDER SEES PENDING RATE REQUESTS
+────────────────────────────────────────────────────────────────────────────────
+
+  Provider logs in. Sees "Pending Rate Requests" tab.
+
+  QUERY (pending = active lanes without a submission from this provider):
+
+    SELECT l.*
+    FROM rate_request_lanes l
+    LEFT JOIN rate_submissions s
+      ON s.lane_id = l.id
+      AND s.provider_id = :current_user
+      AND s.period = l.period
+    WHERE l.expires_at > now()
+      AND s.id IS NULL
+    ORDER BY l.expires_at ASC
+
+  Result:
+    ┌───┬──────────────┬──────────────┬──────┬────────┬───────────┐
+    │ # │ POL          │ FD           │ Type │ Count  │ Days Left │
+    ├───┼──────────────┼──────────────┼──────┼────────┼───────────┤
+    │ 1 │ Nhava Sheva  │ Commerce, CA │ 40HC │ 5      │ 14        │
+    │ 2 │ Mundra       │ Dallas, TX   │ 40GP │ 3      │ 14        │
+    └───┴──────────────┴──────────────┴──────┴────────┴───────────┘
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 3: PROVIDER FILLS IN THE TEMPLATE
+────────────────────────────────────────────────────────────────────────────────
+
+  Provider clicks on Nhava Sheva → Commerce, CA.
+  Sees the rate request template with empty rate fields.
+  Fills in:
+
+    ┌──────────────────┬──────────────┬────────┬──────────────┬─────────┬────────┐
+    │ POD              │ Last CY      │ Rate   │ Valid Until   │ Carrier │ Notes  │
+    ├──────────────────┼──────────────┼────────┼──────────────┼─────────┼────────┤
+    │ Los Angeles, CA  │ Los Angeles  │ $2,000 │ Apr 14, 2026 │ MSC     │ direct │
+    │ Los Angeles, CA  │ Los Angeles  │ $2,000 │ Apr 14, 2026 │ CMA CGM │ direct │
+    │ Norfolk, VA      │ Cincinnati   │ $2,400 │ Apr 14, 2026 │ ZIM     │        │
+    └──────────────────┴──────────────┴────────┴──────────────┴─────────┴────────┘
+
+  Clicks Submit.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 4: APP PROCESSES THE SUBMISSION
+────────────────────────────────────────────────────────────────────────────────
+
+  Your app does two things:
+
+  A) CREATE THE SUBMISSION RECORD:
+
+    INSERT rate_submissions:
+      { id: sub_1, lane_id: lane_1, provider_id: provider_1,
+        period: 1, submitted_at: now() }
+
+  B) CREATE INDIVIDUAL RATE RECORDS (one per row):
+
+    INSERT rates (3 rows — one per carrier):
+      { submission_id: sub_1, lane_id: lane_1, provider_id: provider_1,
+        period: 1, pol: "Nhava Sheva", pod: "Los Angeles",
+        last_cy: "Los Angeles", fd: "Commerce", carrier: "MSC",
+        rate_amount: 2000, currency: "USD", valid_until: "2026-04-14",
+        notes: "direct" }
+
+      { submission_id: sub_1, lane_id: lane_1, provider_id: provider_1,
+        period: 1, pol: "Nhava Sheva", pod: "Los Angeles",
+        last_cy: "Los Angeles", fd: "Commerce", carrier: "CMA CGM",
+        rate_amount: 2000, currency: "USD", valid_until: "2026-04-14",
+        notes: "direct" }
+
+      { submission_id: sub_1, lane_id: lane_1, provider_id: provider_1,
+        period: 1, pol: "Nhava Sheva", pod: "Norfolk",
+        last_cy: "Cincinnati", fd: "Commerce", carrier: "ZIM",
+        rate_amount: 2400, currency: "USD", valid_until: "2026-04-14" }
+
+  Note: The provider entered 3 rows. The DB has 1 submission + 3 rates.
+  If they had grouped MSC and CMA CGM on one row (same POD + LastCY +
+  price), the app would have "exploded" that into 2 rate rows.
+  Either way, the rates table has one row per carrier.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 5: PROVIDER'S VIEW UPDATES
+────────────────────────────────────────────────────────────────────────────────
+
+  After submitting, the lane moves from "Pending" to "Submitted."
+
+  PENDING TAB — lane_1 no longer appears (submission exists):
+    ┌───┬──────────────┬──────────────┬──────┬────────┬───────────┐
+    │ # │ POL          │ FD           │ Type │ Count  │ Days Left │
+    ├───┼──────────────┼──────────────┼──────┼────────┼───────────┤
+    │ 1 │ Mundra       │ Dallas, TX   │ 40GP │ 3      │ 14        │
+    └───┴──────────────┴──────────────┴──────┴────────┴───────────┘
+
+  SUBMITTED TAB — lane_1 appears with the rate data:
+
+    QUERY (submitted = submissions from this provider, lanes posted
+    within 30 days):
+
+      SELECT l.pol, l.fd, l.container_type, l.container_count,
+             l.posted_at, s.submitted_at, r.*
+      FROM rate_submissions s
+      JOIN rate_request_lanes l ON l.id = s.lane_id
+      LEFT JOIN rates r ON r.submission_id = s.id
+      WHERE s.provider_id = :current_user
+        AND l.posted_at > now() - interval '30 days'
+      ORDER BY s.submitted_at DESC
+
+    Result (the filled-in template):
+      Nhava Sheva → Commerce, CA  |  Submitted Apr 6
+      ┌──────────────┬──────────────┬────────┬─────────┬────────┐
+      │ POD          │ Last CY      │ Rate   │ Carrier │ Notes  │
+      ├──────────────┼──────────────┼────────┼─────────┼────────┤
+      │ Los Angeles  │ Los Angeles  │ $2,000 │ MSC     │ direct │
+      │ Los Angeles  │ Los Angeles  │ $2,000 │ CMA CGM │ direct │
+      │ Norfolk      │ Cincinnati   │ $2,400 │ ZIM     │        │
+      └──────────────┴──────────────┴────────┴─────────┴────────┘
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 6: REQUESTER SEES RECEIVED RATES
+────────────────────────────────────────────────────────────────────────────────
+
+  You log in as requester. Open "Received Rates" or the dashboard.
+
+  QUERY (all rates for your active lanes):
+
+    SELECT l.pol, l.fd, r.pod, r.last_cy, r.carrier,
+           r.rate_amount, r.currency, r.valid_until, r.notes,
+           r.provider_id, r.created_at
+    FROM rate_request_lanes l
+    JOIN rates r ON r.lane_id = l.id AND r.period = l.period
+    WHERE l.batch_id IN (
+      SELECT id FROM rate_request_batches WHERE requester_id = :current_user
+    )
+    ORDER BY l.pol, l.fd, r.rate_amount ASC
+
+  Result:
+    Nhava Sheva → Commerce, CA
+    ┌──────────────┬──────────────┬────────┬─────────┬──────────┐
+    │ POD          │ Last CY      │ Rate   │ Carrier │ Provider │
+    ├──────────────┼──────────────┼────────┼─────────┼──────────┤
+    │ Los Angeles  │ Los Angeles  │ $2,000 │ MSC     │ FF-A     │
+    │ Los Angeles  │ Los Angeles  │ $2,000 │ CMA CGM │ FF-A     │
+    │ Norfolk      │ Cincinnati   │ $2,400 │ ZIM     │ FF-A     │
+    └──────────────┴──────────────┴────────┴─────────┴──────────┘
+
+  Sorted by rate ascending. Cheapest first.
+  When multiple providers submit, all their rates appear here.
+
+
+================================================================================
+  PART 5: TIME WINDOWS — HOW TTL AND 30-DAY VISIBILITY INTERACT
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  THE TWO TIME WINDOWS
+────────────────────────────────────────────────────────────────────────────────
+
+  WINDOW 1 — RATE REQUEST TTL (14 days)
+    Controls: What providers can see in "Pending Rate Requests"
+    Rule: expires_at > now()
+    After expiry: Lane disappears from pending view. No new submissions.
+
+  WINDOW 2 — SUBMITTED RATES VISIBILITY (30 days)
+    Controls: What providers can see in "Submitted Rates"
+    Rule: lane.posted_at > now() - 30 days
+    After 30 days: Submission disappears from provider's view.
+
+  These windows are INDEPENDENT:
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │ Day 1         Day 14              Day 30                     │
+    │ ├──── Rate Request Active ────┤                              │
+    │ │     (provider can submit)   │                              │
+    │ │                             │                              │
+    │ ├──── Submitted Rates Visible ─────────────────────────────┤ │
+    │ │     (provider can see their filled template)             │ │
+    │                                                              │
+    └──────────────────────────────────────────────────────────────┘
+
+  Example timeline:
+    Apr 1:   Requester posts lane. Provider sees it in "Pending."
+    Apr 5:   Provider submits rates. Lane moves to "Submitted."
+    Apr 15:  Lane expires (14-day TTL). No new submissions allowed.
+             But provider still sees their submission in "Submitted."
+    May 1:   30 days since posting. Submission disappears from
+             provider's "Submitted" view.
+             Rates remain permanently in the database.
+
+  WHY 30 DAYS FOR SUBMITTED:
+    The provider needs to see what they recently submitted —
+    for reference, to update rates if the lane is still active,
+    and to confirm what they sent. But there's no value in showing
+    submissions from 3 months ago. 30 days keeps the view clean.
+
+  WHY RATES ARE PERMANENT:
+    Rates have their own validity period (valid_from, valid_until).
+    They exist beyond any time window. The requester can always
+    query historical rates. The provider just doesn't see old
+    submissions in their dashboard — that's a UI choice, not a
+    data deletion.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  WHAT HAPPENS ON LANE EXTENSION
+────────────────────────────────────────────────────────────────────────────────
+
+  Day 10: Requester extends lane_1 (was expiring on Day 14).
+
+  DATABASE UPDATE:
+    UPDATE rate_request_lanes
+    SET posted_at = now(),
+        expires_at = now() + interval '14 days',
+        period = period + 1
+    WHERE id = lane_1
+
+  EFFECT ON PROVIDER:
+    - The lane had period 1 → now period 2
+    - The old submission (period 1) stays in "Submitted" (it's history)
+    - The lane reappears in "Pending" (no submission for period 2)
+    - Provider sees: "I need to submit fresh rates for this lane"
+
+  QUERY for pending still works correctly:
+    LEFT JOIN submissions WHERE period = l.period → no match for
+    period 2 → lane shows as pending.
+
+  The 30-day clock also resets because posted_at was updated.
+  So the old submission (period 1) might still be visible in
+  "Submitted" while the new period appears in "Pending."
+  This is correct — the provider can see both their old rates
+  and the fact that new rates are needed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  WHAT HAPPENS ON RE-SUBMISSION (SAME PERIOD)
+────────────────────────────────────────────────────────────────────────────────
+
+  If a provider submits again for the SAME lane and SAME period
+  (they want to update their rates):
+
+  OPTION A — Replace:
+    1. UPDATE rate_submissions SET submitted_at = now()
+       WHERE lane_id = X AND provider_id = Y AND period = Z
+    2. DELETE FROM rates WHERE submission_id = sub_id
+    3. INSERT new rates
+
+  OPTION B — Append (bidding model from LANE_LIFECYCLE doc):
+    1. Keep the old submission and rates
+    2. Create a new submission record for the same (lane, provider, period)
+    3. "Current" = latest submission by submitted_at
+
+  FOR YOUR USE CASE: Option A (replace) is simpler and matches your
+  description. The provider fills in the template, submits, done.
+  If they want to change it, they re-submit and the old data is replaced.
+
+  The LANE_LIFECYCLE doc describes a competitive bidding model where
+  history is preserved. If you want that later, switch to Option B.
+  But start with Option A — it's cleaner.
+
+  With Option A, the UNIQUE constraint on (lane_id, provider_id, period)
+  ensures one submission per provider per lane per period. The app
+  just updates it on re-submission.
+
+
+================================================================================
+  PART 6: COMPLETE SQL — ALL VIEWS
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  PROVIDER VIEWS
+────────────────────────────────────────────────────────────────────────────────
+
+  VIEW: Pending Rate Requests
+  (Active lanes the provider has NOT submitted rates for)
+
+    SELECT
+      l.id,
+      l.pol,
+      l.fd,
+      l.container_type,
+      l.container_count,
+      l.posted_at,
+      l.expires_at,
+      EXTRACT(DAY FROM l.expires_at - now())::int AS days_left
+    FROM rate_request_lanes l
+    LEFT JOIN rate_submissions s
+      ON s.lane_id = l.id
+      AND s.provider_id = :provider_id
+      AND s.period = l.period
+    WHERE l.expires_at > now()
+      AND s.id IS NULL
+    ORDER BY l.expires_at ASC;
+
+
+  VIEW: Submitted Rates
+  (Rate requests this provider has filled in, past 30 days)
+
+    SELECT
+      l.id AS lane_id,
+      l.pol,
+      l.fd,
+      l.container_type,
+      l.container_count,
+      l.posted_at,
+      l.expires_at,
+      s.id AS submission_id,
+      s.submitted_at,
+      s.period
+    FROM rate_submissions s
+    JOIN rate_request_lanes l ON l.id = s.lane_id
+    WHERE s.provider_id = :provider_id
+      AND l.posted_at > now() - interval '30 days'
+    ORDER BY s.submitted_at DESC;
+
+  To get rates for a specific submission:
+
+    SELECT pod, last_cy, fd, carrier, rate_amount, currency,
+           transit_days, valid_from, valid_until, notes
+    FROM rates
+    WHERE submission_id = :submission_id
+    ORDER BY rate_amount ASC;
+
+
+────────────────────────────────────────────────────────────────────────────────
+  REQUESTER VIEWS
+────────────────────────────────────────────────────────────────────────────────
+
+  VIEW: My Active Lanes (dashboard)
+
+    SELECT
+      l.id,
+      l.pol,
+      l.fd,
+      l.container_type,
+      l.container_count,
+      l.posted_at,
+      l.expires_at,
+      EXTRACT(DAY FROM l.expires_at - now())::int AS days_left,
+      l.period,
+      COUNT(DISTINCT s.id) AS submission_count,
+      COUNT(r.id) AS rate_count
+    FROM rate_request_lanes l
+    LEFT JOIN rate_submissions s
+      ON s.lane_id = l.id AND s.period = l.period
+    LEFT JOIN rates r
+      ON r.lane_id = l.id AND r.period = l.period
+    WHERE l.expires_at > now()
+      AND l.batch_id IN (
+        SELECT id FROM rate_request_batches
+        WHERE requester_id = :requester_id
+      )
+    GROUP BY l.id
+    ORDER BY l.expires_at ASC;
+
+
+  VIEW: Received Rates for a Lane (detail)
+
+    SELECT
+      r.pod,
+      r.last_cy,
+      r.carrier,
+      r.rate_amount,
+      r.currency,
+      r.transit_days,
+      r.valid_from,
+      r.valid_until,
+      r.notes,
+      r.provider_id,
+      r.created_at
+    FROM rates r
+    WHERE r.lane_id = :lane_id
+      AND r.period = :current_period
+    ORDER BY r.rate_amount ASC;
+
+
+  VIEW: All Rates (flat, filterable — "Rates" page)
+
+    SELECT
+      r.pol,
+      r.pod,
+      r.last_cy,
+      r.fd,
+      r.carrier,
+      r.rate_amount,
+      r.currency,
+      r.transit_days,
+      r.valid_from,
+      r.valid_until,
+      r.notes,
+      r.provider_id,
+      r.created_at
+    FROM rates r
+    JOIN rate_request_lanes l ON l.id = r.lane_id
+    WHERE l.batch_id IN (
+      SELECT id FROM rate_request_batches
+      WHERE requester_id = :requester_id
+    )
+    ORDER BY r.created_at DESC;
+
+
+  VIEW: Dashboard Stats
+
+    -- Open (active) lane count
+    SELECT COUNT(*) AS open_lanes
+    FROM rate_request_lanes l
+    JOIN rate_request_batches b ON b.id = l.batch_id
+    WHERE b.requester_id = :requester_id
+      AND l.expires_at > now();
+
+    -- Pending lanes (active, 0 submissions)
+    SELECT COUNT(*) AS pending_lanes
+    FROM rate_request_lanes l
+    JOIN rate_request_batches b ON b.id = l.batch_id
+    LEFT JOIN rate_submissions s
+      ON s.lane_id = l.id AND s.period = l.period
+    WHERE b.requester_id = :requester_id
+      AND l.expires_at > now()
+    GROUP BY l.id
+    HAVING COUNT(s.id) = 0;
+
+    -- Total rates received (current periods)
+    SELECT COUNT(*) AS total_rates
+    FROM rates r
+    JOIN rate_request_lanes l ON l.id = r.lane_id
+    JOIN rate_request_batches b ON b.id = l.batch_id
+    WHERE b.requester_id = :requester_id
+      AND r.period = l.period;
+
+
+================================================================================
+  PART 7: WHAT GOES WHERE IN YOUR CODE
+================================================================================
+
+  This section maps the database design to your React project structure.
+
+  SERVICE LAYER (where SQL becomes JS):
+
+    src/features/requester/services/
+      rateRequestService.js    (exists — posting batches + lanes)
+      laneService.js           (new — fetch active lanes, extend lane)
+      rateService.js           (new — fetch received rates, stats)
+
+    src/features/provider/services/
+      pendingLanesService.js   (new — fetch pending rate requests)
+      submissionService.js     (new — submit rates, fetch submissions)
+
+  HOOKS (with React Query, per the assessment recommendation):
+
+    src/features/requester/hooks/
+      useActiveLanes.js        → queries laneService.fetchActiveLanes()
+      useReceivedRates.js      → queries rateService.fetchRatesForLane()
+      useDashboardStats.js     → queries rateService.fetchStats()
+
+    src/features/provider/hooks/
+      usePendingRequests.js    → queries pendingLanesService.fetchPending()
+      useMySubmissions.js      → queries submissionService.fetchSubmissions()
+
+  PAGES:
+
+    Requester:
+      RequesterDashboard  → uses useActiveLanes + useDashboardStats
+      NewRateRequest      → uses rateRequestService (already exists)
+      MyRequests          → uses useActiveLanes (replaces placeholder)
+      ReceivedRates       → uses useReceivedRates (replaces placeholder)
+
+    Provider:
+      ProviderDashboard   → uses usePendingRequests
+      OpenLanes           → uses usePendingRequests (replaces placeholder)
+      MySubmissions       → uses useMySubmissions (replaces placeholder)
+      RateSubmissionForm  → new page for filling in a rate request template
+
+
+================================================================================
+  PART 8: SUMMARY — THE DESIGN IN ONE PAGE
+================================================================================
+
+  FOUR TABLES:
+    batches     → groups lane postings (one per "send" action)
+    lanes       → the templates (POL + FD + TTL)
+    submissions → provider filled in a template (junction)
+    rates       → one carrier, one routing, one price (source of truth)
+
+  THREE TIME RULES:
+    1. Lanes expire after 14 days (providers can't see/submit)
+    2. Submissions visible to providers for 30 days
+    3. Rates are permanent (have their own validity dates)
+
+  TWO PROVIDER VIEWS:
+    Pending   = active lanes I haven't submitted for
+    Submitted = templates I've filled in (past 30 days)
+
+  ONE REQUESTER VIEW:
+    All rates across all my lanes, filterable and sortable.
+    Plus dashboard stats and per-lane detail views.
+
+  THE FLOW:
+    Requester posts lanes → Provider sees pending →
+    Provider fills template → Submission created →
+    Rates extracted and stored → Requester sees rates
+
+  THE PRINCIPLE:
+    One dataset. Different filtered views. Same underlying system.
+
+
+================================================================================
+  PART 9: INDEPENDENT RATES — OPEN LANES AS THE UNIFIED HUB
+================================================================================
+
+  The design so far assumes rates always originate from a rate request.
+  That's the primary flow, but providers should also be able to submit
+  rates for ANY lane — even ones the requester never asked about.
+
+  This does NOT require a 4th menu. "Open Lanes" becomes the single
+  hub for all rate entry.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  WHAT "OPEN LANES" ACTUALLY IS
+────────────────────────────────────────────────────────────────────────────────
+
+  Open Lanes is not just a read-only list. It's the provider's
+  workspace for submitting rates — for requested AND unrequested lanes.
+
+  The page shows a grid/list with:
+    - Active rate request lanes pre-loaded (POL + FD from requester)
+    - The ability to add new rows manually (any POL + FD)
+    - CSV upload for bulk rate entry
+    - Rate fields to fill in (POD, LastCY, carrier, rate, validity, notes)
+
+  It's one surface. The provider doesn't think about "is this
+  requested or not?" They just enter rates. The app figures out
+  the linking.
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  OPEN LANES                                    [+ Add Row] [CSV]│
+  │                                                                 │
+  │  # │ POL         │ FD          │ POD │ LastCY │ Rate │ Carrier  │
+  │  ──┼─────────────┼─────────────┼─────┼────────┼──────┼──────────│
+  │  1 │ Nhava Sheva │ Commerce,CA │     │        │      │          │ ← requested
+  │  2 │ Mundra      │ Dallas, TX  │     │        │      │          │ ← requested
+  │  3 │ Shanghai    │ Savannah,GA │ ... │ ...    │ ...  │ ...      │ ← added by provider
+  │                                                                 │
+  │                                           [Submit]              │
+  └─────────────────────────────────────────────────────────────────┘
+
+  Rows 1-2 came from active rate requests (pre-populated POL + FD,
+  rate fields empty). Row 3 was added manually by the provider.
+  All rows submit through the same process.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  DATABASE IMPACT
+────────────────────────────────────────────────────────────────────────────────
+
+  To support rates without a matching rate request, two columns
+  become NULLABLE:
+
+    rates table:
+      lane_id         uuid FK NULLABLE  → rate_request_lanes(id)
+      submission_id   uuid FK NULLABLE  → rate_submissions(id)
+
+    rate_submissions table:
+      lane_id         uuid FK NULLABLE  → rate_request_lanes(id)
+      period          integer NULLABLE
+
+    Linked rate (from a rate request):   lane_id = uuid, period = int
+    Independent rate (no request):       lane_id = NULL, period = NULL
+
+  The UNIQUE constraint on submissions updates:
+    Old:  UNIQUE(lane_id, provider_id, period)
+    New:  partial unique index for linked submissions only:
+
+      CREATE UNIQUE INDEX idx_submissions_unique_linked
+        ON rate_submissions(lane_id, provider_id, period)
+        WHERE lane_id IS NOT NULL;
+
+  Everything else stays the same. No new tables.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW THE APP HANDLES SUBMISSION
+────────────────────────────────────────────────────────────────────────────────
+
+  When the provider clicks "Submit" on Open Lanes:
+
+  FOR EACH ROW, the app checks:
+
+    Does this POL + FD match an active rate request lane?
+
+      SELECT id, period FROM rate_request_lanes
+      WHERE pol = :pol AND fd = :fd AND expires_at > now()
+      LIMIT 1
+
+    IF MATCH → create submission + rates with lane_id linked
+    IF NO MATCH → create submission + rates with lane_id = NULL
+
+  This is transparent to the provider. They fill in rows, click
+  submit. The app handles linking automatically.
+
+  CSV upload works the same way — each parsed row is checked
+  against active lanes and linked if a match exists.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW VIEWS ARE AFFECTED
+────────────────────────────────────────────────────────────────────────────────
+
+  PROVIDER — Open Lanes (pending view within the page):
+    Still the same query. Active lanes without a submission.
+    Independent rates don't affect this — they have no lane_id.
+
+  PROVIDER — My Submissions:
+    Shows ALL submissions (linked + independent) from the past 30 days.
+    Query update:
+
+      SELECT
+        s.id, s.submitted_at, s.lane_id, s.period,
+        COALESCE(l.pol, r_first.pol) AS pol,
+        COALESCE(l.fd, r_first.fd) AS fd,
+        l.container_type, l.container_count,
+        l.posted_at
+      FROM rate_submissions s
+      LEFT JOIN rate_request_lanes l ON l.id = s.lane_id
+      LEFT JOIN LATERAL (
+        SELECT pol, fd FROM rates WHERE submission_id = s.id LIMIT 1
+      ) r_first ON true
+      WHERE s.provider_id = :provider_id
+        AND s.submitted_at > now() - interval '30 days'
+      ORDER BY s.submitted_at DESC;
+
+    Note the LEFT JOIN to lanes (not INNER) — independent submissions
+    have no lane. POL and FD come from the rates themselves via LATERAL.
+
+    The UI can show a small badge: "Requested" vs "Additional" based
+    on whether lane_id is NULL.
+
+  REQUESTER — All Rates:
+    Shows everything. Updated query:
+
+      SELECT r.*
+      FROM rates r
+      WHERE r.provider_id IN (
+        SELECT DISTINCT provider_id FROM rate_submissions
+      )
+      ORDER BY r.created_at DESC;
+
+    Or simpler — just select all rates. The requester sees all
+    pricing data regardless of whether it was solicited.
+
+    Lane-specific views (Received Rates for a Lane) are unchanged —
+    they filter by lane_id, so independent rates don't appear there.
+    They only show up in the flat "All Rates" view.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  THE THREE PROVIDER MENUS (UNCHANGED)
+────────────────────────────────────────────────────────────────────────────────
+
+  1. DASHBOARD      — summary stats
+  2. OPEN LANES     — the unified rate entry hub
+                       pre-loads requested lanes
+                       allows adding independent lanes
+                       supports CSV upload
+                       all rate entry happens here
+  3. MY SUBMISSIONS — what I've submitted (past 30 days)
+                       shows both linked and independent submissions
+
+
+────────────────────────────────────────────────────────────────────────────────
+  IS THIS ALL TAKEN INTO ACCOUNT IN THE CURRENT DESIGN?
+────────────────────────────────────────────────────────────────────────────────
+
+  YES, with two small schema changes (lane_id and period become
+  NULLABLE on rates and rate_submissions). The rest of the design
+  — tables, flows, time windows, views — works as-is.
+
+  The key insight: the rates table was already designed to be
+  self-contained (pol, pod, last_cy, fd are all stored directly,
+  not derived from joins). Making lane_id optional just formalizes
+  what the schema already supports — rates that stand on their own.
+
+
+================================================================================
+  PART 10: BIDDING & RATE EVOLUTION
+================================================================================
+
+  Providers can update their rates over time — either proactively
+  (they see no bookings, want to compete harder) or in response to
+  a negotiation (you ask for a better price). The system needs to
+  capture this evolution without overwriting history.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  THE CORE RULE: WHAT MAKES A "BID"
+────────────────────────────────────────────────────────────────────────────────
+
+  A new rate is a BID (not a fresh entry) when ALL of these match
+  an existing rate:
+
+    1. Same provider_id
+    2. Same routing: POL + POD + Last CY + FD
+    3. Same carrier
+    4. The existing rate's valid_until is still in the future
+       (the old rate is still "alive")
+
+  When these conditions are met, the new rate is a revision of the
+  previous one. The old rate becomes HISTORICAL. The new rate becomes
+  ACTIVE.
+
+  If valid_until has already passed on the old rate, the new rate is
+  simply a fresh entry — not a bid. There's nothing to revise.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  WHAT MAKES A RATE "ACTIVE" vs "HISTORICAL"
+────────────────────────────────────────────────────────────────────────────────
+
+  For any given combination of:
+    (provider_id + pol + pod + last_cy + fd + carrier)
+
+  The ACTIVE rate is:
+    - The most recently created rate (latest created_at)
+    - WHERE valid_until >= today (still usable)
+
+  All older rates for the same combo are HISTORICAL.
+
+  This requires NO extra columns. It's a query pattern:
+
+    SELECT DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier)
+      *
+    FROM rates
+    WHERE valid_until >= CURRENT_DATE
+    ORDER BY provider_id, pol, pod, last_cy, fd, carrier,
+             created_at DESC
+
+  This returns exactly one row per unique routing per carrier per
+  provider — the latest one with validity still in the future.
+
+  Historical rates are simply everything else — they stay in the
+  table forever, never deleted, never updated.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  WHAT CHANGES IN THE DATABASE: NOTHING
+────────────────────────────────────────────────────────────────────────────────
+
+  The rates table already has every column needed:
+    - provider_id, pol, pod, last_cy, fd, carrier (the identity key)
+    - rate_amount (the price)
+    - valid_from, valid_until (the validity window)
+    - created_at (when this specific rate was submitted)
+
+  No new columns. No new tables. No status column needed.
+  "Active" is derived from data, not stored as state.
+
+  The principle: APPEND ONLY. Never UPDATE or DELETE a rate.
+  Insert a new row and the query naturally picks up the latest one.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW BIDDING WORKS — STEP BY STEP
+────────────────────────────────────────────────────────────────────────────────
+
+  Day 1: Provider submits rate for Nhava Sheva → Commerce via LA.
+
+    INSERT rates:
+      { provider: FF-A, pol: "Nhava Sheva", pod: "Los Angeles",
+        last_cy: "Los Angeles", fd: "Commerce", carrier: "MSC",
+        rate_amount: 2200, valid_until: "2026-04-20",
+        created_at: "2026-04-06" }
+
+    Active rate for this routing: $2,200
+
+  Day 4: No bookings made. Provider wants to be more competitive.
+
+    INSERT rates:
+      { provider: FF-A, pol: "Nhava Sheva", pod: "Los Angeles",
+        last_cy: "Los Angeles", fd: "Commerce", carrier: "MSC",
+        rate_amount: 2000, valid_until: "2026-04-20",
+        created_at: "2026-04-10" }
+
+    Active rate: $2,000 (latest created_at with valid_until in future)
+    Historical: $2,200 (still in DB, superseded by the newer entry)
+
+  Day 8: You negotiate further. Provider submits again.
+
+    INSERT rates:
+      { provider: FF-A, pol: "Nhava Sheva", pod: "Los Angeles",
+        last_cy: "Los Angeles", fd: "Commerce", carrier: "MSC",
+        rate_amount: 1850, valid_until: "2026-04-25",
+        created_at: "2026-04-14" }
+
+    Active rate: $1,850 (extended validity too — to Apr 25)
+    Historical: $2,200, $2,000
+
+  All three rows exist in the rates table. The query for "active"
+  returns only $1,850 because it's the latest with valid_until >= today.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  VALIDITY EXTENSION
+────────────────────────────────────────────────────────────────────────────────
+
+  When a provider submits a new rate with a LONGER valid_until than
+  the previous one, that's an extension. The system treats it the same
+  as any other bid — it's just a new rate row with a later date.
+
+  Example:
+    Rate 1: $2,000, valid until Apr 20   (submitted Apr 6)
+    Rate 2: $2,000, valid until May 5    (submitted Apr 18)
+
+  Same price, longer validity. Rate 2 is now active. Rate 1 is
+  historical. The provider effectively said "I'm keeping my price
+  and extending my offer."
+
+  No special handling. The append-only model covers this naturally.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW THE RATE SUBMISSION VIEW SHOWS BID HISTORY
+────────────────────────────────────────────────────────────────────────────────
+
+  At the rate_submission level (My Submissions + the requester's view),
+  the UI displays rate evolution as a timeline within each row.
+
+  PROVIDER VIEW — My Submissions (expanded row for a lane):
+
+    Nhava Sheva → Commerce, CA  |  MSC via Los Angeles
+    ┌──────────┬───────────┬──────────────┬─────────────────┐
+    │ Status   │ Rate      │ Valid Until   │ Submitted       │
+    ├──────────┼───────────┼──────────────┼─────────────────┤
+    │ ACTIVE   │ $1,850    │ Apr 25       │ Apr 14          │
+    │ history  │ $2,000    │ Apr 20       │ Apr 10          │
+    │ history  │ $2,200    │ Apr 20       │ Apr 6           │
+    └──────────┴───────────┴──────────────┴─────────────────┘
+
+  The provider sees all their own bids for this routing, newest on top.
+  "ACTIVE" badge on the current one. Older entries shown dimmed.
+
+  QUERY for bid history (provider sees their own):
+
+    SELECT
+      r.rate_amount,
+      r.valid_from,
+      r.valid_until,
+      r.created_at,
+      CASE
+        WHEN r.id = (
+          SELECT id FROM rates r2
+          WHERE r2.provider_id = r.provider_id
+            AND r2.pol = r.pol AND r2.pod = r.pod
+            AND r2.last_cy = r.last_cy AND r2.fd = r.fd
+            AND r2.carrier = r.carrier
+            AND r2.valid_until >= CURRENT_DATE
+          ORDER BY r2.created_at DESC
+          LIMIT 1
+        ) THEN 'active'
+        ELSE 'historical'
+      END AS status
+    FROM rates r
+    WHERE r.provider_id = :provider_id
+      AND r.pol = :pol AND r.pod = :pod
+      AND r.last_cy = :last_cy AND r.fd = :fd
+      AND r.carrier = :carrier
+    ORDER BY r.created_at DESC;
+
+
+  REQUESTER VIEW — Received Rates (rate evolution across providers):
+
+    Nhava Sheva → Commerce, CA  via Los Angeles → Los Angeles
+
+    ┌───────────┬──────────┬─────────┬───────────┬──────────────┬──────────┐
+    │ Provider  │ Carrier  │ Status  │ Rate      │ Valid Until   │ Prev Rate│
+    ├───────────┼──────────┼─────────┼───────────┼──────────────┼──────────┤
+    │ FF-A      │ MSC      │ ACTIVE  │ $1,850    │ Apr 25       │ $2,000   │
+    │ FF-B      │ MSC      │ ACTIVE  │ $2,100    │ Apr 20       │ —        │
+    │ FF-A      │ CMA CGM  │ ACTIVE  │ $2,050    │ Apr 20       │ —        │
+    └───────────┴──────────┴─────────┴───────────┴──────────────┴──────────┘
+
+  The "Prev Rate" column shows the rate before the current one.
+  At a glance, you can see:
+    - FF-A dropped from $2,000 to $1,850 on MSC (they're competing)
+    - FF-B has one bid at $2,100 (no history)
+    - FF-A also quoted CMA CGM at $2,050 (separate carrier, no history)
+
+  QUERY for the requester's comparison view:
+
+    WITH active_rates AS (
+      SELECT DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier)
+        id, provider_id, pol, pod, last_cy, fd, carrier,
+        rate_amount, valid_until, created_at
+      FROM rates
+      WHERE valid_until >= CURRENT_DATE
+      ORDER BY provider_id, pol, pod, last_cy, fd, carrier,
+               created_at DESC
+    ),
+    previous_rates AS (
+      SELECT DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier)
+        provider_id, pol, pod, last_cy, fd, carrier,
+        rate_amount AS prev_rate_amount
+      FROM rates
+      WHERE id NOT IN (SELECT id FROM active_rates)
+        AND valid_until >= CURRENT_DATE
+      ORDER BY provider_id, pol, pod, last_cy, fd, carrier,
+               created_at DESC
+    )
+    SELECT
+      a.*,
+      p.prev_rate_amount
+    FROM active_rates a
+    LEFT JOIN previous_rates p
+      ON p.provider_id = a.provider_id
+      AND p.pol = a.pol AND p.pod = a.pod
+      AND p.last_cy = a.last_cy AND p.fd = a.fd
+      AND p.carrier = a.carrier
+    WHERE a.lane_id = :lane_id
+    ORDER BY a.rate_amount ASC;
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW BIDDING INTERACTS WITH RATE REQUEST TTL
+────────────────────────────────────────────────────────────────────────────────
+
+  Rate request TTL (14 days) and rate validity are INDEPENDENT:
+
+    - Rate request expires → provider can no longer SUBMIT via the
+      rate request template. But existing rates remain active if
+      their valid_until is still in the future.
+
+    - Rate validity expires → the rate is no longer active regardless
+      of whether the rate request is still open.
+
+    - A provider can bid (submit a new rate) only through the Open
+      Lanes page. If the rate request has expired, they can still
+      submit the same routing as an independent rate (lane_id = NULL).
+      The rate still enters the system.
+
+  This means:
+    - Bidding during the rate request window is natural — the lane
+      is visible, the provider updates their rate.
+    - Bidding after the rate request expires is still possible — the
+      provider adds the lane manually on Open Lanes.
+    - Rate validity determines what's "active" — not the request TTL.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  NEGOTIATION FLOW (REQUESTER INITIATES)
+────────────────────────────────────────────────────────────────────────────────
+
+  When you want a better price:
+
+    1. You see FF-A's rate: $2,000 for Nhava Sheva → Commerce via LA
+    2. You contact them (outside the app — email, call, Slack)
+    3. You negotiate: "Can you do $1,850?"
+    4. FF-A goes to Open Lanes, submits a new rate: $1,850
+    5. The system picks it up as a bid (same routing, same carrier,
+       old rate still valid → new rate supersedes)
+
+  The app doesn't manage the negotiation conversation. It captures
+  the RESULT of the negotiation — the updated rate. The bid history
+  tells the story: $2,200 → $2,000 → $1,850.
+
+  Future enhancement: You could add a "Request Update" button on a
+  rate that triggers a notification to the provider ("Requester wants
+  a revised rate for this lane"). But that's a Phase 5+ feature.
+  For now, negotiation happens outside the app, results land in it.
+
+
+================================================================================
+  PART 11: ASSESSMENT & ALTERNATIVE IDEAS
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ASSESSMENT OF YOUR DESIGN
+────────────────────────────────────────────────────────────────────────────────
+
+  STRENGTHS:
+
+  1. APPEND-ONLY IS THE RIGHT CALL
+     Never updating or deleting rates means full audit trail,
+     zero data loss, and simple conflict resolution. If two
+     submissions arrive simultaneously, both get inserted. The
+     "latest created_at" rule resolves which is active. No race
+     conditions.
+
+  2. BIDDING EMERGES FROM DATA, NOT FROM STATE
+     There's no "is_bid" flag, no "bid_round" counter, no special
+     bid table. A bid is just a new rate row where a previous one
+     existed for the same routing. This is elegant — the system
+     doesn't need to know about bidding as a concept. It just
+     stores rates. The bid history is a query, not a data model.
+
+  3. VALIDITY-DRIVEN LIFECYCLE IS CLEAN
+     "Active = latest + valid_until in the future" is simple, correct,
+     and doesn't require cron jobs or manual status management. A
+     rate naturally expires when its date passes. No cleanup needed.
+
+  4. RATE SUBMISSION AS THE DISPLAY LAYER WORKS
+     The submission groups rates for display ("I submitted these
+     rates together for this lane"). The bid history is shown per
+     routing per carrier within that context. The submission gives
+     structure to the display without constraining the data model.
+
+  5. COMPATIBLE WITH EVERYTHING ELSE
+     The bidding model doesn't change the table schemas from Parts
+     1-9. No new columns, no new tables. It's a query pattern on
+     top of the existing append-only rates table.
+
+
+  WEAKNESSES / THINGS TO WATCH:
+
+  1. THE "ACTIVE RATE" QUERY IS EXPENSIVE AT SCALE
+     DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier) with
+     a validity check scans a lot of rows as the rates table grows.
+     With 5 providers × 50 lanes × 3 carriers × 5 bids each = 3,750 rows,
+     this is fine. With 50 providers × 500 lanes × 10 bids each, you'll
+     want a covering index:
+
+       CREATE INDEX idx_rates_active_lookup
+         ON rates(provider_id, pol, pod, last_cy, fd, carrier,
+                  created_at DESC)
+         WHERE valid_until >= CURRENT_DATE;
+
+     Not needed now. Add it when queries slow down.
+
+  2. NO IN-APP NEGOTIATION
+     All negotiation happens outside the app (email, calls).
+     The app only captures results. This is fine for testing and early
+     production, but eventually you might want:
+       - A "Request Lower Rate" button on a rate
+       - An in-app messaging thread per lane
+       - Automated "your rate is $200 above the best offer" nudges
+     These are all Phase 5+ features that build on this foundation.
+
+  3. THE "SAME ROUTING" MATCH IS STRICT
+     A bid is detected by exact match on (pol, pod, last_cy, fd, carrier).
+     If a provider submits the same lane but spells "Los Angeles" as
+     "LA" or "Los Angeles, CA" vs "Los Angeles", they create a new
+     entry instead of a bid. Data normalization matters — enforce
+     consistent formatting on input (trim, uppercase, or use location
+     IDs) before this becomes a real problem.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ALTERNATIVE IDEAS
+────────────────────────────────────────────────────────────────────────────────
+
+
+  IDEA A: EXPLICIT BID CHAIN (parent_rate_id)
+
+    Instead of deriving bid history from matching fields, add a
+    column to rates:
+
+      parent_rate_id   uuid FK NULLABLE → rates(id)
+
+    When a provider submits a revised rate, the app sets parent_rate_id
+    to the ID of the previous rate. This creates a linked list:
+
+      Rate 3 ($1,850) → parent: Rate 2 ($2,000) → parent: Rate 1 ($2,200)
+
+    PROS:
+      - Bid history is a simple recursive query (follow the chain)
+      - No field matching needed — the chain is explicit
+      - Tolerant of spelling variations — the link is by ID, not by
+        matching pol/pod/last_cy/fd/carrier text
+
+    CONS:
+      - The app needs to know which rate it's revising at submission time
+      - More complex submission logic (find the active rate, link to it)
+      - If you miss the link, the history breaks
+
+    VERDICT: Good for robustness, adds complexity to the submission flow.
+    Could be added later as an enhancement WITHOUT changing the current
+    design — just add the nullable column and populate it when you can.
+
+
+  IDEA B: RATE GROUPS (rate_group_id)
+
+    Instead of a chain, assign a group ID to all rates for the same
+    logical "offer":
+
+      rate_group_id   uuid
+
+    All rates for (provider + routing + carrier) share the same
+    rate_group_id. The first rate creates the group. Subsequent
+    bids get the same group_id.
+
+      Rate 1 ($2,200) → group: G1
+      Rate 2 ($2,000) → group: G1
+      Rate 3 ($1,850) → group: G1
+
+    PROS:
+      - Querying bid history is trivial: WHERE rate_group_id = G1
+      - No recursive queries
+      - Clear grouping even if field values change slightly
+
+    CONS:
+      - The app needs to find or create the group on each submission
+      - Similar complexity to Idea A
+      - Another ID to manage
+
+    VERDICT: Cleaner than a linked list for display purposes.
+    Good if you want to show "all versions of this offer" as a
+    first-class concept. Also can be added later as a nullable column.
+
+
+  IDEA C: MATERIALIZED VIEW FOR ACTIVE RATES
+
+    Instead of computing "active rate" on every query, create a
+    Supabase materialized view or a regular view:
+
+      CREATE VIEW active_rates AS
+      SELECT DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier)
+        *
+      FROM rates
+      WHERE valid_until >= CURRENT_DATE
+      ORDER BY provider_id, pol, pod, last_cy, fd, carrier,
+               created_at DESC;
+
+    All queries that need "current rates" hit this view instead of
+    doing the DISTINCT ON inline.
+
+    PROS:
+      - Every query is simpler (SELECT * FROM active_rates WHERE ...)
+      - Single definition of "active" — change it in one place
+      - A regular VIEW in PostgreSQL is just a saved query, no storage cost
+
+    CONS:
+      - A VIEW re-runs the query each time (no caching)
+      - A MATERIALIZED VIEW needs manual refresh (but is fast to query)
+
+    VERDICT: Highly recommended regardless of which other ideas you pick.
+    A regular VIEW is free and makes every downstream query cleaner.
+    Add it when you create the tables. One line of SQL that pays for
+    itself across every feature.
+
+
+  IDEA D: SOFT NEGOTIATION SIGNALS (NO MESSAGING)
+
+    Without building an in-app chat, add lightweight negotiation signals:
+
+    Add a column to rates:
+      target_rate   numeric NULLABLE
+
+    When the requester sees a rate of $2,200 and wants $2,000, they
+    can set target_rate = 2000 on that rate. The provider sees:
+
+      MSC via LA → $2,200  [Target: $2,000]
+
+    This is a one-click action for the requester ("I want this for $2,000")
+    and a clear signal for the provider ("they want me at $2,000").
+
+    The provider submits a new rate — maybe $2,050. The bid history shows:
+
+      $2,200 → [Target: $2,000] → $2,050
+
+    PROS:
+      - Minimal UI (one input field or button)
+      - No messaging system needed
+      - The target is stored on the rate it references
+      - Negotiation history is visible in the bid chain
+
+    CONS:
+      - Only one signal per rate (no back-and-forth)
+      - Not suitable for complex negotiations
+      - Could feel limiting for sophisticated users
+
+    VERDICT: Simple and effective for your use case. Freight rate
+    negotiation is usually "I want a lower price" — not a conversation.
+    A target price captures 90% of the intent. Can be added as a
+    single nullable column on the rates table later.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  RECOMMENDATION
+────────────────────────────────────────────────────────────────────────────────
+
+  START WITH your current design as-is. It works. Bidding emerges
+  from append-only data + a "latest valid" query. No extra complexity.
+
+  ADD WHEN READY (in this order):
+
+    1. Idea C — Active Rates view (free, makes queries cleaner)
+       Do this when you create the Supabase tables.
+
+    2. Idea D — target_rate column (simple negotiation signal)
+       Do this when you start testing with your boss.
+
+    3. Idea A or B — parent_rate_id or rate_group_id
+       Do this only if text matching causes problems (spelling
+       inconsistencies creating false "new" rates instead of bids).
+       Most likely you'll standardize input formatting first and
+       never need this.
+
+  Don't build a messaging system. Negotiation happens on email/Slack.
+  The app captures the result.
+
+
+================================================================================
+  PART 12: INLINE RATE EVOLUTION — HORIZONTAL BID COLUMNS
+================================================================================
+
+  The drilled-down view from Part 10 (click a lane → see rate history)
+  is useful for detail. But the PRIMARY view — the grid both the
+  requester and provider see daily — should show rate evolution
+  inline, at a glance, without clicking into anything.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  THE IDEA: RATE COLUMNS ON THE SUBMISSION ROW
+────────────────────────────────────────────────────────────────────────────────
+
+  Instead of a single "Rate" column, show multiple rate columns
+  horizontally on the same row. Each column is a bid — ordered
+  chronologically left to right (oldest → newest). The rightmost
+  column with a value is the active rate.
+
+  REQUESTER VIEW — Received Rates (main grid, no drill-down needed):
+
+    Nhava Sheva, India → Commerce, CA
+
+    ┌───────────┬─────────┬──────────┬──────────┬─────────┬─────────┬─────────┬──────────────┐
+    │ Provider  │ POD     │ Last CY  │ Carrier  │ Rate 1  │ Rate 2  │ Rate 3  │ Valid Until   │
+    ├───────────┼─────────┼──────────┼──────────┼─────────┼─────────┼─────────┼──────────────┤
+    │ FF-A      │ LA, CA  │ LA, CA   │ MSC      │ $2,200  │ $2,000  │ $1,850  │ Apr 25       │
+    │ FF-A      │ LA, CA  │ LA, CA   │ CMA CGM  │ $2,050  │         │         │ Apr 20       │
+    │ FF-B      │ Norfolk │ Cinci    │ ZIM      │ $2,400  │ $2,300  │         │ Apr 20       │
+    └───────────┴─────────┴──────────┴──────────┴─────────┴─────────┴─────────┴──────────────┘
+
+  At a glance:
+    - FF-A on MSC went $2,200 → $2,000 → $1,850. Three bids. Aggressive.
+    - FF-A on CMA CGM: one rate, no movement.
+    - FF-B on ZIM went $2,400 → $2,300. Two bids. Some improvement.
+
+  The active rate is always the rightmost non-empty value.
+  Valid Until corresponds to the active (latest) rate.
+
+
+  PROVIDER VIEW — My Submissions (same structure, they see their own):
+
+    ┌──────────────┬──────────┬──────────┬─────────┬─────────┬─────────┬──────────────┐
+    │ POL → FD     │ POD      │ Carrier  │ Rate 1  │ Rate 2  │ Rate 3  │ Valid Until   │
+    ├──────────────┼──────────┼──────────┼─────────┼─────────┼─────────┼──────────────┤
+    │ Nhava → Comm │ LA, CA   │ MSC      │ $2,200  │ $2,000  │ $1,850  │ Apr 25       │
+    │ Nhava → Comm │ LA, CA   │ CMA CGM  │ $2,050  │         │         │ Apr 20       │
+    └──────────────┴──────────┴──────────┴─────────┴─────────┴─────────┴──────────────┘
+
+  The provider sees how their rates evolved. "I started at $2,200 and
+  I'm now at $1,850 — that's a 16% improvement for the requester."
+  Useful for them to gauge their own competitiveness.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW MANY RATE COLUMNS?
+────────────────────────────────────────────────────────────────────────────────
+
+  You said providers typically bid 2-3 times. So 3 rate columns covers
+  the vast majority of cases.
+
+  Options:
+
+    OPTION A — FIXED 3 COLUMNS: Rate 1, Rate 2, Rate 3
+      Simple. Predictable grid width. If a 4th bid happens (rare),
+      Rate 1 drops off and columns shift: R2 → R1, R3 → R2, R4 → R3.
+      You always see the most recent 3. Older ones are in the
+      detail view if needed.
+
+    OPTION B — DYNAMIC COLUMNS: show as many as exist
+      If 1 bid → 1 column. If 4 bids → 4 columns.
+      More flexible but grid width varies per row, which is messy
+      in a DataGrid.
+
+    OPTION C — FIXED 3 + OVERFLOW INDICATOR
+      3 columns. If more than 3 bids exist, show "..." or a count
+      badge on Rate 1: "2 older →" meaning there are 2 more bids
+      before this one. Clicking opens the full history.
+
+  RECOMMENDATION: Option A (fixed 3). Clean, predictable, covers
+  your use case. You can always click into the detail for full history.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW TO QUERY THIS
+────────────────────────────────────────────────────────────────────────────────
+
+  The rates table stores one row per bid. To pivot them into columns,
+  use a window function to rank bids, then pivot.
+
+  STEP 1 — Rank bids per routing (most recent 3):
+
+    WITH ranked AS (
+      SELECT
+        r.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY provider_id, pol, pod, last_cy, fd, carrier
+          ORDER BY created_at DESC
+        ) AS bid_rank
+      FROM rates r
+      WHERE r.lane_id = :lane_id    -- for a specific rate request
+        OR (r.pol = :pol AND r.fd = :fd)  -- or by port pair
+    )
+
+  STEP 2 — Pivot into columns (latest 3 bids):
+
+    SELECT
+      provider_id,
+      pol, pod, last_cy, fd, carrier,
+      MAX(CASE WHEN bid_rank = 3 THEN rate_amount END) AS rate_1,
+      MAX(CASE WHEN bid_rank = 2 THEN rate_amount END) AS rate_2,
+      MAX(CASE WHEN bid_rank = 1 THEN rate_amount END) AS rate_3,
+      MAX(CASE WHEN bid_rank = 1 THEN valid_until END) AS valid_until,
+      MAX(CASE WHEN bid_rank = 1 THEN created_at END)  AS last_submitted
+    FROM ranked
+    WHERE bid_rank <= 3
+    GROUP BY provider_id, pol, pod, last_cy, fd, carrier
+    ORDER BY rate_3 ASC NULLS LAST;
+
+  Result:
+    provider | pol        | pod | last_cy | fd      | carrier | rate_1 | rate_2 | rate_3 | valid_until
+    FF-A     | Nhava Sheva| LA  | LA      | Commerce| MSC     | 2200   | 2000   | 1850   | Apr 25
+    FF-B     | Nhava Sheva| Nor | Cinci   | Commerce| ZIM     | 2400   | 2300   | NULL   | Apr 20
+
+  rate_1 = oldest of the 3 most recent bids
+  rate_3 = the active (latest) rate
+  rate_2 = the middle bid (if it exists)
+
+  NULL in a column means fewer bids than 3. The UI renders those
+  cells as empty.
+
+  ALTERNATIVELY: Do this in JavaScript instead of SQL. Fetch all
+  rates for a lane, group by (provider + pod + last_cy + carrier)
+  in JS, and pick the latest 3 per group. Simpler to debug, same
+  result. The SQL approach is better for large datasets; the JS
+  approach is fine for your scale (few providers, few carriers).
+
+
+────────────────────────────────────────────────────────────────────────────────
+  VISUAL ENHANCEMENTS FOR THE RATE COLUMNS
+────────────────────────────────────────────────────────────────────────────────
+
+  STYLING — make the evolution visible at a glance:
+
+    1. COLOR CODING:
+       - Rate decreased from previous → green text or green background
+       - Rate increased from previous → red text (unusual but possible)
+       - No change → neutral
+       - Empty cell → gray dash or blank
+
+       Example:
+         Rate 1: $2,200 (neutral)
+         Rate 2: $2,000 (green — dropped $200)
+         Rate 3: $1,850 (green — dropped $150)
+
+    2. DELTA INDICATOR:
+       Show the change amount or percentage below each rate:
+
+         $2,200    $2,000     $1,850
+                   ↓ $200     ↓ $150
+                   (-9.1%)    (-7.5%)
+
+    3. ACTIVE COLUMN EMPHASIS:
+       The rightmost non-empty rate column gets a slightly bolder
+       style or a subtle highlight — it's the one that matters.
+       Historical columns are slightly muted.
+
+    4. VALID UNTIL CONTEXT:
+       Valid Until only applies to the active rate. If Rate 3 exists,
+       Valid Until is Rate 3's date. If only Rate 1 exists, it's
+       Rate 1's date. The column header could say "Active Until"
+       to reinforce that it refers to the current rate.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HOW THIS INTERACTS WITH THE SUBMISSION-LEVEL DISPLAY
+────────────────────────────────────────────────────────────────────────────────
+
+  You mentioned appreciating rate evolution "from the rate_submission
+  perspective." Here's how the two levels coexist:
+
+  SUBMISSION LEVEL (My Submissions / submitted tab):
+    Each row = one submission event.
+    Shows: POL, FD, POD, LastCY, carrier, the rates from THAT submission.
+    Multiple submissions for the same routing appear as separate rows
+    in chronological order. This is the "what I sent each time" view.
+
+  RATE EVOLUTION LEVEL (the inline columns):
+    Each row = one unique routing (provider + pol + pod + lastcy + fd + carrier).
+    Shows: Rate 1, Rate 2, Rate 3 as horizontal columns.
+    This is the "how this rate evolved over time" view.
+
+  These are TWO DIFFERENT GROUPINGS of the same data:
+    - Submissions group by "event" (when did I submit?)
+    - Rate evolution groups by "routing" (how did this specific offer change?)
+
+  Both read from the rates table. The difference is the GROUP BY.
+
+  In the UI:
+    - "My Submissions" page → grouped by submission event
+    - "Open Lanes" page → grouped by routing, with rate evolution columns
+    - Requester's "Received Rates" → grouped by routing, with rate columns
+
+  The inline rate columns are the PRIMARY way both sides see bid
+  history. The submission-level view is a secondary reference
+  ("what exactly did I send on April 10th?").
+
+
+================================================================================
+  PART 13: ASSESSMENT OF INLINE RATE COLUMNS & ALTERNATIVES
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ASSESSMENT
+────────────────────────────────────────────────────────────────────────────────
+
+  STRENGTHS:
+
+  1. RATE EVOLUTION AT A GLANCE — NO CLICKING
+     The whole point. You open the grid and immediately see:
+     "FF-A went from $2,200 to $1,850 on MSC." No drill-down,
+     no expanding rows, no modal. This is the single biggest UX
+     win for a rate comparison workflow.
+
+  2. RELATIVE IMPROVEMENT IS OBVIOUS
+     Three columns side by side → your eye naturally compares.
+     "$2,200 → $2,000 → $1,850" tells a story. A single "Rate"
+     column with a "Prev Rate" secondary column tells you the
+     current state but not the journey.
+
+  3. WORKS FOR YOUR SCALE
+     2-3 bids per routing is the norm. 3 fixed columns covers it.
+     You're not building a trading terminal with 50 price ticks —
+     you're showing a few negotiation rounds. The grid stays clean.
+
+  4. SAME DATA, NO NEW TABLES
+     The inline columns are a DISPLAY transformation of the same
+     rates table. A window function + pivot query, or JS grouping.
+     No schema changes, no new tables, no new columns.
+
+  5. BOTH SIDES BENEFIT
+     Requester: "Who's competitive? Who dropped their price?"
+     Provider: "How much did I reduce? Is my current rate the best?"
+
+
+  WEAKNESSES:
+
+  1. FIXED COLUMNS CAN FEEL RIGID
+     If a provider bids 5 times (unlikely but possible), you only
+     show the latest 3. The first 2 are hidden. Not a problem in
+     practice but worth noting.
+
+  2. GRID WIDTH INCREASES
+     3 rate columns + POD + LastCY + carrier + Valid Until + Provider
+     is a lot of columns. On smaller screens this may require
+     horizontal scrolling. MUI X DataGrid handles this fine but
+     the UX on narrow screens needs attention.
+
+  3. THE PIVOT QUERY IS MODERATELY COMPLEX
+     The SQL with ROW_NUMBER + CASE WHEN pivot is not trivial.
+     But it's a well-known pattern and you only write it once
+     (in a service function). Alternative: do the pivoting in
+     JS after fetching flat rows — simpler code, same result.
+
+  4. EMPTY CELLS FOR SINGLE-BID ROWS
+     If most providers bid once, Rate 2 and Rate 3 are empty for
+     most rows. The grid looks sparse. Mitigate by aligning
+     columns right so the active rate is always in the same visual
+     position, or by collapsing empty columns dynamically.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ALTERNATIVE IDEAS
+────────────────────────────────────────────────────────────────────────────────
+
+
+  IDEA E: SPARKLINE / MINI CHART IN A SINGLE COLUMN
+
+    Instead of 3 separate columns, show a tiny inline chart in
+    ONE "Rate History" column:
+
+      ┌───────────┬──────────┬──────────┬──────────────────────────┬──────────────┐
+      │ Provider  │ POD      │ Carrier  │ Rate History              │ Valid Until   │
+      ├───────────┼──────────┼──────────┼──────────────────────────┼──────────────┤
+      │ FF-A      │ LA, CA   │ MSC      │ $2,200 → $2,000 → $1,850│ Apr 25       │
+      │ FF-B      │ Norfolk  │ ZIM      │ $2,400 → $2,300         │ Apr 20       │
+      │ FF-A      │ LA, CA   │ CMA CGM  │ $2,050                  │ Apr 20       │
+      └───────────┴──────────┴──────────┴──────────────────────────┴──────────────┘
+
+    The "Rate History" column shows values as a text chain or a tiny
+    sparkline graphic (a miniature line chart: ╲ going down = good).
+
+    PROS:
+      - One column instead of three → saves grid width
+      - Scales to any number of bids (just gets longer)
+      - Visually compact
+
+    CONS:
+      - Harder to sort by "current rate" (it's buried in the chain)
+      - Text chains get long with 4+ bids
+      - Sparkline graphics add visual complexity and a rendering library
+      - Loses the columnar alignment that makes comparison easy
+
+    VERDICT: Elegant for compact views but sacrifices sortability
+    and the clean column-per-bid comparison. Better as a secondary
+    view (e.g., mobile) than the primary desktop grid.
+
+
+  IDEA F: CURRENT RATE + CHANGE BADGE (MINIMAL)
+
+    Show only the ACTIVE rate, plus a small badge indicating change:
+
+      ┌───────────┬──────────┬──────────┬─────────────────────┬──────────────┐
+      │ Provider  │ POD      │ Carrier  │ Rate                │ Valid Until   │
+      ├───────────┼──────────┼──────────┼─────────────────────┼──────────────┤
+      │ FF-A      │ LA, CA   │ MSC      │ $1,850  ↓16% (3rd)  │ Apr 25       │
+      │ FF-B      │ Norfolk  │ ZIM      │ $2,300  ↓4% (2nd)   │ Apr 20       │
+      │ FF-A      │ LA, CA   │ CMA CGM  │ $2,050  (1st)       │ Apr 20       │
+      └───────────┴──────────┴──────────┴─────────────────────┴──────────────┘
+
+    The badge shows:
+      - ↓16% = total decrease from first bid to current
+      - (3rd) = this is the 3rd bid (so you know there's history)
+      - Click to expand and see full bid history
+
+    PROS:
+      - Minimal grid width — one Rate column
+      - The percentage tells the story without showing every number
+      - Bid count (3rd) hints at negotiation intensity
+      - Clean, scannable
+
+    CONS:
+      - You lose the intermediate steps ($2,200 → $2,000 → $1,850)
+      - Requires a click to see the journey
+      - Less useful for the "at a glance" goal you described
+
+    VERDICT: Good for dashboards or summary views. Not ideal for
+    the main rate comparison grid where you want full visibility.
+
+
+  IDEA G: HYBRID — CURRENT + FIRST + CHANGE
+
+    Show 2 columns instead of 3: the FIRST rate and the CURRENT rate,
+    plus the change:
+
+      ┌───────────┬──────────┬──────────┬──────────┬──────────┬────────┬──────────────┐
+      │ Provider  │ POD      │ Carrier  │ Original │ Current  │ Change │ Valid Until   │
+      ├───────────┼──────────┼──────────┼──────────┼──────────┼────────┼──────────────┤
+      │ FF-A      │ LA, CA   │ MSC      │ $2,200   │ $1,850   │ -$350  │ Apr 25       │
+      │ FF-B      │ Norfolk  │ ZIM      │ $2,400   │ $2,300   │ -$100  │ Apr 20       │
+      │ FF-A      │ LA, CA   │ CMA CGM  │ $2,050   │ $2,050   │ —      │ Apr 20       │
+      └───────────┴──────────┴──────────┴──────────┴──────────┴────────┴──────────────┘
+
+    PROS:
+      - 2 rate columns instead of 3 — narrower grid
+      - "Original vs Current" tells the full improvement story
+      - The Change column (absolute or %) is sortable — "who gave me
+        the biggest discount?"
+      - Clean when there's only 1 bid (Original = Current, Change = —)
+
+    CONS:
+      - Loses the middle steps ($2,000 in the MSC example)
+      - If the middle steps matter to you, this isn't enough
+
+    VERDICT: Strong alternative if grid width is a concern.
+    The "Change" column is uniquely powerful — you can sort by it
+    to find the most negotiable providers. The middle bids are
+    rarely needed for decision-making; first-to-last tells the story.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  FINAL RECOMMENDATION FOR DISPLAY
+────────────────────────────────────────────────────────────────────────────────
+
+  PRIMARY (desktop, main grid):
+    Your original idea — 3 fixed rate columns (Rate 1, Rate 2, Rate 3).
+    With color coding (green for decreases) and the active rate
+    emphasized. This gives full visibility at a glance.
+
+  CONSIDER ADDING:
+    A computed "Change" column showing the total delta from Rate 1 to
+    the active rate (absolute $ and/or %). Sortable. "Who improved
+    the most?" is a powerful sort.
+
+  FALLBACK FOR NARROW SCREENS:
+    Collapse to Idea G (Original + Current + Change). Responsive.
+    The 3-column view is for desktop; the 2-column view is for
+    tablet/mobile.
+
+  FOR THE PROVIDER'S VIEW:
+    Same 3-column structure. They see their own bids evolving.
+    Good for self-awareness: "I've already dropped $350, how much
+    further can I go?"
+
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
