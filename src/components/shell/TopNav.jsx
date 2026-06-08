@@ -39,77 +39,89 @@ export default function TopNav({ onMenuToggle }) {
     .slice(0, 2)
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 shadow-sm">
-      {/* Left: hamburger */}
-      <button
-        onClick={onMenuToggle}
-        className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
-        aria-label="Toggle sidebar"
-      >
-        <Menu size={20} />
-      </button>
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-fog-200 bg-white/85 px-4 backdrop-blur-md sm:px-6">
+      {/* Left: hamburger + wayfinding */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onMenuToggle}
+          className="rounded-lg p-2 text-fog-500 transition-colors hover:bg-fog-100 hover:text-harbor-800"
+          aria-label="Toggle sidebar"
+        >
+          <Menu size={20} />
+        </button>
+        <div className="hidden items-center gap-2 sm:flex">
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-fog-400">
+            Workspace
+          </span>
+          <span className="text-fog-300">/</span>
+          <span className="text-sm font-semibold text-harbor-800">
+            {ROLE_LABELS[role] ?? role}
+          </span>
+        </div>
+      </div>
 
       {/* Right: actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         {/* Notification bell — placeholder */}
-        <button className="relative rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors">
+        <button className="relative rounded-lg p-2 text-fog-500 transition-colors hover:bg-fog-100 hover:text-harbor-800">
           <Bell size={18} />
-          {/* Unread dot */}
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-brand-500 ring-2 ring-white" />
+          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-signal-500 ring-2 ring-white" />
         </button>
+
+        <span className="mx-1 hidden h-6 w-px bg-fog-200 sm:block" />
 
         {/* Account menu */}
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setAccountOpen(o => !o)}
-            className="flex items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-slate-100 transition-colors"
+            className="flex items-center gap-2.5 rounded-lg px-1.5 py-1 text-sm transition-colors hover:bg-fog-100"
           >
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-harbor-800 text-xs font-bold text-white ring-2 ring-signal-500/30">
               {initials}
             </span>
-            <span className="hidden sm:block text-slate-700 font-medium">
-              {displayName}
+            <span className="hidden text-left leading-tight sm:block">
+              <span className="block text-sm font-semibold text-harbor-900">{displayName}</span>
+              <span className="block font-mono text-[10px] uppercase tracking-wider text-fog-400">
+                {ROLE_LABELS[role] ?? role}
+              </span>
             </span>
-            <span className="hidden sm:block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
-              {ROLE_LABELS[role] ?? role}
-            </span>
-            <ChevronDown size={14} className="text-slate-400" />
+            <ChevronDown size={14} className="text-fog-400" />
           </button>
 
           {accountOpen && (
-            <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-              <div className="border-b border-slate-100 px-3 py-2">
-                <p className="text-xs font-medium text-slate-400">Signed in as</p>
-                <p className="truncate text-sm font-semibold text-slate-700">{displayName}</p>
-                <p className="text-xs text-slate-400">{ROLE_LABELS[role] ?? role}</p>
+            <div className="absolute right-0 top-full z-50 mt-2 w-60 overflow-hidden rounded-xl border border-fog-200 bg-white py-1 shadow-card">
+              <div className="border-b border-fog-100 px-3.5 py-3">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-fog-400">Signed in as</p>
+                <p className="truncate text-sm font-semibold text-harbor-900">{displayName}</p>
+                <p className="text-xs text-fog-500">{ROLE_LABELS[role] ?? role}</p>
               </div>
 
-              <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 transition-colors">
-                <User size={14} />
+              <button className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-fog-600 transition-colors hover:bg-fog-50 hover:text-harbor-800">
+                <User size={15} />
                 Profile
               </button>
-              <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 transition-colors">
-                <Settings size={14} />
+              <button className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-fog-600 transition-colors hover:bg-fog-50 hover:text-harbor-800">
+                <Settings size={15} />
                 Settings
               </button>
 
               {/* Dev-only role toggle — visible when no real session */}
               {!user && (
                 <>
-                  <div className="my-1 border-t border-dashed border-slate-200" />
+                  <div className="my-1 border-t border-dashed border-fog-200" />
                   <button
                     onClick={toggleDevRole}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-xs text-amber-600 hover:bg-amber-50 transition-colors"
+                    className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs text-signal-700 transition-colors hover:bg-signal-50"
                   >
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 font-mono font-bold">DEV</span>
+                    <span className="rounded bg-signal-100 px-1.5 py-0.5 font-mono font-bold text-signal-800">DEV</span>
                     Switch to {devRole === 'requester' ? 'Provider' : 'Requester'}
                   </button>
                 </>
               )}
 
-              <div className="my-1 border-t border-slate-100" />
-              <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors">
-                <LogOut size={14} />
+              <div className="my-1 border-t border-fog-100" />
+              <button className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-red-600 transition-colors hover:bg-red-50">
+                <LogOut size={15} />
                 Sign out
               </button>
             </div>

@@ -4,6 +4,7 @@ import { Trash2, Upload, Plus, Send, X } from 'lucide-react'
 import Papa from 'papaparse'
 import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
+import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
@@ -31,8 +32,8 @@ function dedup(rows) {
 }
 
 const TOAST_COLORS = {
-  success: 'bg-green-600',
-  warning: 'bg-amber-500',
+  success: 'bg-sea-600',
+  warning: 'bg-signal-600',
   error:   'bg-red-600',
 }
 
@@ -62,9 +63,10 @@ export default function NewRateRequest() {
     {
       field: 'rowNum',
       headerName: '#',
-      width: 60,
+      width: 56,
       sortable: false,
       filterable: false,
+      cellClassName: 'font-mono text-fog-400',
       renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
     },
     {
@@ -84,17 +86,19 @@ export default function NewRateRequest() {
     {
       field: 'containerType',
       headerName: 'Container Type',
-      width: 140,
+      width: 150,
       editable: true,
       type: 'singleSelect',
+      cellClassName: 'font-mono',
       valueOptions: ['20GP', '40GP', '40HC', '45HC', '20RF', '40RF'],
     },
     {
       field: 'containerCount',
       headerName: '# Containers',
-      width: 120,
+      width: 130,
       editable: true,
       type: 'number',
+      cellClassName: 'font-mono',
     },
     {
       field: 'actions',
@@ -104,7 +108,7 @@ export default function NewRateRequest() {
       filterable: false,
       renderCell: (params) => (
         <button
-          className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+          className="rounded-md p-1 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
           onClick={() => handleDeleteRow(params.row.id)}
           tabIndex={-1}
         >
@@ -211,27 +215,35 @@ export default function NewRateRequest() {
 
   /* ── render ──────────────────────────────────────────────────────────── */
 
+  const laneCount = rows.filter(r => r.pol.trim() && r.fd.trim()).length
+
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold text-slate-800">New Rate Request</h1>
-        <p className="mt-0.5 text-sm text-slate-400">
-          Add origin / destination lanes, then post to create a request batch.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        kicker="Requester · New Request"
+        title="New Rate Request"
+        subtitle="Add origin / destination lanes, then post to create a request batch."
+        actions={
+          <span className="inline-flex items-center gap-2 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
+            <span className="font-mono text-lg font-semibold leading-none text-harbor-900">{laneCount}</span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-fog-400">
+              valid {laneCount === 1 ? 'lane' : 'lanes'}
+            </span>
+          </span>
+        }
+      />
 
       {/* Toolbar */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-fog-300 bg-white px-3 py-2 text-sm font-medium text-harbor-700 shadow-sm transition-all hover:border-harbor-300 hover:bg-fog-50 hover:text-harbor-900"
           onClick={handleAddRow}
         >
           <Plus size={16} />
           Add Row
         </button>
         <button
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-fog-300 bg-white px-3 py-2 text-sm font-medium text-harbor-700 shadow-sm transition-all hover:border-harbor-300 hover:bg-fog-50 hover:text-harbor-900"
           onClick={() => fileInputRef.current?.click()}
         >
           <Upload size={16} />
@@ -248,17 +260,17 @@ export default function NewRateRequest() {
         <div className="flex-1" />
 
         <button
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition-colors"
+          className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
           onClick={handlePost}
           disabled={posting}
         >
-          <Send size={16} />
+          <Send size={16} className="transition-transform group-hover:translate-x-0.5" />
           {posting ? 'Posting…' : 'Post Batch'}
         </button>
       </div>
 
       {/* DataGrid */}
-      <div className="rounded-xl border border-slate-200 bg-white shadow-sm" style={{ width: '100%' }}>
+      <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card" style={{ width: '100%' }}>
         <DataGrid
           rows={rows}
           columns={columns}
@@ -268,18 +280,43 @@ export default function NewRateRequest() {
           autoHeight
           sx={{
             border: 'none',
-            '& .MuiDataGrid-cell': { fontSize: '0.875rem' },
-            '& .MuiDataGrid-columnHeader': { fontSize: '0.875rem', fontWeight: 600 },
+            fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
+            '& .MuiDataGrid-columnHeaders': {
+              backgroundColor: '#f7f8fa',
+              borderBottom: '1px solid #dfe4ea',
+            },
+            '& .MuiDataGrid-columnHeader': {
+              fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+              fontSize: '0.7rem',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: '#566270',
+            },
+            '& .MuiDataGrid-columnSeparator': { color: '#eef1f4' },
+            '& .MuiDataGrid-cell': {
+              fontSize: '0.875rem',
+              color: '#132236',
+              borderColor: '#eef1f4',
+            },
+            '& .MuiDataGrid-row:hover': { backgroundColor: '#f7f8fa' },
+            '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': {
+              outline: '2px solid rgba(245,165,36,0.5)',
+              outlineOffset: '-2px',
+            },
+            '& .MuiDataGrid-cell--editing': {
+              boxShadow: 'inset 0 0 0 2px rgba(245,165,36,0.5)',
+            },
           }}
         />
       </div>
 
       {/* Toast */}
       {toast && (
-        <div className={`fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg ${TOAST_COLORS[toast.severity]}`}>
+        <div className={`fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-card-hover animate-rise-in ${TOAST_COLORS[toast.severity]}`}>
           <span>{toast.message}</span>
           <button
-            className="rounded p-0.5 hover:bg-white/20 transition-colors"
+            className="rounded-md p-0.5 transition-colors hover:bg-white/20"
             onClick={() => setToast(null)}
           >
             <X size={14} />

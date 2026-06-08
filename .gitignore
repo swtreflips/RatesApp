@@ -3,3 +3,8 @@ dist
 .env.local
 .env*.local
 *.local
+
+# Agent skill tooling (local dev only)
+.agents/
+.claude/
+skills-lock.json

@@ -1,36 +1,96 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── design tokens ─────────────────────────────────────────────────────── */
+
+:root {
+  /* grain overlay — a tiny SVG noise tile, reused across atmospheric surfaces */
+  --grain:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
 @layer base {
   html {
     @apply antialiased;
+    font-feature-settings: 'ss01', 'cv01', 'cv03';
   }
   body {
-    @apply bg-slate-50 text-slate-800;
+    @apply bg-fog-100 text-harbor-900 font-sans;
+  }
+
+  /* Display headings inherit the grotesque + tight tracking by default */
+  h1, h2, h3 {
+    @apply font-display tracking-tightest text-harbor-950;
+  }
+
+  /* Tabular figures everywhere numbers matter */
+  .nums,
+  th, td {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background-color: theme('colors.signal.300');
+    color: theme('colors.harbor.950');
   }
 }
 
-@keyframes loading {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(400%); }
-}
+/* ── reusable surface + texture utilities ──────────────────────────────── */
 
 @layer utilities {
+  /* Fine grain — layer over dark surfaces for tactile depth */
+  .grain::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: var(--grain);
+    background-size: 160px 160px;
+    opacity: 0.05;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* Hairline at sub-pixel weight using a soft navy */
+  .rule {
+    @apply border-fog-200;
+  }
+
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: #cbd5e1 transparent;
+    scrollbar-color: theme('colors.fog.300') transparent;
   }
   .scrollbar-thin::-webkit-scrollbar {
-    width: 4px;
+    width: 6px;
+    height: 6px;
   }
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: #cbd5e1;
-    border-radius: 2px;
+    background-color: theme('colors.fog.300');
+    border-radius: 3px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: theme('colors.fog.400');
+  }
+
+  /* Dark-surface scrollbar variant for the navy sidebar */
+  .scrollbar-rail {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.harbor.700') transparent;
+  }
+  .scrollbar-rail::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-rail::-webkit-scrollbar-thumb {
+    background-color: theme('colors.harbor.700');
+    border-radius: 3px;
+  }
+
+  /* Staggered reveal helper — pair with animate-rise-in + inline delay */
+  .stagger > * {
+    opacity: 0;
+    animation: rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }
 }

@@ -34,11 +34,11 @@ export default function Shell() {
   }, [isMobile])
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50">
+    <div className="flex h-screen overflow-hidden bg-fog-100">
       {/* Mobile backdrop */}
       {isMobile && sidebarOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black/40 transition-opacity"
+          className="fixed inset-0 z-30 bg-harbor-950/50 backdrop-blur-sm transition-opacity"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -56,8 +56,10 @@ export default function Shell() {
         <TopNav onMenuToggle={() => setSidebarOpen(o => !o)} />
 
         {/* Main scrollable content area */}
-        <main className="flex-1 overflow-y-auto scrollbar-thin">
-          <div className="min-h-full px-6 py-6">
+        <main className="relative flex-1 overflow-y-auto scrollbar-thin">
+          {/* Subtle top atmosphere fading into the page */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-48 bg-gradient-to-b from-harbor-100/60 to-transparent" />
+          <div className="relative mx-auto min-h-full w-full max-w-7xl px-6 py-7 sm:px-8">
             <RoleRouter />
           </div>
         </main>
