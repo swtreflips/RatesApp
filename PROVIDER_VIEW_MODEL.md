@@ -213,6 +213,62 @@ There is no longer a third "30-day submission visibility" clock. Only these two.
 
 ---
 
+## 7a. Routing identity & normalization — what makes a "bid"
+
+A "bid" is **not a stored object.** There is no `parent_rate_id` chain and no `rate_group_id` (`dataDesign.txt` Part 11, Ideas A & B — explicitly **not** chosen). Rates are independent rows; "bid evolution" is a **derived view** computed at query time (Idea C). Two lenses, both over flat `rates`:
+
+- **Evolution** (one provider lowering their own price): group by `provider + routing`, order by `created_at` → `$2,200 → $2,000 → $1,850`.
+- **Competition** (providers vs each other on a lane): group by lane, take each provider's latest active rate.
+
+Because nothing links the lineage together, **the routing fields ARE the identity:**
+
+```
+routing identity = provider_id + pol + pod + last_cy + fd + carrier
+```
+
+If the same real routing is written two different ways ("LA" vs "Los Angeles, CA", or "MSC" vs "Mediterranean Shipping Co"), the system sees **two routings** — two separate "current" rates instead of one bid that dropped. So keeping bids honest depends entirely on routing fields being consistent. This makes input normalization **load-bearing**, not optional.
+
+### The rule: resolve to a canonical token at the input boundary
+
+Every routing field — **all locations (`pol`, `pod`, `last_cy`, `fd`) AND `carrier`** — must be resolved to a stable canonical value *before* a rate row is stored. Compare on the canonical value, never on free text.
+
+**Weak (insufficient):** store the display string, match strings. Even with autocomplete, if you store text you're still string-matching, and drift still splits lineages.
+
+**Strong (the target):** store a stable identifier from a reference list; the human-readable name is just a label looked up for display.
+
+```
+locations:  id=USLAX  name="Los Angeles, CA"  aliases=["LA","Los Angeles","LAX"]
+carriers:   id=MSCU   name="MSC"              aliases=["Mediterranean Shipping Co"]
+
+rate.pod_id     = "USLAX"     ← identity is the code, not the text
+rate.carrier_id = "MSCU"
+match: "USLAX" == "USLAX" → one lineage, immune to casing/spelling/aliases
+```
+
+This domain already has canonical code systems to anchor on:
+- **Ports → UN/LOCODE** (5 chars): `USLAX` = Los Angeles, `INNSA` = Nhava Sheva, `USNYC` = New York.
+- **Carriers → SCAC** (4-char alpha): `MSCU` = MSC, `MAEU` = Maersk, `HLCU` = Hapag-Lloyd.
+- Inland points (Last CY / FD) that lack a clean LOCODE get their own reference entries with internal IDs.
+
+**Why the strong version wins:** identity is exact and immune to text drift; aliases live in one place (the reference row); you can fix a display name without breaking any existing rate's identity (the `id` never changes); exact filtering ("all rates via USLAX", "all MSCU rates").
+
+**Pragmatic hybrid (recommended):** the `rates` table is intentionally self-contained (Part 1 stores routing as text, no joins). Keep that — store **both** the canonical `*_id` (the identity, what bidding compares on) **and** a denormalized display-text snapshot (what the grid renders). Identity uses the code; display uses the text; reading a rate needs no join.
+
+### Two input paths, one shared reference
+
+Both entry points must resolve through the **same** canonical reference, or manual and bulk entry can still diverge:
+
+- **Manual entry → typeahead that binds to the canonical entry** (writes the `id`, not whatever the user typed).
+- **CSV upload → a resolver** that maps each raw cell to a canonical `id` via `name`/`aliases` (after trim/casing/whitespace cleanup).
+
+**Fail safe on CSV — never fuzzy-merge silently.** If a cell is unrecognized or ambiguous, **create a new reference entry and flag it for review** — do *not* auto-snap it to the nearest match. A missed match surfaces as two rows you can merge later; a wrong auto-merge folds two genuinely different lanes into one bid chain and corrupts the comparison *invisibly*. Fail toward "new + review," not "guess."
+
+### Scale note
+
+No fuzzy ML needed. The set is bounded — some dozens of ports, a handful of carriers. A **controlled vocabulary** (a curated reference list, typeahead-backed for manual entry, alias-mapped for CSV) essentially eliminates the problem and is the natural on-ramp to full location IDs later — the list *is* the start of that.
+
+---
+
 ## 8. Navigation impact
 
 | Old provider nav | New provider nav |
@@ -231,4 +287,5 @@ There is no longer a third "30-day submission visibility" clock. Only these two.
 - **`rate_submissions` becomes an acknowledgement** via `status` + `skip_reason` — two new columns, no new table.
 - **Removed:** the 30-day "Submitted Rates" window. View 2 is `valid_until`-driven only.
 - **Storage is append-only; display is latest-only.** Re-submitting appends a new rate row (never deletes). Providers see only their latest active bid; the requester defaults to latest for booking but retains a (not-yet-built) full-history capability.
+- **"Bid" is a derived view, not a stored object.** No parent/chain. Routing identity (`provider + pol + pod + last_cy + fd + carrier`) is the key, so every routing field — locations *and* carrier — must resolve to a canonical token (UN/LOCODE / SCAC) at input, via one shared reference list, failing safe on anything unrecognized.
 - **TTL is now 10 days.**
