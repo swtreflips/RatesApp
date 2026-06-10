@@ -4,6 +4,15 @@
   March 31, 2026
 ================================================================================
 
+  NOTE (June 10, 2026): The concepts below (rate request / submission / rate)
+  still hold. Two parameters have since been updated elsewhere:
+    - Lane TTL is now 10 days (was 14).
+    - The PROVIDER view model is defined authoritatively in PROVIDER_VIEW_MODEL.md
+      (two views: "Lanes to fill" + "Active rates", plus a Skip action). The
+      "30-day submitted rates" window referenced in other docs is removed.
+  This document covers the requester/storage concepts and is unaffected.
+================================================================================
+
 
 ________________________________________________________________________________
 1. THE THREE DISTINCT THINGS

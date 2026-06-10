@@ -81,7 +81,7 @@
       - Roles: 'requester', 'provider' (AuthProvider, RoleRouter, Sidebar)
       - Container types: ['20GP', '40GP', '40HC', ...] (NewRateRequest)
       - Statuses: 'posted' (rateRequestService)
-      - TTL duration: 14 days (LANE_LIFECYCLE doc, not in code yet)
+      - TTL duration: 10 days (LANE_LIFECYCLE doc, not in code yet)
 
     Create: src/lib/constants.js
     Centralize these. When you change a container type list or add

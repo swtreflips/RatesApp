@@ -1,3 +1,14 @@
+> **UPDATE — June 10, 2026:** Two decisions below have since changed.
+> (1) The rate-request **TTL is now 10 days** (not 14).
+> (2) The provider view model — described here as "pending rate requests" + "submitted
+>     rates (past 30 days)" — has been **superseded**. The 30-day window is removed; the
+>     provider now sees (a) **Lanes to fill** (active lanes, TTL-driven) and (b) **Active
+>     rates** (`valid_until` in the future), with a **Skip** action to clear lanes they
+>     can't quote. See **PROVIDER_VIEW_MODEL.md** for the authoritative spec.
+> The original brain-dump below is kept for history.
+
+---
+
 check my claud.md, please also read all the .txt files  so you understand the overall purpose of the project. before any code or edition of code base, first i want to think about how to structure the architecture for the way im going to relate rate requests, rate submissions and actual rates. because this is going to be affecting or shaping the view on both ends the requester and provider. so  I want to set up 3 types of elements or objects for requesting and getting rates from forwarders (or providers)
 
 so the MUI x grid that I created already has the purpose of creating a 'rate request" list or batch. a rate request is just a template for forwarders to know what lanes or port pairs we are interested in getting rates for. but in reality forwarders can submit rates for any given lane or route. the 'rate request' element or approach just works for we all be aligned in what we want and what they have for us.

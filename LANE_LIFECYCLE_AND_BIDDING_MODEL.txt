@@ -1,6 +1,15 @@
 ================================================================================
   LANE LIFECYCLE, GRID BEHAVIOR, AND BIDDING MODEL
   Design document — March 31, 2026
+  Updated June 10, 2026: TTL reduced 14 → 10 days.
+================================================================================
+
+  NOTE (June 10, 2026):
+    - Lane TTL is now 10 days (all examples below updated accordingly).
+    - The PROVIDER grid / views in Sections 3–4 are illustrative. The
+      authoritative provider view model is PROVIDER_VIEW_MODEL.md
+      ("Lanes to fill" + "Active rates" + Skip). Where they differ, that
+      document wins. The TTL, period, and bidding mechanics here still hold.
 ================================================================================
 
 
@@ -12,7 +21,7 @@ ________________________________________________________________________________
 
   When a requester posts a lane, it gets a TIME TO LIVE (TTL):
 
-    - Default TTL: 14 days from the post date
+    - Default TTL: 10 days from the post date
     - The lane is "active" for that entire window
     - Providers can see and submit rates for any active lane
     - After TTL expires, the lane disappears from the provider view
@@ -36,14 +45,14 @@ ________________________________________________________________________________
 
   What happens when a requester posts a lane that already exists and is active?
 
-  SCENARIO: Nhava Sheva → LA was posted on Feb 1st (expires Feb 15th).
+  SCENARIO: Nhava Sheva → LA was posted on Feb 1st (expires Feb 11th).
   On Feb 9th, the requester posts the same lane again.
 
   BEHAVIOR:
-    1. System detects: "This lane is already active (expires in 6 days)"
-    2. Warning shown: "Extend this lane for another 14 days?"
+    1. System detects: "This lane is already active (expires in 2 days)"
+    2. Warning shown: "Extend this lane for another 10 days?"
     3. If accepted:
-       - expires_at is updated to Feb 23rd (Feb 9th + 14 days)
+       - expires_at is updated to Feb 19th (Feb 9th + 10 days)
        - The lane stays as one record — no duplicate created
        - Previous rates remain in the DB as historical records
        - On the provider side: the lane appears with empty rate fields
@@ -53,8 +62,11 @@ ________________________________________________________________________________
     - The lane never disappeared — it just got extended
     - But the rate fields reset to empty after the extension
     - This is the signal: "the requester needs updated pricing"
-    - The provider can see their previous rates in history,
-      but the active view shows: "no current rate submitted"
+    - Previous-period rates stay in the database (and remain in the
+      provider's "Active rates" view while still valid), but the lane
+      reopens in "Lanes to fill" with no current submission for the new
+      period. (Providers see only their latest active bid, never a
+      history browser — see PROVIDER_VIEW_MODEL.md §4.)
 
   IF THE LANE HAS ALREADY EXPIRED:
     - Requester posts the same POL + FD
@@ -73,10 +85,10 @@ ________________________________________________________________________________
 
     #  | POL           | Final Dest    | Posted   | Expires  | Days Left | Rates | Status
     ---|---------------|---------------|----------|----------|-----------|-------|--------
-    1  | Nhava Sheva   | Los Angeles   | Feb 1    | Feb 15   | 6         | 3     | Active
-    2  | Mundra        | Dallas, TX    | Feb 3    | Feb 17   | 8         | 0     | Pending
-    3  | Shanghai      | Chicago, IL   | Feb 5    | Feb 19   | 10        | 1     | Active
-    4  | Nhava Sheva   | Seymour, IN   | Jan 20   | Feb 3    | -         | 2     | Expired
+    1  | Nhava Sheva   | Los Angeles   | Feb 1    | Feb 11   | 2         | 3     | Active
+    2  | Mundra        | Dallas, TX    | Feb 3    | Feb 13   | 4         | 0     | Pending
+    3  | Shanghai      | Chicago, IL   | Feb 5    | Feb 15   | 6         | 1     | Active
+    4  | Nhava Sheva   | Seymour, IN   | Jan 20   | Jan 30   | -         | 2     | Expired
 
   COLUMN DEFINITIONS:
 
@@ -102,9 +114,9 @@ ________________________________________________________________________________
 
   HOW THE GRID CLEARS AFTER TTL:
 
-    Day 1  (Feb 1):   Lane posted. Grid shows: Pending, 0 rates, 14 days left.
-    Day 3  (Feb 3):   Provider submits rate. Grid shows: Active, 1 rate, 12 days.
-    Day 14 (Feb 15):  TTL expires. Lane moves from "Active" tab to "All" tab.
+    Day 1  (Feb 1):   Lane posted. Grid shows: Pending, 0 rates, 10 days left.
+    Day 3  (Feb 3):   Provider submits rate. Grid shows: Active, 1 rate, 8 days.
+    Day 10 (Feb 11):  TTL expires. Lane moves from "Active" tab to "All" tab.
                        Status shows "Expired". Rates still visible in history.
 
     The lane doesn't get deleted — it just stops appearing in the default
@@ -115,13 +127,13 @@ ________________________________________________________________________________
 
     The requester can click an "Extend" or "Request Update" action on any
     active lane. This:
-      1. Adds 14 days to expires_at
+      1. Adds 10 days to expires_at
       2. Signals providers that fresh rates are needed
       3. Previous rates stay in history but the "current period" is empty
 
     From the grid perspective:
-      Before extend:  Nhava Sheva → LA | Feb 1  | Feb 15 | 6 days | 3 rates | Active
-      After extend:   Nhava Sheva → LA | Feb 9  | Feb 23 | 14 days | 0 rates | Pending
+      Before extend:  Nhava Sheva → LA | Feb 1  | Feb 11 | 2 days  | 3 rates | Active
+      After extend:   Nhava Sheva → LA | Feb 9  | Feb 19 | 10 days | 0 rates | Pending
 
     The "Posted" date updates to the extension date.
     Rate count resets to 0 for the current period (old rates are historical).
@@ -136,9 +148,9 @@ ________________________________________________________________________________
 
     #  | POL           | Final Dest    | Requested  | Days Left | My Rate
     ---|---------------|---------------|------------|-----------|--------
-    1  | Nhava Sheva   | Los Angeles   | Feb 1      | 6         | $2,000
-    2  | Mundra        | Dallas, TX    | Feb 3      | 8         | —
-    3  | Shanghai      | Chicago, IL   | Feb 5      | 10        | —
+    1  | Nhava Sheva   | Los Angeles   | Feb 1      | 2         | $2,000
+    2  | Mundra        | Dallas, TX    | Feb 3      | 4         | —
+    3  | Shanghai      | Chicago, IL   | Feb 5      | 6         | —
 
   "My Rate" shows the provider's most recent rate for the current period.
   A dash means they haven't submitted yet.
@@ -163,7 +175,7 @@ ________________________________________________________________________________
 
   HOW IT WORKS:
 
-    Feb 1:  Requester posts Nhava Sheva → LA (TTL: 14 days)
+    Feb 1:  Requester posts Nhava Sheva → LA (TTL: 10 days)
     Feb 2:  Forwarder A submits: $2,000 (valid Feb 1–14)
     Feb 3:  Forwarder B submits: $1,950 (valid Feb 1–14)
     Feb 5:  Forwarder A sees they're being undercut.
@@ -190,9 +202,12 @@ ________________________________________________________________________________
     and dropped to $1,900. This is valuable competitive intelligence.
 
   WHAT THE PROVIDER SEES:
-    In their own view, they see their latest rate. They can submit a
-    new rate at any time to update their bid. Their previous rates
-    are visible to them as history.
+    In their own view, they see ONLY their latest active bid per routing.
+    They can submit a new rate at any time to update their bid. Their
+    previous bids are kept in the database (append-only — the requester
+    can see the full history) but are NOT shown back to the provider.
+    Storage is append; the provider's display is latest-only.
+    See PROVIDER_VIEW_MODEL.md §4.
 
   RULES:
     - A provider can only bid on ACTIVE lanes (expires_at > now())
@@ -225,7 +240,7 @@ ________________________________________________________________________________
       Forwarder A: $1,900 (submitted Feb 5)
       Forwarder B: $1,950 (submitted Feb 3)
 
-    LANE EXTENDED ON FEB 9 (new expiry: Feb 23):
+    LANE EXTENDED ON FEB 9 (new expiry: Feb 19):
 
     AFTER EXTENSION:
       Forwarder A: — (no current rate for new period)
@@ -253,7 +268,7 @@ ________________________________________________________________________________
     pol             text
     fd              text
     posted_at       timestamptz        (when created or last extended)
-    expires_at      timestamptz        (posted_at + 14 days)
+    expires_at      timestamptz        (posted_at + 10 days)
     period          integer default 1  (increments on each extension)
     created_at      timestamptz        (original creation, never changes)
 
@@ -304,7 +319,7 @@ ________________________________________________________________________________
 ________________________________________________________________________________
 
   1. TTL MODEL
-     Lanes live for 14 days. Time controls visibility.
+     Lanes live for 10 days. Time controls visibility.
      No manual close needed. Extensions add 14 more days.
      One active lane per POL + FD. No duplicates.
 

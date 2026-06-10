@@ -4,6 +4,26 @@
   April 6, 2026
 ================================================================================
 
+  UPDATE — June 10, 2026
+  ----------------------
+  Two things in this document have changed; treat the notes below as
+  authoritative where they conflict with the body text:
+
+  1. LANE TTL IS NOW 10 DAYS (was 14). All "14 day" references and the
+     dated example timelines below have been updated to 10.
+
+  2. THE PROVIDER VIEW MODEL HAS CHANGED. The provider now sees:
+       - "Lanes to fill"  — active lanes, TTL-driven, cleared by submitting
+                            rates OR by a Skip action (with a reason).
+       - "Active rates"   — the provider's rates where valid_until >= today
+                            (current rate per routing). Validity-driven.
+     The old "Pending Rate Requests" + "Submitted Rates (past 30 days)"
+     framing is SUPERSEDED, and the 30-day submission-visibility window
+     (Window 2 in Part 5) is REMOVED. rate_submissions gains a `status`
+     ('submitted' | 'skipped') and `skip_reason` column — see Part 2.
+     Full spec: PROVIDER_VIEW_MODEL.md.
+================================================================================
+
 
 ================================================================================
   PART 1: THE THREE OBJECTS
@@ -17,7 +37,7 @@
   │                                                                 │
   │   RATE REQUEST LANE (the template)                              │
   │   Created by: Requester                                         │
-  │   Lifecycle: 14 days (TTL)                                      │
+  │   Lifecycle: 10 days (TTL)                                      │
   │   Contains: POL, FD, container type, container count            │
   │   Does NOT contain: POD, LastCY, rate, carrier                  │
   │   Purpose: "We want rates for this lane"                        │
@@ -26,11 +46,11 @@
   │       │  provider fills in the template                         │
   │       ▼                                                         │
   │                                                                 │
-  │   RATE SUBMISSION (the filled template)                         │
+  │   RATE SUBMISSION / ACKNOWLEDGEMENT (the filled template)       │
   │   Created by: Provider                                          │
-  │   Lifecycle: visible for 30 days from lane posting              │
-  │   Contains: link to lane + link to provider + timestamp         │
-  │   Purpose: "I submitted rates for this rate request"            │
+  │   Lifecycle: one per provider per lane per period               │
+  │   Contains: lane + provider + status (submitted|skipped) + ts   │
+  │   Purpose: "I acted on this lane — with rates, or a skip"       │
   │                                                                 │
   │       │                                                         │
   │       │  individual rate rows extracted                          │
@@ -112,7 +132,7 @@
   │ container_type   │ text           │ "40HC", "20GP", etc.               │
   │ container_count  │ integer        │ number of containers               │
   │ posted_at        │ timestamptz    │ default now(). Updates on extend.  │
-  │ expires_at       │ timestamptz    │ posted_at + 14 days                │
+  │ expires_at       │ timestamptz    │ posted_at + 10 days                │
   │ period           │ integer        │ default 1. Increments on extend.   │
   │ created_at       │ timestamptz    │ default now(). Never changes.      │
   └──────────────────┴───────────────┴─────────────────────────────────────┘
@@ -120,7 +140,7 @@
   Key behaviors:
     - A lane is ACTIVE when expires_at > now()
     - A lane is EXPIRED when expires_at <= now()
-    - On extension: posted_at = now(), expires_at = now() + 14 days,
+    - On extension: posted_at = now(), expires_at = now() + 10 days,
       period = period + 1
     - One active lane per unique POL + FD (enforced at app level)
 
@@ -139,7 +159,7 @@
       container_type  text,
       container_count integer,
       posted_at       timestamptz NOT NULL DEFAULT now(),
-      expires_at      timestamptz NOT NULL DEFAULT (now() + interval '14 days'),
+      expires_at      timestamptz NOT NULL DEFAULT (now() + interval '10 days'),
       period          integer NOT NULL DEFAULT 1,
       created_at      timestamptz NOT NULL DEFAULT now()
     );
@@ -162,8 +182,15 @@
   │ lane_id          │ uuid FK        │ → rate_request_lanes(id)           │
   │ provider_id      │ uuid FK        │ → auth.users(id)                  │
   │ period           │ integer        │ matches lane.period at submission  │
+  │ status           │ text           │ 'submitted' | 'skipped' (NEW)      │
+  │ skip_reason      │ text           │ nullable; why skipped (NEW)        │
   │ submitted_at     │ timestamptz    │ default now()                      │
   └──────────────────┴───────────────┴─────────────────────────────────────┘
+
+  A submission is an ACKNOWLEDGEMENT: "this provider acted on this lane."
+  status = 'submitted' → has rate rows. status = 'skipped' → 0 rate rows,
+  skip_reason set (provider can't quote it this period). Both clear the
+  lane from the provider's "Lanes to fill" view. See PROVIDER_VIEW_MODEL.md.
 
   Key behaviors:
     - One submission per (provider + lane + period)
@@ -186,6 +213,8 @@
       lane_id       uuid NOT NULL REFERENCES rate_request_lanes(id),
       provider_id   uuid NOT NULL,
       period        integer NOT NULL,
+      status        text NOT NULL DEFAULT 'submitted',  -- 'submitted' | 'skipped'
+      skip_reason   text,                               -- nullable; set when skipped
       submitted_at  timestamptz NOT NULL DEFAULT now(),
       UNIQUE(lane_id, provider_id, period)
     );
@@ -233,7 +262,7 @@
       for the same reason — query convenience.
     - Each rate has its OWN validity period (valid_from, valid_until)
       independent of the lane's TTL. A rate can be valid for 30 days
-      even if the lane request expired after 14.
+      even if the lane request expired after 10.
 
   SQL to create:
 
@@ -319,10 +348,10 @@
     INSERT rate_request_lanes:
       { id: lane_1, batch_id: batch_1, pol: "Nhava Sheva", fd: "Commerce",
         container_type: "40HC", container_count: 5,
-        posted_at: now(), expires_at: now() + 14 days, period: 1 }
+        posted_at: now(), expires_at: now() + 10 days, period: 1 }
       { id: lane_2, batch_id: batch_1, pol: "Mundra", fd: "Dallas",
         container_type: "40GP", container_count: 3,
-        posted_at: now(), expires_at: now() + 14 days, period: 1 }
+        posted_at: now(), expires_at: now() + 10 days, period: 1 }
 
   At this point:
     rate_submissions: empty
@@ -330,12 +359,13 @@
 
 
 ────────────────────────────────────────────────────────────────────────────────
-  STEP 2: PROVIDER SEES PENDING RATE REQUESTS
+  STEP 2: PROVIDER SEES LANES TO FILL
 ────────────────────────────────────────────────────────────────────────────────
 
-  Provider logs in. Sees "Pending Rate Requests" tab.
+  Provider logs in. Sees the "Lanes to fill" view (see PROVIDER_VIEW_MODEL.md).
 
-  QUERY (pending = active lanes without a submission from this provider):
+  QUERY (active lanes this provider has not yet acted on — neither
+         submitted nor skipped):
 
     SELECT l.*
     FROM rate_request_lanes l
@@ -344,16 +374,20 @@
       AND s.provider_id = :current_user
       AND s.period = l.period
     WHERE l.expires_at > now()
-      AND s.id IS NULL
+      AND s.id IS NULL          -- no acknowledgement row of either kind
     ORDER BY l.expires_at ASC
 
   Result:
     ┌───┬──────────────┬──────────────┬──────┬────────┬───────────┐
     │ # │ POL          │ FD           │ Type │ Count  │ Days Left │
     ├───┼──────────────┼──────────────┼──────┼────────┼───────────┤
-    │ 1 │ Nhava Sheva  │ Commerce, CA │ 40HC │ 5      │ 14        │
-    │ 2 │ Mundra       │ Dallas, TX   │ 40GP │ 3      │ 14        │
+    │ 1 │ Nhava Sheva  │ Commerce, CA │ 40HC │ 5      │ 10        │
+    │ 2 │ Mundra       │ Dallas, TX   │ 40GP │ 3      │ 10        │
     └───┴──────────────┴──────────────┴──────┴────────┴───────────┘
+
+  (The provider can also SKIP a lane they can't quote — that writes a
+   'skipped' acknowledgement and moves the lane to a "Skipped" sub-tab,
+   clearing it from "Lanes to fill." See PROVIDER_VIEW_MODEL.md §3.)
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -417,38 +451,36 @@
   STEP 5: PROVIDER'S VIEW UPDATES
 ────────────────────────────────────────────────────────────────────────────────
 
-  After submitting, the lane moves from "Pending" to "Submitted."
+  After submitting, lane_1 clears from "Lanes to fill," and the rates
+  now appear in "Active rates."
 
-  PENDING TAB — lane_1 no longer appears (submission exists):
+  LANES TO FILL — lane_1 no longer appears (acknowledgement exists):
     ┌───┬──────────────┬──────────────┬──────┬────────┬───────────┐
     │ # │ POL          │ FD           │ Type │ Count  │ Days Left │
     ├───┼──────────────┼──────────────┼──────┼────────┼───────────┤
-    │ 1 │ Mundra       │ Dallas, TX   │ 40GP │ 3      │ 14        │
+    │ 1 │ Mundra       │ Dallas, TX   │ 40GP │ 3      │ 10        │
     └───┴──────────────┴──────────────┴──────┴────────┴───────────┘
 
-  SUBMITTED TAB — lane_1 appears with the rate data:
+  ACTIVE RATES — lane_1's rates appear (validity-driven, current rate
+  per routing; NOT a 30-day window). See PROVIDER_VIEW_MODEL.md §4:
 
-    QUERY (submitted = submissions from this provider, lanes posted
-    within 30 days):
+      SELECT DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier)
+             pol, pod, last_cy, fd, carrier,
+             rate_amount, currency, valid_until, notes
+      FROM rates
+      WHERE provider_id = :current_user
+        AND valid_until >= CURRENT_DATE
+      ORDER BY provider_id, pol, pod, last_cy, fd, carrier, created_at DESC
 
-      SELECT l.pol, l.fd, l.container_type, l.container_count,
-             l.posted_at, s.submitted_at, r.*
-      FROM rate_submissions s
-      JOIN rate_request_lanes l ON l.id = s.lane_id
-      LEFT JOIN rates r ON r.submission_id = s.id
-      WHERE s.provider_id = :current_user
-        AND l.posted_at > now() - interval '30 days'
-      ORDER BY s.submitted_at DESC
-
-    Result (the filled-in template):
-      Nhava Sheva → Commerce, CA  |  Submitted Apr 6
-      ┌──────────────┬──────────────┬────────┬─────────┬────────┐
-      │ POD          │ Last CY      │ Rate   │ Carrier │ Notes  │
-      ├──────────────┼──────────────┼────────┼─────────┼────────┤
-      │ Los Angeles  │ Los Angeles  │ $2,000 │ MSC     │ direct │
-      │ Los Angeles  │ Los Angeles  │ $2,000 │ CMA CGM │ direct │
-      │ Norfolk      │ Cincinnati   │ $2,400 │ ZIM     │        │
-      └──────────────┴──────────────┴────────┴─────────┴────────┘
+    Result (the provider's live catalog):
+      Nhava Sheva → Commerce, CA
+      ┌──────────────┬──────────────┬────────┬─────────┬──────────────┬────────┐
+      │ POD          │ Last CY      │ Rate   │ Carrier │ Valid Until   │ Notes  │
+      ├──────────────┼──────────────┼────────┼─────────┼──────────────┼────────┤
+      │ Los Angeles  │ Los Angeles  │ $2,000 │ MSC     │ Apr 14       │ direct │
+      │ Los Angeles  │ Los Angeles  │ $2,000 │ CMA CGM │ Apr 14       │ direct │
+      │ Norfolk      │ Cincinnati   │ $2,400 │ ZIM     │ Apr 14       │        │
+      └──────────────┴──────────────┴────────┴─────────┴──────────────┴────────┘
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -484,87 +516,91 @@
 
 
 ================================================================================
-  PART 5: TIME WINDOWS — HOW TTL AND 30-DAY VISIBILITY INTERACT
+  PART 5: TIME WINDOWS — TTL vs RATE VALIDITY
 ================================================================================
 
+  UPDATED June 10, 2026: The old "Window 2 — Submitted Rates (30 days)"
+  is REMOVED. The provider no longer has a 30-day submission-visibility
+  window. There are now exactly two clocks. See PROVIDER_VIEW_MODEL.md §7.
+
 
 ────────────────────────────────────────────────────────────────────────────────
-  THE TWO TIME WINDOWS
+  THE TWO CLOCKS
 ────────────────────────────────────────────────────────────────────────────────
 
-  WINDOW 1 — RATE REQUEST TTL (14 days)
-    Controls: What providers can see in "Pending Rate Requests"
+  CLOCK 1 — RATE REQUEST TTL (10 days)
+    Drives: "Lanes to fill" (View 1).
     Rule: expires_at > now()
-    After expiry: Lane disappears from pending view. No new submissions.
+    After expiry: lane leaves View 1. No new submissions via the request.
 
-  WINDOW 2 — SUBMITTED RATES VISIBILITY (30 days)
-    Controls: What providers can see in "Submitted Rates"
-    Rule: lane.posted_at > now() - 30 days
-    After 30 days: Submission disappears from provider's view.
+  CLOCK 2 — RATE VALIDITY (per rate, set by the provider)
+    Drives: "Active rates" (View 2).
+    Rule: valid_until >= today
+    After expiry: that rate leaves View 2. No 30-day rule, no cleanup job.
 
-  These windows are INDEPENDENT:
+  These clocks are INDEPENDENT — a rate can still be live (View 2) after
+  its originating lane has expired (gone from View 1):
 
     ┌──────────────────────────────────────────────────────────────┐
-    │ Day 1         Day 14              Day 30                     │
-    │ ├──── Rate Request Active ────┤                              │
-    │ │     (provider can submit)   │                              │
+    │ Day 1         Day 10                      (rate valid_until)  │
+    │ ├──── Lane active (View 1) ───┤                              │
+    │ │     provider can fill/skip  │                              │
     │ │                             │                              │
-    │ ├──── Submitted Rates Visible ─────────────────────────────┤ │
-    │ │     (provider can see their filled template)             │ │
+    │ ├──── Rate live (View 2) ───────────────────────────────┤    │
+    │ │     while valid_until >= today                         │    │
     │                                                              │
     └──────────────────────────────────────────────────────────────┘
 
   Example timeline:
-    Apr 1:   Requester posts lane. Provider sees it in "Pending."
-    Apr 5:   Provider submits rates. Lane moves to "Submitted."
-    Apr 15:  Lane expires (14-day TTL). No new submissions allowed.
-             But provider still sees their submission in "Submitted."
-    May 1:   30 days since posting. Submission disappears from
-             provider's "Submitted" view.
-             Rates remain permanently in the database.
+    Apr 1:   Requester posts lane. Provider sees it in "Lanes to fill."
+    Apr 5:   Provider submits rates (valid until May 10). Lane clears
+             from "Lanes to fill"; the rates appear in "Active rates."
+    Apr 11:  Lane expires (10-day TTL). It's gone from "Lanes to fill."
+             The rates stay in "Active rates" (still valid until May 10).
+    May 10:  The rates' validity passes. They drop from "Active rates."
+             Rates remain permanently in the database as history.
 
-  WHY 30 DAYS FOR SUBMITTED:
-    The provider needs to see what they recently submitted —
-    for reference, to update rates if the lane is still active,
-    and to confirm what they sent. But there's no value in showing
-    submissions from 3 months ago. 30 days keeps the view clean.
+  WHY VALIDITY-DRIVEN INSTEAD OF A 30-DAY WINDOW:
+    The provider cares about what they currently have ON OFFER, which is
+    exactly "rates whose validity hasn't passed." Tying View 2 to rate
+    validity (not an arbitrary 30 days from posting) keeps the catalog
+    truthful: if it's showing, it's still sellable.
 
   WHY RATES ARE PERMANENT:
     Rates have their own validity period (valid_from, valid_until).
-    They exist beyond any time window. The requester can always
-    query historical rates. The provider just doesn't see old
-    submissions in their dashboard — that's a UI choice, not a
-    data deletion.
+    They exist beyond any time window. The requester can always query
+    historical rates. The provider just stops seeing them in "Active
+    rates" once valid_until passes — a query filter, not a deletion.
 
 
 ────────────────────────────────────────────────────────────────────────────────
   WHAT HAPPENS ON LANE EXTENSION
 ────────────────────────────────────────────────────────────────────────────────
 
-  Day 10: Requester extends lane_1 (was expiring on Day 14).
+  Day 8: Requester extends lane_1 (was expiring on Day 10).
 
   DATABASE UPDATE:
     UPDATE rate_request_lanes
     SET posted_at = now(),
-        expires_at = now() + interval '14 days',
+        expires_at = now() + interval '10 days',
         period = period + 1
     WHERE id = lane_1
 
   EFFECT ON PROVIDER:
     - The lane had period 1 → now period 2
-    - The old submission (period 1) stays in "Submitted" (it's history)
-    - The lane reappears in "Pending" (no submission for period 2)
+    - The period-1 acknowledgement (submitted OR skipped) does NOT carry
+      forward — it was tied to period 1
+    - The lane reappears in "Lanes to fill" (no acknowledgement for period 2)
     - Provider sees: "I need to submit fresh rates for this lane"
 
-  QUERY for pending still works correctly:
-    LEFT JOIN submissions WHERE period = l.period → no match for
-    period 2 → lane shows as pending.
+  QUERY for "Lanes to fill" still works correctly:
+    LEFT JOIN rate_submissions WHERE period = l.period → no match for
+    period 2 → lane reappears in View 1.
 
-  The 30-day clock also resets because posted_at was updated.
-  So the old submission (period 1) might still be visible in
-  "Submitted" while the new period appears in "Pending."
-  This is correct — the provider can see both their old rates
-  and the fact that new rates are needed.
+  Note: "Active rates" (View 2) is unaffected by the extension — it is
+  validity-driven, not period-driven. Any period-1 rates the provider
+  submitted stay live in View 2 until their valid_until passes, even as
+  the lane reopens in View 1 asking for fresh pricing for period 2.
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -574,28 +610,41 @@
   If a provider submits again for the SAME lane and SAME period
   (they want to update their rates):
 
-  OPTION A — Replace:
-    1. UPDATE rate_submissions SET submitted_at = now()
-       WHERE lane_id = X AND provider_id = Y AND period = Z
-    2. DELETE FROM rates WHERE submission_id = sub_id
-    3. INSERT new rates
+  DECIDED June 10, 2026 — APPEND-ONLY STORAGE, LATEST-ONLY DISPLAY.
+  ─────────────────────────────────────────────────────────────────
+  Separate two concerns the earlier draft conflated:
 
-  OPTION B — Append (bidding model from LANE_LIFECYCLE doc):
-    1. Keep the old submission and rates
-    2. Create a new submission record for the same (lane, provider, period)
-    3. "Current" = latest submission by submitted_at
+    STORAGE  → APPEND. Never delete a rate. Every bid is kept as a row.
+    DISPLAY  → filtered per role (the provider sees only their latest).
 
-  FOR YOUR USE CASE: Option A (replace) is simpler and matches your
-  description. The provider fills in the template, submits, done.
-  If they want to change it, they re-submit and the old data is replaced.
+  This is the ONLY combination that satisfies both requirements:
+    - Providers see only their latest active bid (a view filter).
+    - The requester can retrieve ALL historical bids (data is preserved).
 
-  The LANE_LIFECYCLE doc describes a competitive bidding model where
-  history is preserved. If you want that later, switch to Option B.
-  But start with Option A — it's cleaner.
+  THE RULE ON RE-SUBMISSION:
+    1. Keep the single acknowledgement row (UNIQUE(lane_id, provider_id,
+       period) — one per provider per lane per period); refresh its
+       submitted_at.
+    2. APPEND the new rate rows. Do NOT delete the previous ones.
+    3. "Current" rate per routing = latest created_at where
+       valid_until >= today (derived, never stored as state).
 
-  With Option A, the UNIQUE constraint on (lane_id, provider_id, period)
-  ensures one submission per provider per lane per period. The app
-  just updates it on re-submission.
+  Example — provider drops MSC LA→LA from $2,000 to $1,850:
+    rates table after re-submit:
+      MSC  LA→LA  $1,850  created Apr 10   ← current (shown to provider)
+      MSC  LA→LA  $2,000  created Apr 8    ← history (kept; requester can see)
+
+  WHY NOT "REPLACE" (the old Option A):
+    Replace ran `DELETE FROM rates WHERE submission_id = ...` before
+    inserting. That is explicitly REJECTED: it destroys the bid history
+    that (a) the requester needs to see "all of them," and (b) powers the
+    rate-evolution display in Parts 10–13. Deleting the old rows makes the
+    requester's "view all historical bids" capability impossible to build.
+
+  NET EFFECT:
+    The PROVIDER experiences it as if the rate were replaced — they only
+    ever see one number per routing. But the DATABASE keeps everything, so
+    the requester retains full history. Append storage; latest-only view.
 
 
 ================================================================================
@@ -607,8 +656,10 @@
   PROVIDER VIEWS
 ────────────────────────────────────────────────────────────────────────────────
 
-  VIEW: Pending Rate Requests
-  (Active lanes the provider has NOT submitted rates for)
+  (Authoritative definitions: PROVIDER_VIEW_MODEL.md. Reproduced here.)
+
+  VIEW 1: Lanes to fill
+  (Active lanes this provider has NOT acted on — neither submitted nor skipped)
 
     SELECT
       l.id,
@@ -625,37 +676,40 @@
       AND s.provider_id = :provider_id
       AND s.period = l.period
     WHERE l.expires_at > now()
-      AND s.id IS NULL
+      AND s.id IS NULL          -- no acknowledgement of either kind
     ORDER BY l.expires_at ASC;
 
 
-  VIEW: Submitted Rates
-  (Rate requests this provider has filled in, past 30 days)
+  VIEW 1b: Skipped lanes
+  (Active lanes this provider dismissed this period — recoverable)
 
     SELECT
-      l.id AS lane_id,
-      l.pol,
-      l.fd,
-      l.container_type,
-      l.container_count,
-      l.posted_at,
-      l.expires_at,
-      s.id AS submission_id,
-      s.submitted_at,
-      s.period
-    FROM rate_submissions s
-    JOIN rate_request_lanes l ON l.id = s.lane_id
-    WHERE s.provider_id = :provider_id
-      AND l.posted_at > now() - interval '30 days'
-    ORDER BY s.submitted_at DESC;
+      l.id, l.pol, l.fd, l.container_type, l.container_count,
+      l.posted_at, l.expires_at,
+      s.skip_reason, s.submitted_at AS skipped_at
+    FROM rate_request_lanes l
+    JOIN rate_submissions s
+      ON s.lane_id = l.id
+      AND s.provider_id = :provider_id
+      AND s.period = l.period
+    WHERE l.expires_at > now()
+      AND s.status = 'skipped'
+    ORDER BY l.expires_at ASC;
 
-  To get rates for a specific submission:
+  -- Un-skip: DELETE the skip row → lane returns to "Lanes to fill".
 
-    SELECT pod, last_cy, fd, carrier, rate_amount, currency,
-           transit_days, valid_from, valid_until, notes
+
+  VIEW 2: Active rates
+  (This provider's current rate per routing, validity in the future)
+
+    SELECT DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier)
+      id, lane_id, pol, pod, last_cy, fd, carrier,
+      rate_amount, currency, transit_days, valid_from, valid_until, notes,
+      created_at
     FROM rates
-    WHERE submission_id = :submission_id
-    ORDER BY rate_amount ASC;
+    WHERE provider_id = :provider_id
+      AND valid_until >= CURRENT_DATE
+    ORDER BY provider_id, pol, pod, last_cy, fd, carrier, created_at DESC;
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -690,27 +744,54 @@
     ORDER BY l.expires_at ASC;
 
 
-  VIEW: Received Rates for a Lane (detail)
+  REQUESTER RATE VISIBILITY — DEFAULT vs FULL HISTORY
+  ───────────────────────────────────────────────────
+  Storage is append-only, so the requester can see EVERY bid. But for
+  operational/booking decisions the default view shows only the LATEST
+  active rate per routing per provider. Two modes:
 
-    SELECT
-      r.pod,
-      r.last_cy,
-      r.carrier,
-      r.rate_amount,
-      r.currency,
-      r.transit_days,
-      r.valid_from,
-      r.valid_until,
-      r.notes,
-      r.provider_id,
-      r.created_at
+    DEFAULT (booking)  → latest active bid per routing. One number to
+                         decide on. This is the everyday view.
+    FULL HISTORY       → all bids ever submitted for the lane. A capability
+                         the requester SHOULD have (data is preserved), but
+                         the WHERE/HOW UI is NOT DESIGNED YET. Placeholder.
+
+
+  VIEW: Received Rates for a Lane — DEFAULT (latest active bid per routing)
+
+    SELECT DISTINCT ON (r.provider_id, r.pod, r.last_cy, r.carrier)
+      r.pod, r.last_cy, r.carrier,
+      r.rate_amount, r.currency, r.transit_days,
+      r.valid_from, r.valid_until, r.notes,
+      r.provider_id, r.created_at
     FROM rates r
     WHERE r.lane_id = :lane_id
       AND r.period = :current_period
-    ORDER BY r.rate_amount ASC;
+      AND r.valid_until >= CURRENT_DATE
+    ORDER BY r.provider_id, r.pod, r.last_cy, r.carrier, r.created_at DESC;
+    -- (wrap in an outer query to ORDER BY rate_amount ASC for cheapest-first)
+
+
+  VIEW: Received Rates for a Lane — FULL HISTORY (capability, UI not built yet)
+
+    SELECT
+      r.pod, r.last_cy, r.carrier,
+      r.rate_amount, r.currency, r.transit_days,
+      r.valid_from, r.valid_until, r.notes,
+      r.provider_id, r.created_at
+    FROM rates r
+    WHERE r.lane_id = :lane_id
+      AND r.period = :current_period
+    ORDER BY r.provider_id, r.pod, r.last_cy, r.carrier, r.created_at DESC;
+    -- every bid, newest first per routing. Powers bid-evolution (Parts 10–13).
 
 
   VIEW: All Rates (flat, filterable — "Rates" page)
+
+  This is the FULL-HISTORY flat view (every bid). For an everyday default
+  add `AND r.valid_until >= CURRENT_DATE` plus a DISTINCT ON (provider_id,
+  pol, pod, last_cy, carrier) ... created_at DESC to show latest active
+  only; drop both to expose the complete history (capability — see above).
 
     SELECT
       r.pol,
@@ -817,23 +898,23 @@
     submissions → provider filled in a template (junction)
     rates       → one carrier, one routing, one price (source of truth)
 
-  THREE TIME RULES:
-    1. Lanes expire after 14 days (providers can't see/submit)
-    2. Submissions visible to providers for 30 days
-    3. Rates are permanent (have their own validity dates)
+  TWO TIME RULES (the 30-day window is removed):
+    1. Lanes expire after 10 days (providers can't see/submit via request)
+    2. Rates are permanent but only "active" while valid_until >= today
 
-  TWO PROVIDER VIEWS:
-    Pending   = active lanes I haven't submitted for
-    Submitted = templates I've filled in (past 30 days)
+  TWO PROVIDER VIEWS (see PROVIDER_VIEW_MODEL.md):
+    Lanes to fill = active lanes I haven't acted on (submit OR skip clears them)
+    Active rates  = my current rate per routing where valid_until >= today
 
   ONE REQUESTER VIEW:
     All rates across all my lanes, filterable and sortable.
-    Plus dashboard stats and per-lane detail views.
+    Plus dashboard stats, per-lane detail, and the per-lane response
+    roster (submitted / skipped+reason / no-response).
 
   THE FLOW:
-    Requester posts lanes → Provider sees pending →
-    Provider fills template → Submission created →
-    Rates extracted and stored → Requester sees rates
+    Requester posts lanes → Provider sees "Lanes to fill" →
+    Provider fills template (or skips) → Acknowledgement created →
+    Rates extracted and stored → Requester sees rates + skips
 
   THE PRINCIPLE:
     One dataset. Different filtered views. Same underlying system.
@@ -946,27 +1027,21 @@
     Still the same query. Active lanes without a submission.
     Independent rates don't affect this — they have no lane_id.
 
-  PROVIDER — My Submissions:
-    Shows ALL submissions (linked + independent) from the past 30 days.
-    Query update:
+  PROVIDER — Active Rates (formerly "My Submissions"):
+    Shows the provider's current rate per routing where valid_until >= today,
+    INCLUDING independent rates (lane_id IS NULL). No 30-day window — the
+    view is validity-driven. Query:
 
-      SELECT
-        s.id, s.submitted_at, s.lane_id, s.period,
-        COALESCE(l.pol, r_first.pol) AS pol,
-        COALESCE(l.fd, r_first.fd) AS fd,
-        l.container_type, l.container_count,
-        l.posted_at
-      FROM rate_submissions s
-      LEFT JOIN rate_request_lanes l ON l.id = s.lane_id
-      LEFT JOIN LATERAL (
-        SELECT pol, fd FROM rates WHERE submission_id = s.id LIMIT 1
-      ) r_first ON true
-      WHERE s.provider_id = :provider_id
-        AND s.submitted_at > now() - interval '30 days'
-      ORDER BY s.submitted_at DESC;
+      SELECT DISTINCT ON (provider_id, pol, pod, last_cy, fd, carrier)
+        id, lane_id, pol, pod, last_cy, fd, carrier,
+        rate_amount, currency, valid_from, valid_until, notes, created_at
+      FROM rates
+      WHERE provider_id = :provider_id
+        AND valid_until >= CURRENT_DATE
+      ORDER BY provider_id, pol, pod, last_cy, fd, carrier, created_at DESC;
 
-    Note the LEFT JOIN to lanes (not INNER) — independent submissions
-    have no lane. POL and FD come from the rates themselves via LATERAL.
+    Because pol/pod/last_cy/fd are stored on the rate itself, independent
+    rates (no lane) appear here with no join needed.
 
     The UI can show a small badge: "Requested" vs "Additional" based
     on whether lane_id is NULL.
@@ -990,17 +1065,19 @@
 
 
 ────────────────────────────────────────────────────────────────────────────────
-  THE THREE PROVIDER MENUS (UNCHANGED)
+  THE THREE PROVIDER MENUS
 ────────────────────────────────────────────────────────────────────────────────
 
   1. DASHBOARD      — summary stats
-  2. OPEN LANES     — the unified rate entry hub
-                       pre-loads requested lanes
+  2. LANES TO FILL  — the unified rate entry hub (was "Open Lanes")
+                       pre-loads active requested lanes
                        allows adding independent lanes
                        supports CSV upload
+                       Skip action + "Skipped" sub-tab
                        all rate entry happens here
-  3. MY SUBMISSIONS — what I've submitted (past 30 days)
-                       shows both linked and independent submissions
+  3. ACTIVE RATES   — my current rates where valid_until >= today
+                       (was "My Submissions"; no 30-day window)
+                       shows both linked and independent rates
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -1020,6 +1097,13 @@
 ================================================================================
   PART 10: BIDDING & RATE EVOLUTION
 ================================================================================
+
+  NAMING NOTE (June 10, 2026): Parts 10–13 below predate the provider
+  view-model update. Read every "My Submissions" page reference as the
+  "Active Rates" view (grouped by routing, current rate per routing, see
+  PROVIDER_VIEW_MODEL.md §4). The "submission-level" grouping they mention
+  is a secondary per-lane DETAIL view, not a top-level menu. The bid-history
+  and rate-evolution display logic itself is unchanged and still applies.
 
   Providers can update their rates over time — either proactively
   (they see no bookings, want to compete harder) or in response to
@@ -1258,7 +1342,7 @@
   HOW BIDDING INTERACTS WITH RATE REQUEST TTL
 ────────────────────────────────────────────────────────────────────────────────
 
-  Rate request TTL (14 days) and rate validity are INDEPENDENT:
+  Rate request TTL (10 days) and rate validity are INDEPENDENT:
 
     - Rate request expires → provider can no longer SUBMIT via the
       rate request template. But existing rates remain active if
