@@ -1,20 +1,14 @@
 import React, { lazy, Suspense } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
-import { FilePlus, ClipboardList, CheckSquare, Upload, ListChecks, Loader2 } from 'lucide-react'
+import { FilePlus, ClipboardList, CheckSquare, Loader2 } from 'lucide-react'
 import PlaceholderPage from '../../../components/shell/PlaceholderPage'
-import { PageHeader, StatCard, SectionCard, QuickActions } from '../../../components/ui/DashboardPrimitives'
+import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 
 // The lane-entry grid pulls in MUI X DataGrid (the bulk of the bundle), so it
 // is loaded on demand only when the New Rate Request route is opened.
 const NewRateRequest = lazy(() => import('./NewRateRequest'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
-
-const REQUESTER_QUICK_ACTIONS = [
-  { label: 'New Rate Request', to: '/requester/new',      icon: FilePlus },
-  { label: 'Upload lanes (CSV)', to: '/requester/new',    icon: Upload },
-  { label: 'View received rates', to: '/requester/rates', icon: ListChecks },
-]
 
 function RequesterDashboard() {
   const navigate = useNavigate()
@@ -46,32 +40,6 @@ function RequesterDashboard() {
         {stats.map(({ label, value, icon: Icon, accent, hint }, i) => (
           <StatCard key={label} label={label} value={value} icon={Icon} accent={accent} hint={hint} index={i} />
         ))}
-      </div>
-
-      {/* Attention panel + side column */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <SectionCard title="Lanes Expiring Soon">
-            <PlaceholderPage
-              compact
-              title="No active lanes yet"
-              description="Create a rate request to get started. Lanes nearing the end of their 10-day window will surface here so you can extend or chase them."
-              phase="Phase 2"
-            />
-          </SectionCard>
-        </div>
-
-        <div className="space-y-6 lg:col-span-1">
-          <SectionCard title="Recent Rates">
-            <PlaceholderPage
-              compact
-              title="No rates received yet"
-              description="Quotes from forwarders will appear here as they come in."
-              phase="Phase 2"
-            />
-          </SectionCard>
-          <QuickActions items={REQUESTER_QUICK_ACTIONS} />
-        </div>
       </div>
     </div>
   )

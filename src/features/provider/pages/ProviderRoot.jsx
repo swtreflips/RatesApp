@@ -2,14 +2,9 @@ import React from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { Ship, FileText } from 'lucide-react'
 import PlaceholderPage from '../../../components/shell/PlaceholderPage'
-import { PageHeader, StatCard, SectionCard, QuickActions } from '../../../components/ui/DashboardPrimitives'
+import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
-
-const PROVIDER_QUICK_ACTIONS = [
-  { label: 'Go to Lanes to Fill', to: '/provider/lanes',       icon: Ship },
-  { label: 'View active rates',   to: '/provider/submissions', icon: FileText },
-]
 
 function ProviderDashboard() {
   const navigate = useNavigate()
@@ -41,32 +36,6 @@ function ProviderDashboard() {
         {stats.map(({ label, value, icon: Icon, accent, hint }, i) => (
           <StatCard key={label} label={label} value={value} icon={Icon} accent={accent} hint={hint} index={i} />
         ))}
-      </div>
-
-      {/* Attention panel + side column */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <SectionCard title="Lanes to Fill — Expiring Soon">
-            <PlaceholderPage
-              compact
-              title="No lanes to fill right now"
-              description="When requesters post lanes, the ones nearing the end of their 10-day window appear here first so you can quote before they expire."
-              phase="Phase 3"
-            />
-          </SectionCard>
-        </div>
-
-        <div className="space-y-6 lg:col-span-1">
-          <SectionCard title="Rates Expiring Soon">
-            <PlaceholderPage
-              compact
-              title="No active rates yet"
-              description="Rates you submit will show here, with the ones closest to their validity end surfaced first."
-              phase="Phase 3"
-            />
-          </SectionCard>
-          <QuickActions items={PROVIDER_QUICK_ACTIONS} />
-        </div>
       </div>
     </div>
   )
