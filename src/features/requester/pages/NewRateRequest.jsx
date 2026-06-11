@@ -265,7 +265,7 @@ export default function NewRateRequest() {
           disabled={posting}
         >
           <Send size={16} className="transition-transform group-hover:translate-x-0.5" />
-          {posting ? 'Posting…' : 'Post Batch'}
+          {posting ? 'Sending…' : 'Send Request'}
         </button>
       </div>
 

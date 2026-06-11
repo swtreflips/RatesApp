@@ -24,7 +24,7 @@ const REQUESTER_NAV = [
 
 const PROVIDER_NAV = [
   { label: 'Dashboard',     icon: LayoutDashboard, to: '/provider',             end: true },
-  { label: 'Pending Lanes', icon: Ship,            to: '/provider/lanes' },
+  { label: 'Open Requests', icon: Ship,            to: '/provider/lanes' },
   { label: 'Active Rates',  icon: FileText,        to: '/provider/submissions' },
 ]
 
