@@ -62,13 +62,42 @@ Three **independent** access layers (same mental model as
 | Layer | Controls | In this rehearsal |
 |-------|----------|-------------------|
 | Cloudflare Zero Trust | who can *reach* the app | allowlist the 3 emails |
-| Supabase Auth | *who you are* + your role | email/password login |
+| Supabase Auth | *who you are* + your role | magic-link (passwordless) login |
 | Supabase RLS | *what data* you can read/write | per-forwarder isolation |
 
 Why each is needed even with only 3 trusted users: the Supabase anon key ships in
 the browser, so without RLS anyone who reaches the app could query any row from
 the dev console. Cloudflare keeps strangers out; RLS keeps forwarders out of each
 other's pricing.
+
+### Auth method & the two-gate model
+
+App identity is **Supabase magic link** (passwordless): the user enters their email,
+Supabase emails a one-time link, clicking it returns to the app and establishes the
+session. Code is `supabase.auth.signInWithOtp({ email, options: { emailRedirectTo } })`;
+`AuthProvider` already reacts to the resulting `onAuthStateChange`, and **RLS, schema,
+roles, and `profiles` are unaffected by the auth *method*** — they key on `auth.uid()`
+either way.
+
+The user passes **two independent gates**: Cloudflare ZT (reachability) then Supabase
+magic link (identity + role). That redundancy is intentional and robust.
+
+> ⚠️ **Do not collapse them.** Cloudflare's `Cf-Access-Jwt-Assertion` header is *not* a
+> Supabase session — if the app "trusted" Cloudflare's identity and skipped Supabase
+> login, `auth.uid()` would be null and **RLS would stop protecting the data**. Keep the
+> two gates separate; RLS stays the real data boundary.
+
+**Optional end state (later):** point both layers at one IdP (e.g. Google Workspace) —
+Cloudflare gates by Google, Supabase uses `signInWithOAuth({ provider: 'google' })`. With
+a shared browser session both prompts become click-throughs (true SSO feel), same RLS
+underneath. Not needed for the rehearsal.
+
+**Magic-link requirements:** in Supabase → Auth → URL Configuration, set the **Site URL**
+and add **Redirect URLs** for `http://localhost:5173` (dev) and the production domain;
+links silently fail if the return URL isn't allowlisted. The built-in email is
+rate-limited (a handful/hour) — fine for 3 users; add custom SMTP for real onboarding.
+Note the magic-link return lands on the Cloudflare-gated domain, so the user must already
+have passed the CF gate (they did, to request the link) for the callback to complete.
 
 ---
 
@@ -269,7 +298,7 @@ first so finished UI never has to be redone.
 | # | Gap | Why first / notes |
 |---|-----|-------------------|
 | **G1** | **Supabase live + RLS verified.** Create project, run §4 + §5 SQL, wire `.env`, then manually create 2 forwarder rows and confirm in the SQL console / two browser sessions that each sees only their own `rates`. | Proves the whole isolation premise before any UI is built on top of it. If RLS is wrong, everything else is at risk. |
-| **G2** | **Real auth.** Minimal login page calling `supabase.auth.signInWithPassword`; wire the dead sign-out button in [TopNav.jsx](src/components/shell/TopNav.jsx); gate the dev role toggle behind an env flag (`VITE_ENABLE_DEV_ROLE`); redirect unauthenticated users to login. Role already flows from the session in [AuthProvider.jsx](src/app/providers/AuthProvider.jsx). | No real users without it; RLS keys off `auth.uid()`. |
+| **G2** | **Real auth.** Login page calling `supabase.auth.signInWithOtp` (magic link — passwordless; see §2 "Auth method"); a "check your email" + "completing sign-in…" state; wire the dead sign-out button in [TopNav.jsx](src/components/shell/TopNav.jsx); gate the dev role toggle behind an env flag (`VITE_ENABLE_DEV_ROLE`); redirect unauthenticated users to login. Role already flows from the session in [AuthProvider.jsx](src/app/providers/AuthProvider.jsx). | No real users without it; RLS keys off `auth.uid()`. *(STEP 0 may use password locally for fast loop iteration; production is magic link.)* |
 | **G3** | **Provider grid saves.** Replace the mock submit in [SubmitRates.jsx](src/features/provider/pages/SubmitRates.jsx) with a `submissionService` that writes one `rate_submissions` + N `rates` (dataDesign Step 4), stamping `provider_id` from the session. Load real active lanes (PROVIDER_VIEW_MODEL §2 query) instead of the seeded mock rows. | First real end-to-end write — the core risk. |
 | **G4** | **.xlsx upload.** Add SheetJS (`npm i xlsx`) to the provider grid so the forwarder files drop in directly; map sheet columns → rate fields; reuse the dedup pattern from [NewRateRequest.jsx](src/features/requester/pages/NewRateRequest.jsx). | This is the actual day-one workflow (Silvia/Luis paste supplier Excel). |
 | **G5** | **Requester read pages.** Open Requests list (active lanes + counts), Active Rates received (per-lane rates, cheapest-first), dashboard counts — replacing the placeholders in [RequesterRoot.jsx](src/features/requester/pages/RequesterRoot.jsx). | Closes the loop so Jordan can see what came back. |
@@ -292,7 +321,11 @@ won't group. Acceptable for the rehearsal; flag it when reviewing results.
 - [ ] Create a Supabase project (free tier); note Project URL + anon key
       (Settings → API).
 - [ ] SQL editor → run §4 (schema), then §5 (RLS).
-- [ ] Authentication → Users → **Add user** ×3 (the §3 emails + passwords).
+- [ ] Authentication → Users → **Add user** ×3 (the §3 emails). Magic link is
+      passwordless, so a password is optional — leave unset or use a throwaway.
+- [ ] Authentication → URL Configuration → set **Site URL** and add **Redirect URLs**:
+      `http://localhost:5173` and the production domain (add the domain once chosen in
+      Step 4). Magic links fail silently if the return URL isn't listed.
 - [ ] For each user, set `user_metadata`:
       `{ "role": "requester", "full_name": "Jordan" }` /
       `{ "role": "provider", "full_name": "Silvia" }` etc.
@@ -344,8 +377,8 @@ When the rehearsal passes, onboard a real forwarder with **only** these actions 
 no code, no schema change, no redeploy:
 
 1. **Supabase:** `insert into suppliers (name) values ('Real Forwarder Co');`
-2. **Supabase:** Authentication → Add user (their email + temp password); set
-   `user_metadata.role = 'provider'`.
+2. **Supabase:** Authentication → Add user (their email; magic link needs no
+   password); set `user_metadata.role = 'provider'`.
 3. **Supabase:** `insert into profiles (id, role, supplier_id, full_name, company)
    values ('<their-uuid>', 'provider', '<supplier-uuid>', '...', 'Real Forwarder Co');`
 4. **Cloudflare:** add their email to the Access policy.
@@ -376,7 +409,7 @@ later (e.g. a whole company domain) is a Cloudflare policy edit, also code-free.
 
 Run after Step 5. This is the gate before trusting the app with competing parties.
 
-**A. End-to-end loop**
+**A. End-to-end loop** *(each login is a magic link: enter email → click the emailed link)*
 1. Log in as **Jordan** → New Rate Request → add a couple of lanes → Send Request.
 2. Log in as **Silvia** → Open Requests → those lanes appear → upload her `.xlsx`
    of rates → Submit.

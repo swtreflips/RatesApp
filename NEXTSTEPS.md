@@ -12,6 +12,79 @@ Legend: ✅ built · 🟡 partial / mock · ⬜ missing.
 
 ---
 
+## STEP 0 — Prove the core loop FIRST (smallest slice)
+
+**Do this before anything in sections A/B/C below.** The whole system rests on one
+unproven fact: *a provider write lands in Supabase and RLS keeps providers isolated.*
+Prove that with the thinnest possible vertical slice — no skip, no Active-Rates view,
+no .xlsx, no polish, no React Query. When this loop is green, the rest is execution
+against a foundation you *know* works.
+
+**Definition of done:** logged in as a requester you post a lane; logged in as a
+provider you submit a rate against it; logged in as the requester you see that rate;
+logged in as a *second* provider you canNOT see the first provider's rate.
+
+### S0.1 — Stand up Supabase (≈20 min, no code)
+- [ ] Create a Supabase project (free tier). Copy **Project URL** + **anon key** (Settings → API).
+- [ ] SQL editor → paste and run **MOCKDEPLOY §4** (schema: suppliers, profiles, batches, lanes, submissions, rates + indexes).
+- [ ] SQL editor → paste and run **MOCKDEPLOY §5** (RLS + `current_role_is()`).
+- [ ] Authentication → Users → **Add user** ×3: one requester, **two** providers (the 2nd is only to prove isolation). Set each user's `user_metadata.role` = `'requester'` / `'provider'`.
+- [ ] Seed identity so RLS works (it reads `profiles`):
+  ```sql
+  insert into suppliers (name) values ('Forwarder A'), ('Forwarder B');
+  insert into profiles (id, role, supplier_id, full_name) values
+    ('<requester-uuid>', 'requester', null, 'Requester'),
+    ('<providerA-uuid>', 'provider', (select id from suppliers where name='Forwarder A'), 'Provider A'),
+    ('<providerB-uuid>', 'provider', (select id from suppliers where name='Forwarder B'), 'Provider B');
+  ```
+- [ ] Verify in Table editor that all 6 tables exist and the 3 profiles are seeded.
+
+### S0.2 — Wire the app to the live DB (≈5 min)
+- [ ] Create `.env.local` (gitignored): `VITE_SUPABASE_URL=...`, `VITE_SUPABASE_ANON_KEY=...` (see `.env.example`).
+- [ ] Restart `npm run dev`. The `[supabase] Missing env vars` warning should be gone.
+
+### S0.3 — Minimal real login (replace the dev toggle) (≈30 min code)
+- [ ] Add a bare `LoginPage` (two inputs) calling `supabase.auth.signInWithPassword`. Ugly is fine.
+- [ ] In `AppInner` ([App.jsx](src/app/App.jsx)): if `!session`, render `LoginPage` instead of `Shell`. Role already flows from the session in [AuthProvider.jsx](src/app/providers/AuthProvider.jsx).
+- [ ] This is what makes `auth.uid()` real, which is what RLS keys on. The dev role toggle is now bypassed for the slice.
+
+> **Auth: dev vs production.** Password here is **deliberate for the slice** — local,
+> throwaway, and fast when you log in/out repeatedly to test isolation (no email round-trip).
+> **Production auth is Supabase magic link behind Cloudflare ZT**, not password. The swap is
+> small and localized — `signInWithPassword` → `signInWithOtp({ email, options: { emailRedirectTo } }`)
+> plus a "check your email" state and Supabase redirect-URL config; RLS/schema/roles don't change.
+> Full model (the two-gate coexistence + the "don't bridge CF→Supabase" trap) is in **MOCKDEPLOY §2 "Auth method & the two-gate model"**; migration sequence is A1 in this doc.
+
+### S0.4 — One real requester write (mostly already done)
+- [ ] Log in as the **requester**, open New Rate Request, add one lane, Send Request.
+- [ ] [rateRequestService.js](src/features/requester/services/rateRequestService.js) already inserts batch + lane; with a real session `requester_id` is now a real UUID. `posted_at`/`expires_at`/`period` default in the DB.
+- [ ] Verify in Supabase Table editor: one `rate_request_batches` row + one `rate_request_lanes` row.
+
+### S0.5 — One real provider submit (the core risk) (≈45 min code)
+- [ ] New `src/features/provider/services/submissionService.js` with a minimal `submitRates(rows, lane, providerId)`:
+  - insert **1** `rate_submissions` (`lane_id`, `provider_id`, `period = lane.period`, `status = 'submitted'`) → get its `id`;
+  - insert **N** `rates` (one per filled row — skip multi-carrier explode for now), stamping `submission_id`, `lane_id`, `provider_id`, and the routing/rate fields.
+- [ ] In [SubmitRates.jsx](src/features/provider/pages/SubmitRates.jsx): replace `SAMPLE_LANES` with a one-shot fetch of active lanes (`select * from rate_request_lanes where expires_at > now()`), and replace the `setTimeout` mock submit with the real `submissionService` call.
+- [ ] Log in as **Provider A**, fill the rate columns on the requester's lane, Submit. Verify a `rate_submissions` row + `rates` rows appear with `provider_id = Provider A`.
+
+### S0.6 — One real requester read (≈30 min code)
+- [ ] Add a minimal read in `rateRequestService`: `fetchReceivedRates(requesterId)` → rates joined to the requester's lanes. No grouping, no cheapest-first.
+- [ ] Replace the `/requester/rates` placeholder in [RequesterRoot.jsx](src/features/requester/pages/RequesterRoot.jsx) with a bare `<ul>`/table of the returned rates.
+- [ ] Log back in as the **requester** → see Provider A's rate. **The loop is closed.**
+
+### S0.7 — Prove isolation (the most important check) (≈5 min, no code)
+- [ ] Log in as **Provider B**. In the browser console run `await supabase.from('rates').select('*')`.
+- [ ] It must return **only Provider B's** rows (i.e. nothing, since only A submitted). If Provider B can see Provider A's rate — **stop and fix RLS (MOCKDEPLOY §5)** before building anything else.
+
+> **Deliberately NOT in this slice:** skip/un-skip, the "Skipped" tab, provider Active-Rates
+> view, latest-per-routing/append logic, .xlsx upload, React Query, loading/empty states,
+> route guards, canonical normalization, dashboards. They're all in A/B/C below — but none of
+> them matter until S0.7 passes.
+
+When S0.1–S0.7 are green, proceed to the backlog in priority order.
+
+---
+
 ## Where the code stands now
 
 | Area | State |
@@ -36,7 +109,8 @@ Legend: ✅ built · 🟡 partial / mock · ⬜ missing.
 - [ ] **Temp-id vs real UUID** handling in both grids once rows come from the DB. *(SIP §3.6)*
 
 ### A1 — Auth & access *(MOCKDEPLOY G2)*
-- [ ] **Login page** → `supabase.auth.signInWithPassword`.
+- [ ] **Login page** → `supabase.auth.signInWithOtp` (**magic link**, passwordless) + a "check your email" / "completing sign-in…" state. Set Supabase **Site URL + Redirect URLs** (localhost + prod domain). Two-gate model & the CF-bridge trap: MOCKDEPLOY §2.
+- [ ] *(optional later)* shared Google IdP → `signInWithOAuth({ provider: 'google' })` so Cloudflare ZT and Supabase share one sign-on.
 - [ ] **Wire the sign-out button** in `src/components/shell/TopNav.jsx` (currently dead).
 - [ ] **Unauthenticated redirect** → login (guard at `App`/`Shell`).
 - [ ] **Cross-role route guards** — a provider can still type `/requester/new` today. *(SIP §3.11)*
