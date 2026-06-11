@@ -12,6 +12,45 @@ Legend: ✅ built · 🟡 partial / mock · ⬜ missing.
 
 ---
 
+## Development stages (macro map)
+
+Build in **vertical slices, not horizontal layers** — each feature travels
+UI → service → database → RLS as one unit, starting from the thinnest end-to-end
+slice (STEP 0) and widening.
+
+| Stage | Goal | Done when | Status |
+|-------|------|-----------|--------|
+| **0 · Model** | Domain + data model + the two role workflows | The 4-table model and both views are settled | ✅ done |
+| **1 · UI skeleton (mock)** | Every key screen exists with fake data | You can click the whole app; you know what data each screen needs | ✅ done |
+| **2 · Prove the vertical slice** | Live DB + 4 tables + RLS + minimal auth + one real write + one real read + **isolation check** | STEP 0 (S0.1–S0.7) is green | ⏭️ **next** |
+| **3 · Build features for real (breadth)** | Replace each mock/placeholder with real service + query, one slice at a time | Provider submit/skip/active-rates + requester read pages + dashboards run on real data | ⬜ (§A2/§A3) |
+| **4 · Deploy & gate** | Vercel + domain + Cloudflare ZT + magic link, validated in prod | MOCKDEPLOY smoke test passes on the real domain | ⬜ (MOCKDEPLOY) |
+| **5 · Security hardening** | Everything beyond RLS | Route guards, dev-toggle gated, input/normalization validation, error handling, monitoring, backups | ⬜ (§A1/§A0/§C) |
+| **6 · Polish & scale** | The deferred value features | Canonical normalization, bid-evolution display, full-history, realtime, perf | ⬜ (§C) |
+
+> **Two things do NOT run last.** (1) *Foundational* security — RLS data-isolation — is
+> proven **early**, in Stage 2 (the S0.7 check), not at the end; only security *hardening*
+> is a late stage. (2) *Deployment* is **continuous** from Stage 2 on (Vercel + Supabase
+> make it ~free); Stage 4 only formalizes the production gating (domain + Cloudflare + magic
+> link). So the real order is: model → UI skeleton → **prove slice (incl. RLS)** → build
+> slices (deploying continuously) → formalize gating → harden → polish.
+
+## Operating rhythm — one vertical slice per feature
+
+Once the Stage 2 slice is proven, run **Stage 3 as repeated vertical slices** — never batch
+all-UI-then-all-data again. Per feature:
+
+1. **Pick one feature** (e.g. "provider skip").
+2. **Build its slice:** UI control → service function → query → **confirm RLS still isolates**.
+3. **Verify against real data** with two accounts (a provider and the requester, or two providers).
+4. **Push** (auto-deploys to the preview/prod environment).
+5. **Next feature.**
+
+This keeps **security and deployment touched on every slice** instead of deferred to stages
+you might run out of runway for. A feature isn't "done" until step 3 passes on real data.
+
+---
+
 ## STEP 0 — Prove the core loop FIRST (smallest slice)
 
 **Do this before anything in sections A/B/C below.** The whole system rests on one
