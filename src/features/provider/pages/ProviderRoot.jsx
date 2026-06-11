@@ -51,7 +51,7 @@ export default function ProviderRoot() {
         path="lanes"
         element={
           <PlaceholderPage
-            title="Lanes to Fill"
+            title="Pending Lanes"
             description="Active lanes you haven’t acted on yet. Quote or skip each to clear it from your list."
             phase="Phase 3"
           />

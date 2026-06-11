@@ -67,8 +67,8 @@ export default function RequesterRoot() {
         path="requests"
         element={
           <PlaceholderPage
-            title="My Requests"
-            description="View and manage all your open and historical rate requests."
+            title="Open Requests"
+            description="Your active rate request lanes — templates still within their 10-day window."
             phase="Phase 2"
           />
         }
@@ -77,8 +77,8 @@ export default function RequesterRoot() {
         path="rates"
         element={
           <PlaceholderPage
-            title="Received Rates"
-            description="Review and compare quotes submitted by freight forwarders."
+            title="Active Rates"
+            description="Rates submitted by freight forwarders that are still within their validity period."
             phase="Phase 2"
           />
         }

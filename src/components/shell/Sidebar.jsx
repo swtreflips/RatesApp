@@ -18,13 +18,13 @@ import { useAuth } from '../../app/providers/AuthProvider'
 const REQUESTER_NAV = [
   { label: 'Dashboard',        icon: LayoutDashboard, to: '/requester',          end: true },
   { label: 'New Rate Request', icon: FilePlus,        to: '/requester/new' },
-  { label: 'My Requests',      icon: ClipboardList,   to: '/requester/requests' },
-  { label: 'Received Rates',   icon: CheckSquare,     to: '/requester/rates' },
+  { label: 'Open Requests',    icon: ClipboardList,   to: '/requester/requests' },
+  { label: 'Active Rates',     icon: CheckSquare,     to: '/requester/rates' },
 ]
 
 const PROVIDER_NAV = [
   { label: 'Dashboard',     icon: LayoutDashboard, to: '/provider',             end: true },
-  { label: 'Lanes to Fill', icon: Ship,            to: '/provider/lanes' },
+  { label: 'Pending Lanes', icon: Ship,            to: '/provider/lanes' },
   { label: 'Active Rates',  icon: FileText,        to: '/provider/submissions' },
 ]
 
