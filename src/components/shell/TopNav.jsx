@@ -39,7 +39,7 @@ export default function TopNav({ onMenuToggle }) {
     .slice(0, 2)
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-fog-200 bg-white/85 px-4 backdrop-blur-md sm:px-6">
+    <header className="relative z-30 flex h-16 shrink-0 items-center justify-between border-b border-fog-200 bg-white/85 px-4 backdrop-blur-md sm:px-6">
       {/* Left: hamburger + wayfinding */}
       <div className="flex items-center gap-3">
         <button
