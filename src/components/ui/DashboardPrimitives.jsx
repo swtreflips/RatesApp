@@ -1,4 +1,6 @@
 import React from 'react'
+import { NavLink } from 'react-router-dom'
+import { ChevronRight } from 'lucide-react'
 
 /**
  * Shared presentational primitives for role dashboards.
@@ -43,7 +45,7 @@ export function PageHeader({ kicker, title, subtitle, actions }) {
 
 /* ─── Stat card ───────────────────────────────────────────────────────── */
 
-export function StatCard({ label, value, icon: Icon, accent = 'harbor', index = 0 }) {
+export function StatCard({ label, value, icon: Icon, accent = 'harbor', index = 0, hint }) {
   const a = ACCENT[accent] ?? ACCENT.harbor
   return (
     <div
@@ -65,6 +67,9 @@ export function StatCard({ label, value, icon: Icon, accent = 'harbor', index = 
       <p className="mt-2 text-xs font-medium uppercase tracking-wide text-fog-400">
         {label}
       </p>
+      {hint && (
+        <p className="mt-1.5 text-xs text-fog-500">{hint}</p>
+      )}
     </div>
   )
 }
@@ -83,6 +88,39 @@ export function SectionCard({ title, action, children }) {
         </div>
       )}
       <div className="p-6">{children}</div>
+    </div>
+  )
+}
+
+/* ─── Quick actions ───────────────────────────────────────────────────── */
+
+/**
+ * Compact list of shortcut links for a dashboard side column.
+ * @param {{ items: { label: string, to: string, icon: React.ComponentType }[] }} props
+ */
+export function QuickActions({ items }) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card">
+      <div className="border-b border-fog-100 px-6 py-3.5">
+        <h2 className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-fog-500">
+          Quick Actions
+        </h2>
+      </div>
+      <div className="p-2">
+        {items.map(({ label, to, icon: Icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            className="group flex items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium text-harbor-700 transition-colors hover:bg-fog-50 hover:text-harbor-900"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-fog-100 text-fog-500 ring-1 ring-inset ring-fog-200 transition-colors group-hover:bg-signal-50 group-hover:text-signal-700 group-hover:ring-signal-100">
+              <Icon size={16} strokeWidth={1.9} />
+            </span>
+            <span className="flex-1 truncate">{label}</span>
+            <ChevronRight size={15} className="text-fog-300 transition-transform group-hover:translate-x-0.5 group-hover:text-fog-400" />
+          </NavLink>
+        ))}
+      </div>
     </div>
   )
 }

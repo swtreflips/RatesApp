@@ -23,9 +23,9 @@ const REQUESTER_NAV = [
 ]
 
 const PROVIDER_NAV = [
-  { label: 'Dashboard',      icon: LayoutDashboard, to: '/provider',             end: true },
-  { label: 'Open Lanes',     icon: Ship,            to: '/provider/lanes' },
-  { label: 'My Submissions', icon: FileText,        to: '/provider/submissions' },
+  { label: 'Dashboard',     icon: LayoutDashboard, to: '/provider',             end: true },
+  { label: 'Lanes to Fill', icon: Ship,            to: '/provider/lanes' },
+  { label: 'Active Rates',  icon: FileText,        to: '/provider/submissions' },
 ]
 
 /* ─── Shared nav item ────────────────────────────────────────────────── */
