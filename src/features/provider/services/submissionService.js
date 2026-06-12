@@ -183,3 +183,56 @@ export async function submitRates(rows) {
 
   return { error: null, count }
 }
+
+/**
+ * Skip a lane — write a `skipped` acknowledgement (0 rates) for (lane, forwarder, period).
+ * Clears the lane from "Lanes to fill" for the whole forwarder. PROVIDER_VIEW_MODEL §3.
+ * Find-or-create against the partial UNIQUE(lane_id, forwarder_id, period), so a prior ack
+ * is flipped to skipped rather than colliding.
+ */
+export async function skipLane(laneId, period, reason = null) {
+  const ident = await getIdentity()
+  if (ident.error) return { error: ident.error }
+  const { providerId, forwarderId } = ident
+
+  const { data: existing, error: findErr } = await supabase
+    .from('rate_submissions')
+    .select('id')
+    .eq('lane_id', laneId)
+    .eq('forwarder_id', forwarderId)
+    .eq('period', period)
+    .maybeSingle()
+  if (findErr) return { error: findErr }
+
+  if (existing) {
+    const { error } = await supabase
+      .from('rate_submissions')
+      .update({ status: 'skipped', skip_reason: reason, submitted_at: new Date().toISOString() })
+      .eq('id', existing.id)
+    return { error }
+  }
+
+  const { error } = await supabase
+    .from('rate_submissions')
+    .insert({ lane_id: laneId, forwarder_id: forwarderId, provider_id: providerId, period, status: 'skipped', skip_reason: reason })
+  return { error }
+}
+
+/**
+ * Un-skip a lane — delete the `skipped` acknowledgement so the lane returns to "Lanes to
+ * fill". PROVIDER_VIEW_MODEL §3. Scoped to the caller's forwarder (RLS enforces it too).
+ */
+export async function unskipLane(laneId, period) {
+  const ident = await getIdentity()
+  if (ident.error) return { error: ident.error }
+  const { forwarderId } = ident
+
+  const { error } = await supabase
+    .from('rate_submissions')
+    .delete()
+    .eq('lane_id', laneId)
+    .eq('forwarder_id', forwarderId)
+    .eq('period', period)
+    .eq('status', 'skipped')
+  return { error }
+}

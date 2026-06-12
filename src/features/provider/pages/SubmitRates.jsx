@@ -3,7 +3,7 @@ import { DataGrid } from '@mui/x-data-grid'
 import { Trash2, Plus, Upload, Send, X, Loader2 } from 'lucide-react'
 import Papa from 'papaparse'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { fetchActiveLanes, submitRates } from '../services/submissionService'
+import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services/submissionService'
 
 /*
   Provider rate-entry grid — unified (request-driven + free entry).
@@ -126,7 +126,7 @@ export default function SubmitRates() {
     return () => clearTimeout(timer)
   }, [toast])
 
-  const showToast = (severity, message) => setToast({ severity, message })
+  const showToast = (severity, message, action = null) => setToast({ severity, message, action })
 
   /* ── columns ─────────────────────────────────────────────────────────── */
 
@@ -182,9 +182,9 @@ export default function SubmitRates() {
       renderCell: (params) => (
         <button
           className="rounded-md p-1 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
-          onClick={() => handleDeleteRow(params.row.id)}
+          onClick={() => handleDeleteRow(params.row)}
           tabIndex={-1}
-          title="Remove this row"
+          title={params.row.laneId ? 'Skip this lane' : 'Remove this row'}
         >
           <Trash2 size={15} />
         </button>
@@ -201,11 +201,35 @@ export default function SubmitRates() {
 
   const handleAddRow = () => setRows((prev) => [...prev, makeEmptyRow()])
 
-  const handleDeleteRow = (id) => {
-    setRows((prev) => {
-      const filtered = prev.filter((r) => r.id !== id)
-      return filtered.length === 0 ? [makeEmptyRow()] : filtered
-    })
+  const handleDeleteRow = async (row) => {
+    // Free/independent row — never persisted, so just drop it locally.
+    if (!row.laneId) {
+      setRows((prev) => {
+        const filtered = prev.filter((r) => r.id !== row.id)
+        return filtered.length === 0 ? [makeEmptyRow()] : filtered
+      })
+      return
+    }
+
+    // Lane-linked row — persist a skip so it stays cleared (PVM §3).
+    setRows((prev) => prev.filter((r) => r.id !== row.id)) // optimistic
+    const { error } = await skipLane(row.laneId, row.period)
+    if (error) {
+      showToast('error', `Couldn’t skip lane: ${error.message}`)
+      loadLanes() // restore truth
+    } else {
+      showToast('success', 'Lane skipped', { label: 'Undo', onClick: () => handleUndoSkip(row) })
+    }
+  }
+
+  const handleUndoSkip = async (row) => {
+    const { error } = await unskipLane(row.laneId, row.period)
+    if (error) {
+      showToast('error', `Couldn’t undo: ${error.message}`)
+    } else {
+      // bring the lane back without disturbing other in-progress rows
+      setRows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
+    }
   }
 
   /* ── CSV upload (independent rates) ──────────────────────────────────── */
@@ -370,6 +394,17 @@ export default function SubmitRates() {
       {toast && (
         <div className={`fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-card-hover animate-rise-in ${TOAST_COLORS[toast.severity]}`}>
           <span>{toast.message}</span>
+          {toast.action && (
+            <button
+              className="rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-wide underline-offset-2 transition-colors hover:bg-white/20"
+              onClick={() => {
+                toast.action.onClick()
+                setToast(null)
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button
             className="rounded-md p-0.5 transition-colors hover:bg-white/20"
             onClick={() => setToast(null)}
