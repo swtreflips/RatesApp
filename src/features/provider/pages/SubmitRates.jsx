@@ -19,8 +19,6 @@ import { fetchActiveLanes, submitRates } from '../services/submissionService'
   No fields are required yet.
 */
 
-const CONTAINER_TYPES = ['20GP', '40GP', '40HC', '45HC', '20RF', '40RF']
-
 // temp id for free rows — string-prefixed so it never collides with a lane's uuid id
 let nextTempId = 1
 

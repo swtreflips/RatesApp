@@ -90,7 +90,7 @@ export default function NewRateRequest() {
       editable: true,
       type: 'singleSelect',
       cellClassName: 'font-mono',
-      valueOptions: ['20GP', '40GP', '40HC', '45HC', '20RF', '40RF'],
+      valueOptions: ["20' GP", "40' GP", "40' HC", "45' HC"],
     },
     {
       field: 'containerCount',
