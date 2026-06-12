@@ -86,35 +86,60 @@ function toNumber(v) {
 }
 
 /**
- * Submit provider rates against lanes.
- * @param {{ laneId: string, period: number, pol: string, fd: string, pod?: string,
- *           lastCy?: string, rate?: number|string, freeDays?: number|string,
+ * Submit provider rates — both lane-linked (answering a request) and independent.
+ * @param {{ laneId?: string|null, period?: number|null, pol?: string, fd?: string,
+ *           pod?: string, lastCy?: string, rate?: number|string, freeDays?: number|string,
  *           carrier?: string, validUntil?: Date|string, remarks?: string }[]} rows
- *   one entry per filled grid row (must carry laneId + period from the lane it answers).
+ *   one entry per filled grid row. Rows with a `laneId` answer a request; rows without
+ *   one are independent rates (supply that exists with no matching demand).
  * @returns {{ error: Error|null, count?: number }}
  *
- * Per lane it ensures exactly one `submitted` acknowledgement (find-or-create, matching
- * the partial UNIQUE(lane_id, forwarder_id, period)), then APPENDS the rate rows.
+ * Lane-linked rows ensure exactly one `submitted` acknowledgement per
+ * (lane, forwarder, period) — find-or-create against the partial
+ * UNIQUE(lane_id, forwarder_id, period) — then APPEND their rate rows.
+ * Independent rows insert rate rows directly with no acknowledgement (there is no
+ * demand to acknowledge) and null lane_id/submission_id/period.
  */
 export async function submitRates(rows) {
   const ident = await getIdentity()
   if (ident.error) return { error: ident.error }
   const { providerId, forwarderId } = ident
 
-  // group filled rows by the lane they answer
+  const laneLinked = rows.filter((r) => r.laneId)
+  const independent = rows.filter((r) => !r.laneId)
+  if (laneLinked.length === 0 && independent.length === 0) {
+    return { error: new Error('No rates to submit') }
+  }
+
+  // shared shape for a rate row; lane_id/submission_id/period default to null (independent)
+  const buildRate = (r, { submissionId = null, laneId = null, period = null }) => ({
+    submission_id: submissionId,
+    lane_id: laneId,
+    forwarder_id: forwarderId,
+    provider_id: providerId,
+    period,
+    pol: r.pol || null,
+    pod: r.pod || null,
+    last_cy: r.lastCy || null,
+    fd: r.fd || null,
+    carrier: r.carrier || null,
+    rate_amount: toNumber(r.rate),
+    free_days: toNumber(r.freeDays),
+    valid_until: toDateString(r.validUntil),
+    notes: r.remarks || null,
+  })
+
+  let count = 0
+
+  // ── lane-linked: one acknowledgement per (lane, forwarder, period), then append rates
   const byLane = new Map()
-  for (const r of rows) {
-    if (!r.laneId) continue
+  for (const r of laneLinked) {
     if (!byLane.has(r.laneId)) byLane.set(r.laneId, [])
     byLane.get(r.laneId).push(r)
   }
-  if (byLane.size === 0) return { error: new Error('No rates to submit') }
-
-  let count = 0
   for (const [laneId, laneRows] of byLane) {
     const period = laneRows[0].period
 
-    // find-or-create the acknowledgement (one per lane+forwarder+period)
     let submissionId
     const { data: existing, error: findErr } = await supabase
       .from('rate_submissions')
@@ -142,25 +167,17 @@ export async function submitRates(rows) {
       submissionId = created.id
     }
 
-    // append the rate rows (never delete prior bids)
-    const rateRows = laneRows.map((r) => ({
-      submission_id: submissionId,
-      lane_id: laneId,
-      forwarder_id: forwarderId,
-      provider_id: providerId,
-      period,
-      pol: r.pol,
-      pod: r.pod || null,
-      last_cy: r.lastCy || null,
-      fd: r.fd,
-      carrier: r.carrier || null,
-      rate_amount: toNumber(r.rate),
-      free_days: toNumber(r.freeDays),
-      valid_until: toDateString(r.validUntil),
-      notes: r.remarks || null,
-    }))
+    const rateRows = laneRows.map((r) => buildRate(r, { submissionId, laneId, period }))
     const { error: ratesErr } = await supabase.from('rates').insert(rateRows)
     if (ratesErr) return { error: ratesErr }
+    count += rateRows.length
+  }
+
+  // ── independent: no demand to acknowledge → insert rate rows directly
+  if (independent.length > 0) {
+    const rateRows = independent.map((r) => buildRate(r, {}))
+    const { error: indErr } = await supabase.from('rates').insert(rateRows)
+    if (indErr) return { error: indErr }
     count += rateRows.length
   }
 
