@@ -55,3 +55,22 @@ export async function postRateRequestBatch(lanes, requesterId) {
 
   return { batch, lanes: insertedLanes, error: null }
 }
+
+/**
+ * Fetches rates submitted by forwarders against the requester team's lanes.
+ * RLS scopes this to lane-linked rates the requester team is allowed to see, so no
+ * explicit owner filter is needed here. Minimal S0.6 read: flat list, newest first.
+ *
+ * @returns {{ rates, error }}
+ */
+export async function fetchReceivedRates() {
+  const { data, error } = await supabase
+    .from('rates')
+    .select(
+      'id, pol, pod, last_cy, fd, carrier, rate_amount, free_days, currency, valid_until, notes, created_at, forwarder:forwarders(name)'
+    )
+    .not('lane_id', 'is', null)
+    .order('created_at', { ascending: false })
+
+  return { rates: data ?? [], error }
+}

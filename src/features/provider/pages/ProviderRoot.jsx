@@ -1,11 +1,11 @@
 import React, { lazy, Suspense } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { Ship, FileText, Loader2 } from 'lucide-react'
-import PlaceholderPage from '../../../components/shell/PlaceholderPage'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 
 // Rate-entry grid pulls in MUI X DataGrid — load it only when the route opens.
 const SubmitRates = lazy(() => import('./SubmitRates'))
+const ActiveRates = lazy(() => import('./ActiveRates'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
@@ -65,11 +65,13 @@ export default function ProviderRoot() {
       <Route
         path="submissions"
         element={
-          <PlaceholderPage
-            title="Active Rates"
-            description="The rates you currently have live — your latest bid per routing while still within its validity."
-            phase="Phase 3"
-          />
+          <Suspense fallback={
+            <div className="flex min-h-[55vh] items-center justify-center">
+              <Loader2 size={26} className="animate-spin text-fog-400" />
+            </div>
+          }>
+            <ActiveRates />
+          </Suspense>
         }
       />
     </Routes>

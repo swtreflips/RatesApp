@@ -1,30 +1,33 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
-import { Trash2, Plus, Send, X } from 'lucide-react'
+import { Trash2, Send, X, Loader2, Inbox } from 'lucide-react'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
+import { fetchActiveLanes, submitRates } from '../services/submissionService'
 
 /*
-  MOCK rate-entry grid for the provider.
+  Provider rate-entry grid (STEP 0 / S0.5 — real).
 
-  There is no Supabase database yet, so the "Open Requests" a forwarder responds
-  to are seeded here as sample lanes. In the real flow these rows will be the
-  active rate-request lanes (POL pre-filled from the requester's template); the
-  forwarder fills in the rate columns and submits.
+  Rows are the requester's ACTIVE lanes (one row per lane). The template columns
+  (POL · FD · Container Type · # Containers) come from the lane and are read-only;
+  the forwarder fills the rate columns (POD · Last CY · Rate · Free Days · Carrier
+  · Valid Until · Remarks) and submits. Each row carries laneId + period so the
+  submission ties back to the lane.
 
-  Columns — from the request template: Port of Loading · Final Destination ·
-  Container Type · # Containers; filled by the forwarder: Port of Discharge ·
-  Last CY · Rate/Unit · # of Free Days · Carrier · Valid Until · Remarks
+  Not in this slice: skip, multi-carrier explode, .xlsx upload, latest-per-routing.
 */
 
-let nextId = 1
-const makeRow = (template = {}) => ({
-  id: nextId++,
-  // From the request template (set by the requester)
-  pol: template.pol ?? '',
-  fd: template.fd ?? '',
-  containerType: template.containerType ?? '',
-  containerCount: template.containerCount ?? '',
-  // Rate fields the forwarder fills in
+const CONTAINER_TYPES = ['20GP', '40GP', '40HC', '45HC', '20RF', '40RF']
+
+const makeRowFromLane = (lane) => ({
+  id: lane.id,            // grid id = lane id (stable, unique)
+  laneId: lane.id,
+  period: lane.period,
+  // from the request template (read-only)
+  pol: lane.pol ?? '',
+  fd: lane.fd ?? '',
+  containerType: lane.container_type ?? '',
+  containerCount: lane.container_count ?? '',
+  // rate fields the forwarder fills in
   pod: '',
   lastCy: '',
   rate: '',
@@ -34,16 +37,6 @@ const makeRow = (template = {}) => ({
   remarks: '',
 })
 
-const CONTAINER_TYPES = ['20GP', '40GP', '40HC', '45HC', '20RF', '40RF']
-
-// Sample lanes standing in for requester-originated templates.
-const SAMPLE_LANES = [
-  { pol: 'Nhava Sheva, India', fd: 'Commerce, CA', containerType: '40HC', containerCount: 5 },
-  { pol: 'Mundra, India',      fd: 'Dallas, TX',   containerType: '40GP', containerCount: 3 },
-  { pol: 'Shanghai, China',    fd: 'Chicago, IL',  containerType: '40HC', containerCount: 2 },
-]
-const makeInitialRows = () => SAMPLE_LANES.map((l) => makeRow(l))
-
 const TOAST_COLORS = {
   success: 'bg-sea-600',
   warning: 'bg-signal-600',
@@ -51,9 +44,24 @@ const TOAST_COLORS = {
 }
 
 export default function SubmitRates() {
-  const [rows, setRows] = useState(makeInitialRows)
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast] = useState(null)
+
+  /* ── load active lanes ───────────────────────────────────────────────── */
+
+  const loadLanes = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    const { lanes, error } = await fetchActiveLanes()
+    if (error) setLoadError(error.message)
+    else setRows(lanes.map(makeRowFromLane))
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { loadLanes() }, [loadLanes])
 
   /* ── auto-dismiss toast ──────────────────────────────────────────────── */
 
@@ -77,27 +85,23 @@ export default function SubmitRates() {
       cellClassName: 'font-mono text-fog-400',
       renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
     },
-    { field: 'pol',     headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true },
-    { field: 'fd',      headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true },
+    { field: 'pol', headerName: 'Port of Loading',   flex: 1.1, minWidth: 86 },
+    { field: 'fd',  headerName: 'Final Destination', flex: 1.1, minWidth: 86 },
     {
       field: 'containerType',
       headerName: 'Cont. Type',
       width: 88,
-      editable: true,
-      type: 'singleSelect',
       cellClassName: 'font-mono',
-      valueOptions: CONTAINER_TYPES,
     },
     {
       field: 'containerCount',
       headerName: '# Cont.',
       width: 70,
-      editable: true,
       type: 'number',
       cellClassName: 'font-mono',
     },
-    { field: 'pod',     headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true },
-    { field: 'lastCy',  headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true },
+    { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true },
+    { field: 'lastCy', headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true },
     {
       field: 'rate',
       headerName: 'Rate/Unit',
@@ -134,6 +138,7 @@ export default function SubmitRates() {
           className="rounded-md p-1 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
           onClick={() => handleDeleteRow(params.row.id)}
           tabIndex={-1}
+          title="Remove this lane from your submission"
         >
           <Trash2 size={15} />
         </button>
@@ -148,30 +153,30 @@ export default function SubmitRates() {
     return newRow
   }, [])
 
-  const handleAddRow = () => setRows((prev) => [...prev, makeRow()])
-
   const handleDeleteRow = (id) => {
-    setRows((prev) => {
-      const filtered = prev.filter((r) => r.id !== id)
-      return filtered.length === 0 ? [makeRow()] : filtered
-    })
+    setRows((prev) => prev.filter((r) => r.id !== id))
   }
 
-  /* ── submit (mock) ───────────────────────────────────────────────────── */
+  /* ── submit ──────────────────────────────────────────────────────────── */
 
-  const rateCount = rows.filter((r) => r.pol.trim() && r.rate !== '' && r.rate != null).length
+  const filledRows = rows.filter((r) => r.rate !== '' && r.rate != null)
+  const rateCount = filledRows.length
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (rateCount === 0) {
-      showToast('warning', 'Add at least one rate (Port of Loading + Rate/Unit)')
+      showToast('warning', 'Fill in at least one rate (Rate/Unit) before submitting')
       return
     }
     setSubmitting(true)
-    // No database yet — simulate a submit so the flow can be exercised.
-    setTimeout(() => {
-      setSubmitting(false)
-      showToast('success', `Submitted ${rateCount} rate(s) — mock only, no database connected yet`)
-    }, 500)
+    const { error, count } = await submitRates(filledRows)
+    setSubmitting(false)
+
+    if (error) {
+      showToast('error', `Submit failed: ${error.message}`)
+    } else {
+      showToast('success', `Submitted ${count} rate(s)`)
+      loadLanes() // reset the grid to a clean slate of active lanes
+    }
   }
 
   /* ── render ──────────────────────────────────────────────────────────── */
@@ -194,69 +199,78 @@ export default function SubmitRates() {
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          className="inline-flex items-center gap-1.5 rounded-lg border border-fog-300 bg-white px-3 py-2 text-sm font-medium text-harbor-700 shadow-sm transition-all hover:border-harbor-300 hover:bg-fog-50 hover:text-harbor-900"
-          onClick={handleAddRow}
-        >
-          <Plus size={16} />
-          Add Row
-        </button>
-
         <div className="flex-1" />
-
         <button
           className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
           onClick={handleSubmit}
-          disabled={submitting}
+          disabled={submitting || loading || rateCount === 0}
         >
           <Send size={16} className="transition-transform group-hover:translate-x-0.5" />
           {submitting ? 'Submitting…' : 'Submit Rates'}
         </button>
       </div>
 
-      {/* DataGrid */}
-      <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card" style={{ width: '100%' }}>
-        <DataGrid
-          rows={rows}
-          columns={columns}
-          processRowUpdate={processRowUpdate}
-          disableRowSelectionOnClick
-          hideFooter
-          autoHeight
-          sx={{
-            border: 'none',
-            fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
-            '& .MuiDataGrid-columnHeaders': {
-              backgroundColor: '#f7f8fa',
-              borderBottom: '1px solid #dfe4ea',
-            },
-            '& .MuiDataGrid-columnHeader': {
-              fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-              fontSize: '0.62rem',
-              fontWeight: 600,
-              letterSpacing: '0.02em',
-              textTransform: 'uppercase',
-              color: '#566270',
-              padding: '0 8px',
-            },
-            '& .MuiDataGrid-columnSeparator': { color: '#eef1f4' },
-            '& .MuiDataGrid-cell': {
-              fontSize: '0.8rem',
-              color: '#132236',
-              borderColor: '#eef1f4',
-              padding: '0 8px',
-            },
-            '& .MuiDataGrid-row:hover': { backgroundColor: '#f7f8fa' },
-            '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': {
-              outline: '2px solid rgba(245,165,36,0.5)',
-              outlineOffset: '-2px',
-            },
-            '& .MuiDataGrid-cell--editing': {
-              boxShadow: 'inset 0 0 0 2px rgba(245,165,36,0.5)',
-            },
-          }}
-        />
-      </div>
+      {/* Body: loading / error / empty / grid */}
+      {loading ? (
+        <div className="flex min-h-[40vh] items-center justify-center rounded-2xl border border-fog-200 bg-white shadow-card">
+          <Loader2 size={24} className="animate-spin text-fog-400" />
+        </div>
+      ) : loadError ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-6 text-center text-sm text-red-700 shadow-card">
+          Couldn’t load lanes: {loadError}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 rounded-2xl border border-fog-200 bg-white text-center shadow-card">
+          <Inbox size={28} className="text-fog-300" />
+          <p className="text-sm font-medium text-harbor-800">No open requests right now</p>
+          <p className="max-w-xs text-xs text-fog-500">
+            When a requester posts lanes, their active requests show up here for you to quote.
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card" style={{ width: '100%' }}>
+          <DataGrid
+            rows={rows}
+            columns={columns}
+            processRowUpdate={processRowUpdate}
+            disableRowSelectionOnClick
+            hideFooter
+            autoHeight
+            sx={{
+              border: 'none',
+              fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
+              '& .MuiDataGrid-columnHeaders': {
+                backgroundColor: '#f7f8fa',
+                borderBottom: '1px solid #dfe4ea',
+              },
+              '& .MuiDataGrid-columnHeader': {
+                fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+                fontSize: '0.62rem',
+                fontWeight: 600,
+                letterSpacing: '0.02em',
+                textTransform: 'uppercase',
+                color: '#566270',
+                padding: '0 8px',
+              },
+              '& .MuiDataGrid-columnSeparator': { color: '#eef1f4' },
+              '& .MuiDataGrid-cell': {
+                fontSize: '0.8rem',
+                color: '#132236',
+                borderColor: '#eef1f4',
+                padding: '0 8px',
+              },
+              '& .MuiDataGrid-row:hover': { backgroundColor: '#f7f8fa' },
+              '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': {
+                outline: '2px solid rgba(245,165,36,0.5)',
+                outlineOffset: '-2px',
+              },
+              '& .MuiDataGrid-cell--editing': {
+                boxShadow: 'inset 0 0 0 2px rgba(245,165,36,0.5)',
+              },
+            }}
+          />
+        </div>
+      )}
 
       {/* Toast */}
       {toast && (

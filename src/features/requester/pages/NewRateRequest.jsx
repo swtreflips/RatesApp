@@ -198,10 +198,15 @@ export default function NewRateRequest() {
     // Safety dedup before posting
     const { unique: dedupedValid } = dedup(valid)
 
+    if (!user?.id) {
+      showToast('error', 'No active session — please sign in again')
+      return
+    }
+
     setPosting(true)
     const { batch, error } = await postRateRequestBatch(
       dedupedValid.map(({ pol, fd, containerType, containerCount }) => ({ pol, fd, containerType, containerCount })),
-      user?.id ?? 'dev-user'
+      user.id
     )
     setPosting(false)
 

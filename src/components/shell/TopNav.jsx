@@ -8,6 +8,7 @@ import {
   Settings,
 } from 'lucide-react'
 import { useAuth } from '../../app/providers/AuthProvider'
+import { supabase } from '../../lib/supabase'
 
 const ROLE_LABELS = {
   requester: 'Requester',
@@ -120,7 +121,10 @@ export default function TopNav({ onMenuToggle }) {
               )}
 
               <div className="my-1 border-t border-fog-100" />
-              <button className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-red-600 transition-colors hover:bg-red-50">
+              <button
+                onClick={() => supabase.auth.signOut()}
+                className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-red-600 transition-colors hover:bg-red-50"
+              >
                 <LogOut size={15} />
                 Sign out
               </button>

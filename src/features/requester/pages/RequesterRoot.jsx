@@ -7,6 +7,7 @@ import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives
 // The lane-entry grid pulls in MUI X DataGrid (the bulk of the bundle), so it
 // is loaded on demand only when the New Rate Request route is opened.
 const NewRateRequest = lazy(() => import('./NewRateRequest'))
+const ReceivedRates = lazy(() => import('./ReceivedRates'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
@@ -76,11 +77,13 @@ export default function RequesterRoot() {
       <Route
         path="rates"
         element={
-          <PlaceholderPage
-            title="Active Rates"
-            description="Rates submitted by freight forwarders that are still within their validity period."
-            phase="Phase 2"
-          />
+          <Suspense fallback={
+            <div className="flex min-h-[55vh] items-center justify-center">
+              <Loader2 size={26} className="animate-spin text-fog-400" />
+            </div>
+          }>
+            <ReceivedRates />
+          </Suspense>
         }
       />
     </Routes>
