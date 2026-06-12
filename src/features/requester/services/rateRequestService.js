@@ -74,3 +74,22 @@ export async function fetchReceivedRates() {
 
   return { rates: data ?? [], error }
 }
+
+/**
+ * Fetches the requester team's OPEN requests — active lanes still within the 10-day
+ * window — with a count of rates received on each. RLS scopes lanes to the requester
+ * team (current_role_is('requester')), so no owner filter is needed.
+ *
+ * `rates(count)` is an embedded aggregate (PostgREST), returned as `[{ count }]`.
+ *
+ * @returns {{ lanes, error }}
+ */
+export async function fetchOpenRequests() {
+  const { data, error } = await supabase
+    .from('rate_request_lanes')
+    .select('id, pol, fd, container_type, container_count, period, posted_at, expires_at, rates(count)')
+    .gt('expires_at', new Date().toISOString())
+    .order('expires_at', { ascending: true })
+
+  return { lanes: data ?? [], error }
+}

@@ -18,7 +18,7 @@ function ProviderDashboard() {
   ]
 
   return (
-    <div className="space-y-7">
+    <div className="mx-auto w-full max-w-7xl space-y-7">
       <PageHeader
         kicker="Freight Forwarder · Overview"
         title="Dashboard"

@@ -77,10 +77,10 @@ export default function ActiveRates() {
                 <th className="px-3 py-2.5 font-semibold">POL</th>
                 <th className="px-3 py-2.5 font-semibold">POD</th>
                 <th className="px-3 py-2.5 font-semibold">Last CY</th>
-                <th className="px-3 py-2.5 font-semibold">FD</th>
+                <th className="px-3 py-2.5 font-semibold">Final Destination</th>
                 <th className="px-3 py-2.5 font-semibold">Carrier</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Rate</th>
-                <th className="px-3 py-2.5 text-right font-semibold">Free Days</th>
+                <th className="px-3 py-2.5 text-right font-semibold"># of Free Days</th>
                 <th className="px-3 py-2.5 font-semibold">Valid Until</th>
                 <th className="px-3 py-2.5 font-semibold">Notes</th>
               </tr>

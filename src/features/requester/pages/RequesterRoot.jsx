@@ -1,12 +1,12 @@
 import React, { lazy, Suspense } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { FilePlus, ClipboardList, CheckSquare, Loader2 } from 'lucide-react'
-import PlaceholderPage from '../../../components/shell/PlaceholderPage'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 
 // The lane-entry grid pulls in MUI X DataGrid (the bulk of the bundle), so it
 // is loaded on demand only when the New Rate Request route is opened.
 const NewRateRequest = lazy(() => import('./NewRateRequest'))
+const OpenRequests = lazy(() => import('./OpenRequests'))
 const ReceivedRates = lazy(() => import('./ReceivedRates'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
@@ -20,7 +20,7 @@ function RequesterDashboard() {
   ]
 
   return (
-    <div className="space-y-7">
+    <div className="mx-auto w-full max-w-7xl space-y-7">
       <PageHeader
         kicker="Requester · Overview"
         title="Dashboard"
@@ -67,11 +67,13 @@ export default function RequesterRoot() {
       <Route
         path="requests"
         element={
-          <PlaceholderPage
-            title="Open Requests"
-            description="Your active rate request lanes — templates still within their 10-day window."
-            phase="Phase 2"
-          />
+          <Suspense fallback={
+            <div className="flex min-h-[55vh] items-center justify-center">
+              <Loader2 size={26} className="animate-spin text-fog-400" />
+            </div>
+          }>
+            <OpenRequests />
+          </Suspense>
         }
       />
       <Route

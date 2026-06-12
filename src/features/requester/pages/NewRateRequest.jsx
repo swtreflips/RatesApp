@@ -225,9 +225,9 @@ export default function NewRateRequest() {
   return (
     <div className="space-y-6">
       <PageHeader
-        kicker="Requester · New Request"
+        kicker="Ocean Freight Rates"
         title="New Rate Request"
-        subtitle="Add origin / destination lanes, then post to create a request batch."
+        subtitle="Add origin / destination lanes, then post to send request"
         actions={
           <span className="inline-flex items-center gap-2 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
             <span className="font-mono text-lg font-semibold leading-none text-harbor-900">{laneCount}</span>
@@ -270,7 +270,7 @@ export default function NewRateRequest() {
           disabled={posting}
         >
           <Send size={16} className="transition-transform group-hover:translate-x-0.5" />
-          {posting ? 'Sending…' : 'Send Request'}
+          {posting ? 'Posting…' : 'Post'}
         </button>
       </div>
 

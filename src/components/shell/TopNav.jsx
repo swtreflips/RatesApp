@@ -16,7 +16,11 @@ const ROLE_LABELS = {
 }
 
 export default function TopNav({ onMenuToggle }) {
-  const { user, role, devRole, toggleDevRole } = useAuth()
+  const { user, role, devRole, toggleDevRole, forwarderName } = useAuth()
+
+  // Workspace breadcrumb label: requesters are "PTP"; providers show their forwarder.
+  const workspaceLabel =
+    role === 'provider' ? (forwarderName ?? ROLE_LABELS.provider) : 'PTP'
   const [accountOpen, setAccountOpen] = useState(false)
   const menuRef = useRef(null)
 
@@ -56,7 +60,7 @@ export default function TopNav({ onMenuToggle }) {
           </span>
           <span className="text-fog-300">/</span>
           <span className="text-sm font-semibold text-harbor-800">
-            {ROLE_LABELS[role] ?? role}
+            {workspaceLabel}
           </span>
         </div>
       </div>

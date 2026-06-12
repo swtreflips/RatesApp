@@ -59,7 +59,7 @@ export default function Shell() {
         <main className="relative flex-1 overflow-y-auto scrollbar-thin">
           {/* Subtle top atmosphere fading into the page */}
           <div className="pointer-events-none absolute inset-x-0 top-0 h-48 bg-gradient-to-b from-harbor-100/60 to-transparent" />
-          <div className="relative mx-auto min-h-full w-full max-w-7xl px-6 py-7 sm:px-8">
+          <div className="relative min-h-full w-full px-6 py-7 sm:px-8">
             <RoleRouter />
           </div>
         </main>

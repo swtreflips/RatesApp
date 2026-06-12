@@ -17,6 +17,9 @@ export function AuthProvider({ children }) {
     () => localStorage.getItem('dev_role') ?? 'requester'
   )
 
+  // The signed-in user's forwarder company name (providers only; null for requesters)
+  const [forwarderName, setForwarderName] = useState(null)
+
   useEffect(() => {
     supabase.auth.getSession()
       .then(({ data: { session } }) => {
@@ -36,6 +39,28 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe()
   }, [])
 
+  // Load the user's forwarder name from their profile (for the workspace label)
+  useEffect(() => {
+    const uid = session?.user?.id
+    if (!uid) {
+      setForwarderName(null)
+      return
+    }
+    let active = true
+    supabase
+      .from('profiles')
+      .select('company, forwarders(name)')
+      .eq('id', uid)
+      .single()
+      .then(({ data }) => {
+        if (active) setForwarderName(data?.forwarders?.name ?? data?.company ?? null)
+      })
+      .catch(() => {
+        // profile/forwarder unreachable — leave null, label falls back
+      })
+    return () => { active = false }
+  }, [session?.user?.id])
+
   const user = session?.user ?? null
   const role = user?.user_metadata?.role ?? devRole
 
@@ -46,7 +71,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, user, role, loading, devRole, toggleDevRole }}>
+    <AuthContext.Provider value={{ session, user, role, loading, devRole, toggleDevRole, forwarderName }}>
       {children}
     </AuthContext.Provider>
   )

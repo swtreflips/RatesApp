@@ -160,7 +160,7 @@ export default function SubmitRates() {
     },
     {
       field: 'freeDays',
-      headerName: 'Free Days',
+      headerName: '# of Free Days',
       width: 82,
       editable: true,
       type: 'number',
