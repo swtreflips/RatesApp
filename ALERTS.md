@@ -6,10 +6,13 @@
 §6 (response roster), `COVERAGE_MODEL.md` (per-forwarder lane relevance), `MOCKDEPLOY.md`
 (M365 tenant + Cloudflare gate).
 
-**Locked decisions:** emails are sent **truly from the M365 / Outlook mailbox**;
-orchestration is **Power Automate** (M365-native) triggered from Supabase; the forwarder
-email carries **full lane details inline**; outbound sending is **manual and
-requester-controlled**, never automatic per lane-post.
+**Locked decisions / tech stack:** emails are sent **truly from the M365 / Outlook mailbox**
+via the **Microsoft Graph API** (`sendMail`), called from a **Supabase Edge Function** —
+reusing the Graph integration already built for an internal CRM (Azure app registration,
+token flow, and compose/send are solved). The forwarder email carries **full lane details
+inline**; outbound sending is **manual and requester-controlled**, never automatic per
+lane-post. (Power Automate is a low-code fallback only — **not used here**, since Graph is
+already wired.)
 
 ---
 
@@ -91,32 +94,52 @@ Supabase Edge Function           ← verifies JWT + profiles.role='requester'
    │  • resolves forwarder emails (service role)        (emails never touch the browser)
    │  • computes lanes-per-forwarder (§3), re-validates active lanes
    │  • writes the audit log (§7)
-   │  • POSTs clean JSON to the Power Automate HTTP trigger (URL = function secret)
+   │  • builds the HTML body, calls Microsoft Graph sendMail (app-only token)
    ▼
-Power Automate (HTTP-triggered flow)
-   │  • "Send an email from a shared mailbox (V2)"
-   │  • loops recipients, builds the HTML lane table from JSON
+Microsoft Graph   POST /users/{shared-mailbox}/sendMail
    ▼
 Outlook / M365 (shared mailbox, e.g. rates@ptpbags.com) → forwarders
 ```
 
-**Why the Edge Function in the middle (not browser → Power Automate directly):**
-- The PA HTTP-trigger URL embeds a SAS signature — a **secret**. Keep it out of the client
-  bundle (Supabase function secret, never a `VITE_` var).
+**Tech stack is settled: Supabase Edge Function → Microsoft Graph `sendMail`.** The Graph
+integration (Azure app registration, client-credentials token flow, compose/send helpers)
+already exists from an internal CRM and is reused here — so there is **no Power Automate, no
+third-party email provider, and no separate flow surface to maintain.** Everything lives in
+code, in this repo's Supabase functions.
+
+**Why the Edge Function in the middle (not browser → Graph directly):**
+- The **Graph client secret** must never reach the browser → stored as a Supabase function
+  secret (never a `VITE_` var).
 - **Forwarder emails stay server-side.** The client sends `forwarderIds`; the function
-  resolves addresses. The browser never holds the recipient list.
+  resolves addresses from `profiles` / `auth.users`. The browser never holds the recipient list.
 - **Role-gated:** only `requester` profiles can blast.
-- One place to assemble the per-forwarder payload and write the log.
+- One place to assemble the per-forwarder body, call Graph, and write the log.
 
-**Sender = a shared mailbox** (e.g. `rates@ptpbags.com`), recommended over a personal
-mailbox: the team sees replies, it survives staffing changes, and PA's shared-mailbox
-action supports it. Replies still land in your tenant — matching the manual flow.
+**Auth = app-only (client credentials), permission `Mail.Send`.** Server-triggered sends have
+no signed-in user, so application permission is the correct mode (delegated / on-behalf-of is
+for user-initiated sends). Confirm the CRM app is app-only; if it's delegated, that's the one
+piece to adjust.
 
-**Alternative trigger (event-sourced):** insert a `notifications` row → **Supabase Database
-Webhook** → Power Automate. "Insert = send," fully decoupled/auditable, but more moving
-parts. Use only if you prefer event sourcing over the direct relay.
+**Sender mailbox — phased, and a config value (not hardcoded).** The target is
+`POST /users/{sender-mailbox}/sendMail`, where `{sender-mailbox}` is an Edge Function
+**config/secret** so it changes with **zero code edits**:
 
-**Payload sketch:**
+- **Phase 1 (initial deploy) — the requester's own mailbox** (`jordan@ptpbags.com`). Reuses
+  the existing CRM Graph app **as-is; no new Azure setup**. Because auth is app-only, the From
+  is **decoupled from who clicked** — a colleague triggering a send still goes out from this
+  one mailbox and lands in *its* Sent Items. Accepted as fine for the rehearsal (a little odd
+  but harmless); who actually clicked is still recorded in `notifications.triggered_by` (§7).
+- **Phase 2 — a dedicated shared mailbox** (`rates@ptpbags.com`). Team sees replies / Sent
+  Items, survives staffing changes. Migration is **config-only**: provision the shared
+  mailbox, grant the Graph app access to it (scope with an **ApplicationAccessPolicy** so
+  `Mail.Send` can't target arbitrary tenant users), then repoint the `sender-mailbox` config.
+  No code change.
+
+**Hosting choice:** port the Graph logic into the Edge Function (cleanest boundary, next to
+the data / RLS), **or** expose a notification endpoint on the existing CRM backend and have
+the app call that (reuses working infra). Either works — pick the lower-friction one.
+
+**Per-forwarder send structure (what the function loops over):**
 ```json
 {
   "kind": "request",
@@ -129,6 +152,12 @@ parts. Use only if you prefer event sourcing over the direct relay.
   "appUrl": "https://rates.ptpbags.com"
 }
 ```
+
+**Alternative trigger (event-sourced):** insert a `notifications` row → **Supabase Database
+Webhook** → the same send function. "Insert = send," fully auditable, but more moving parts —
+use only if you prefer event sourcing over the direct `invoke`. *(Low-code fallback, not used:
+a Power Automate "Send an email from a shared mailbox" flow — only worth it if Graph weren't
+already in hand.)*
 
 ## 7. Data model — audit log (NOT the source of "who responded")
 
@@ -166,9 +195,9 @@ filling 10 lanes must not generate 10 emails.
 - **Recommended:** on `submitRates()` success in
   [SubmitRates.jsx](src/features/provider/pages/SubmitRates.jsx), call an Edge Function
   `notify-submission` **once**, summarizing "Forwarder X submitted N rates across M lanes" →
-  Power Automate → team. (Naturally batches; mirrors the outbound relay.)
+  Microsoft Graph → team. (Naturally batches; mirrors the outbound path.)
 - **Recipients:** the shared mailbox / a team distro / all `requester` profiles.
-- **Channel:** email; optionally a **Microsoft Teams** post (PA does both) since you're in M365.
+- **Channel:** email; optionally a **Microsoft Teams** post (Graph posts to channels too) since you're in M365.
 - *Alternative:* DB webhook on `rate_submissions` insert with debounce — more complex; the
   client-invoke above is simpler and inherently per-action.
 
@@ -181,8 +210,8 @@ filling 10 lanes must not generate 10 emails.
 
 ## 10. Security & config
 
-- **Secrets** (Supabase function env, never client/`VITE_`): the Power Automate trigger
-  URL(s), the sender mailbox address.
+- **Secrets** (Supabase function env, never client/`VITE_`): Graph **tenant ID / client ID /
+  client secret** (or certificate), and the sender mailbox address.
 - **Role-gate** every notify function (JWT + `profiles.role`).
 - `src/lib/constants.js` (planned in NEXTSTEPS A0): `REMINDER_COOLDOWN_HOURS`, sender
   display name; team recipients live in DB or config.
@@ -200,19 +229,24 @@ filling 10 lanes must not generate 10 emails.
 
 ## 12. Phasing
 
-- **Phase 1 (rehearsal):** Edge Function + Power Automate + shared mailbox; outbound
-  request + reminder from Open Requests; audit log; inbound submit → team email. Free-text
-  lanes acceptable.
-- **Phase 2:** response roster UI on Open Requests; in-app notification center (bell reads
-  `notifications`); Teams channel; coverage-aware per-forwarder filtering; digesting.
+- **Phase 1 (rehearsal):** Edge Function + Microsoft Graph; **sends from the requester's own
+  mailbox** (reuses the existing CRM Graph app — no new Azure setup); outbound request +
+  reminder from Open Requests; audit log; inbound submit → team email. Free-text lanes
+  acceptable.
+- **Phase 2:** **dedicated shared mailbox** `rates@ptpbags.com` (config-only sender swap +
+  ApplicationAccessPolicy); response roster UI on Open Requests; in-app notification center
+  (bell reads `notifications`); Teams channel; coverage-aware per-forwarder filtering; digesting.
 
-## 13. Decisions to confirm before building
+## 13. Decisions
 
-| Decision | Recommended |
+| Decision | Choice |
 |---|---|
+| Email transport | ✅ **Microsoft Graph `sendMail`** from an Edge Function, reusing the CRM integration — no Power Automate / no 3rd-party provider |
+| Graph auth | **App-only (`Mail.Send`)** + ApplicationAccessPolicy scoped to the shared mailbox *(confirm the CRM app is app-only)* |
+| Sender mailbox | **Phase 1: requester's own mailbox** (reuses existing Graph app, no new setup) → **Phase 2: shared** `rates@ptpbags.com` (config-only swap). Stored as Edge Function config. |
+| Trigger | **Edge Function via `invoke`** (vs DB-webhook event-sourced) |
+| Hosting | Edge Function **or** reuse the CRM backend's Graph endpoint *(open)* |
 | Button pattern | **C — hybrid** (fast `Send Rate Request` + `Send Reminder…` modal, shared pipeline) |
-| Trigger | **Edge Function relay** (vs DB-webhook event-sourced) |
-| Sender mailbox | **Shared mailbox** (vs personal Outlook) |
 | Inbound mechanism | **Client-invoke once per submit** (vs webhook + debounce) |
-| Inbound channel | Email now; **Teams** optional later |
+| Inbound channel | Email now; **Teams** optional later (Graph does both) |
 | Reminder content | **Per-forwarder outstanding lanes** (vs same full list) |
