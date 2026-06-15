@@ -49,10 +49,11 @@ const makeRowFromLane = (lane) => ({
   fd: lane.fd ?? '',
   containerType: lane.container_type ?? '',
   containerCount: lane.container_count ?? '',
-  // rate fields the forwarder fills in (POL prefilled from the template)
+  // rate fields the forwarder fills in (POL/POD/Last CY prefilled from the template
+  // when the requester specified them — normally blank, always overridable)
   pol: lane.pol ?? '',
-  pod: '',
-  lastCy: '',
+  pod: lane.pod ?? '',
+  lastCy: lane.last_cy ?? '',
   rate: '',
   freeDays: '',
   carrier: '',

@@ -159,6 +159,8 @@ create table rate_request_lanes (
   id              uuid primary key default gen_random_uuid(),
   batch_id        uuid not null references rate_request_batches(id),
   pol             text not null,
+  pod             text,                                      -- optional: requester-specified discharge port
+  last_cy         text,                                      -- optional: requester-specified last container yard
   fd              text not null,
   container_type  text,
   container_count integer,

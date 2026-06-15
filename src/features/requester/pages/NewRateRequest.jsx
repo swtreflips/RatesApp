@@ -9,10 +9,17 @@ import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
 let nextId = 1
-const makeEmptyRow = () => ({ id: nextId++, pol: '', fd: '', containerType: '', containerCount: '' })
+const makeEmptyRow = () => ({ id: nextId++, pol: '', pod: '', lastCy: '', fd: '', containerType: '', containerCount: '' })
 
+// A lane is "empty" until it has both endpoints — only those participate in dedup.
+const isEmptyLane = (r) => !r.pol.trim() && !r.fd.trim()
+
+// Identity includes the optional routing refinements (POD / Last CY), so a lane
+// quoted via a specific discharge port is distinct from the plain POL → FD lane.
 function laneKey(r) {
-  return `${r.pol.trim().toLowerCase()}|${r.fd.trim().toLowerCase()}`
+  return [r.pol, r.pod, r.lastCy, r.fd]
+    .map((v) => (v ?? '').trim().toLowerCase())
+    .join('|')
 }
 
 function dedup(rows) {
@@ -20,9 +27,8 @@ function dedup(rows) {
   const unique = []
   let removed = 0
   for (const r of rows) {
-    const key = laneKey(r)
-    if (!key || key === '|' || !seen.has(key)) {
-      if (key && key !== '|') seen.add(key)
+    if (isEmptyLane(r) || !seen.has(laneKey(r))) {
+      if (!isEmptyLane(r)) seen.add(laneKey(r))
       unique.push(r)
     } else {
       removed++
@@ -73,14 +79,28 @@ export default function NewRateRequest() {
       field: 'pol',
       headerName: 'Port of Loading',
       flex: 1,
-      minWidth: 200,
+      minWidth: 180,
+      editable: true,
+    },
+    {
+      field: 'pod',
+      headerName: 'Port of Discharge',
+      flex: 1,
+      minWidth: 170,
+      editable: true,
+    },
+    {
+      field: 'lastCy',
+      headerName: 'Last CY',
+      flex: 0.8,
+      minWidth: 140,
       editable: true,
     },
     {
       field: 'fd',
       headerName: 'Final Destination',
       flex: 1,
-      minWidth: 200,
+      minWidth: 180,
       editable: true,
     },
     {
@@ -121,12 +141,12 @@ export default function NewRateRequest() {
   /* ── row editing ─────────────────────────────────────────────────────── */
 
   const processRowUpdate = useCallback((newRow, oldRow) => {
-    const newKey = laneKey(newRow)
-    // Only check for duplicates if both fields are filled
-    if (newKey && newKey !== '|') {
+    // Only check for duplicates once the lane has both endpoints
+    if (!isEmptyLane(newRow)) {
+      const newKey = laneKey(newRow)
       const isDuplicate = rows.some(r => r.id !== newRow.id && laneKey(r) === newKey)
       if (isDuplicate) {
-        showToast('warning', 'Duplicate lane — this POL / FD pair already exists')
+        showToast('warning', 'Duplicate lane — this routing already exists')
         return oldRow
       }
     }
@@ -161,10 +181,12 @@ export default function NewRateRequest() {
           .map(row => {
             // flexible header matching: accept common variations
             const pol = row.pol ?? row.POL ?? row['Port of Loading'] ?? row['port_of_loading'] ?? ''
+            const pod = row.pod ?? row.POD ?? row['Port of Discharge'] ?? row['port_of_discharge'] ?? ''
+            const lastCy = row.last_cy ?? row.lastCy ?? row['Last CY'] ?? row['lastcy'] ?? ''
             const fd = row.fd ?? row.FD ?? row['Final Destination'] ?? row['final_destination'] ?? ''
             const containerType = row.containerType ?? row.container_type ?? row['Container Type'] ?? ''
             const containerCount = row.containerCount ?? row.container_count ?? row['# of Containers'] ?? row['# Containers'] ?? row['containers'] ?? ''
-            return { id: nextId++, pol: pol.trim(), fd: fd.trim(), containerType: containerType.toString().trim(), containerCount: containerCount === '' ? '' : Number(containerCount) || '' }
+            return { id: nextId++, pol: pol.trim(), pod: pod.trim(), lastCy: lastCy.trim(), fd: fd.trim(), containerType: containerType.toString().trim(), containerCount: containerCount === '' ? '' : Number(containerCount) || '' }
           })
           .filter(r => r.pol || r.fd) // drop fully empty rows
 
@@ -205,7 +227,7 @@ export default function NewRateRequest() {
 
     setPosting(true)
     const { batch, error } = await postRateRequestBatch(
-      dedupedValid.map(({ pol, fd, containerType, containerCount }) => ({ pol, fd, containerType, containerCount })),
+      dedupedValid.map(({ pol, pod, lastCy, fd, containerType, containerCount }) => ({ pol, pod, lastCy, fd, containerType, containerCount })),
       user.id
     )
     setPosting(false)

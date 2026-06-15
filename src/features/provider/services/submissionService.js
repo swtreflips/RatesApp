@@ -26,7 +26,7 @@ import { supabase } from '../../../lib/supabase'
 export async function fetchActiveLanes() {
   const { data: lanes, error } = await supabase
     .from('rate_request_lanes')
-    .select('id, pol, fd, container_type, container_count, period, posted_at, expires_at')
+    .select('id, pol, pod, last_cy, fd, container_type, container_count, period, posted_at, expires_at')
     .gt('expires_at', new Date().toISOString())
     .order('expires_at', { ascending: true })
   if (error) return { lanes: [], error }

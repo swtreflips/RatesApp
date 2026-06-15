@@ -13,6 +13,8 @@ import { supabase } from '../../../lib/supabase'
   id               uuid  PK  default gen_random_uuid()
   batch_id         uuid  FK → rate_request_batches(id)
   pol              text  not null
+  pod              text                -- optional: requester-specified discharge port
+  last_cy          text                -- optional: requester-specified last container yard
   fd               text  not null
   container_type   text
   container_count  integer
@@ -41,6 +43,8 @@ export async function postRateRequestBatch(lanes, requesterId) {
   const laneRows = lanes.map(l => ({
     batch_id: batch.id,
     pol: l.pol,
+    pod: l.pod || null,
+    last_cy: l.lastCy || null,
     fd: l.fd,
     container_type: l.containerType || null,
     container_count: l.containerCount || null,
@@ -87,7 +91,7 @@ export async function fetchReceivedRates() {
 export async function fetchOpenRequests() {
   const { data, error } = await supabase
     .from('rate_request_lanes')
-    .select('id, pol, fd, container_type, container_count, period, posted_at, expires_at, rates(count)')
+    .select('id, pol, pod, last_cy, fd, container_type, container_count, period, posted_at, expires_at, rates(count)')
     .gt('expires_at', new Date().toISOString())
     .order('expires_at', { ascending: true })
 

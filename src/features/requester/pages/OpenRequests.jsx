@@ -85,10 +85,12 @@ export default function OpenRequests() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-fog-200 bg-white shadow-card">
-          <table className="w-full min-w-[760px] text-left text-sm">
+          <table className="w-full min-w-[920px] text-left text-sm">
             <thead>
               <tr className="border-b border-fog-200 bg-fog-50 font-mono text-[10px] uppercase tracking-[0.06em] text-fog-500">
                 <th className="px-3 py-2.5 font-semibold">Port of Loading</th>
+                <th className="px-3 py-2.5 font-semibold">Port of Discharge</th>
+                <th className="px-3 py-2.5 font-semibold">Last CY</th>
                 <th className="px-3 py-2.5 font-semibold">Final Destination</th>
                 <th className="px-3 py-2.5 font-semibold">Cont. Type</th>
                 <th className="px-3 py-2.5 text-right font-semibold"># Cont.</th>
@@ -104,6 +106,8 @@ export default function OpenRequests() {
                 return (
                   <tr key={l.id} className="border-b border-fog-100 last:border-0 hover:bg-fog-50/60">
                     <td className="px-3 py-2.5 font-medium text-harbor-900">{l.pol ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-harbor-700">{l.pod ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-harbor-700">{l.last_cy ?? '—'}</td>
                     <td className="px-3 py-2.5 text-harbor-700">{l.fd ?? '—'}</td>
                     <td className="px-3 py-2.5 font-mono text-harbor-700">{l.container_type ?? '—'}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-harbor-700">{l.container_count ?? '—'}</td>
