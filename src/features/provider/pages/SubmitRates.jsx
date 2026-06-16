@@ -27,22 +27,11 @@ const CARRIER_CODES = new Set([
 ])
 
 const normalizeCarrier = (v) => String(v ?? '').trim().toUpperCase()
-const isCarrierCode = (v) => CARRIER_CODES.has(normalizeCarrier(v))
 
 // Parse a comma-separated carrier string (manual grid entry) → deduped array of
 // recognized codes. Unrecognized tokens are dropped.
-const splitCarriers = (text) => {
-  const seen = new Set()
-  const out = []
-  for (const part of String(text ?? '').split(',')) {
-    const code = normalizeCarrier(part)
-    if (code && isCarrierCode(code) && !seen.has(code)) {
-      seen.add(code)
-      out.push(code)
-    }
-  }
-  return out
-}
+const splitCarriers = (text) =>
+  [...new Set(String(text ?? '').split(',').map(normalizeCarrier).filter((c) => CARRIER_CODES.has(c)))]
 
 // temp id for free rows — string-prefixed so it never collides with a lane's uuid id
 let nextTempId = 1
@@ -86,18 +75,18 @@ const makeRowFromLane = (lane) => ({
   remarks: '',
 })
 
-// Flexible header → column-index map. Each field lists the header aliases it accepts;
-// the first header cell that matches (case-insensitive) wins. Built once per upload so
-// we can read raw rows positionally — which is what lets us reach the unnamed/"ghost"
+// Flexible header → column-index map. Each field lists the header aliases it accepts
+// (authored lowercase; matching is case-insensitive); the first matching header cell
+// wins. We read raw rows positionally — which is what lets us reach the unnamed/"ghost"
 // carrier columns the forwarders append to the end of a row.
 const CSV_FIELD_ALIASES = {
-  pol: ['pol', 'Port of Loading', 'port_of_loading'],
-  pod: ['pod', 'Port of Discharge', 'port_of_discharge'],
-  lastCy: ['last_cy', 'Last CY', 'Last CY/CFS', 'lastcy', 'lastCy'],
-  rate: ['rate', 'Rate/Unit', 'Rate per Unit', 'rate_amount'],
-  freeDays: ['free_days', 'Free Days', '# of Free Days', 'freeDays'],
+  pol: ['pol', 'port of loading', 'port_of_loading'],
+  pod: ['pod', 'port of discharge', 'port_of_discharge'],
+  lastCy: ['last_cy', 'last cy', 'last cy/cfs', 'lastcy'],
+  rate: ['rate', 'rate/unit', 'rate per unit', 'rate_amount'],
+  freeDays: ['free_days', 'free days', '# of free days', 'freedays'],
   carrier: ['carrier'],
-  validUntil: ['valid_until', 'Valid Until', 'validUntil', 'valid until'],
+  validUntil: ['valid_until', 'valid until', 'validuntil'],
   remarks: ['remarks', 'notes'],
 }
 
@@ -105,8 +94,7 @@ const buildHeaderIndex = (headerCells) => {
   const normalized = headerCells.map((h) => String(h ?? '').trim().toLowerCase())
   const index = {}
   for (const [field, aliases] of Object.entries(CSV_FIELD_ALIASES)) {
-    const wanted = aliases.map((a) => a.toLowerCase())
-    const at = normalized.findIndex((h) => h !== '' && wanted.includes(h))
+    const at = normalized.findIndex((h) => h !== '' && aliases.includes(h))
     if (at !== -1) index[field] = at
   }
   return index
@@ -119,19 +107,16 @@ const makeRowFromCsv = (cells, headerIndex) => {
   const valid = validRaw ? new Date(validRaw) : null
 
   // Carriers + trailing comments: scan from the Carrier column to the end of the row.
-  // Recognized codes become carriers; everything else is folded into Remarks.
-  const carriers = []
+  // Recognized codes become carriers (deduped); everything else is folded into Remarks.
+  const carriers = new Set()
   const remarkFragments = []
   if (headerIndex.carrier != null) {
     for (let i = headerIndex.carrier; i < cells.length; i++) {
       const val = String(cells[i] ?? '').trim()
       if (!val) continue
-      if (isCarrierCode(val)) {
-        const code = normalizeCarrier(val)
-        if (!carriers.includes(code)) carriers.push(code)
-      } else {
-        remarkFragments.push(val)
-      }
+      const code = normalizeCarrier(val)
+      if (CARRIER_CODES.has(code)) carriers.add(code)
+      else remarkFragments.push(val)
     }
   }
 
@@ -149,7 +134,7 @@ const makeRowFromCsv = (cells, headerIndex) => {
     lastCy: cellAt(cells, headerIndex.lastCy),
     rate: cellAt(cells, headerIndex.rate),
     freeDays: cellAt(cells, headerIndex.freeDays),
-    carrier: carriers,
+    carrier: [...carriers],
     validUntil: valid && !isNaN(valid.getTime()) ? valid : null,
     remarks,
   }
