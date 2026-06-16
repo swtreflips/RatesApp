@@ -275,6 +275,23 @@ Entra rotates the refresh token on each use; persisting it keeps the chain alive
 lapse, MFA, or conditional-access change still invalidates it → the function must **fail loudly**
 so the token can be re-seeded.
 
+**Keep-alive — Supabase cron (DECIDED).** A scheduled function (**pg_cron**) runs the **same
+refresh-token grant every 7 days, server-side**, and updates the `graph_credentials` row —
+entirely in the cloud. This is a **non-interactive keep-alive refresh, NOT the interactive
+device-code re-seed**, so it runs unattended with **no dependency on anyone's machine**:
+colleagues use the Edge Function to send requests/reminders anytime, your computer off.
+
+- **Covers:** the ~90-day **inactivity** lapse — eliminated. (Sends already refresh+persist
+  on each ~10-day send; the cron just bulletproofs longer quiet stretches.)
+- **Does NOT cover:** **session-invalidation events** — password change, MFA re-registration,
+  conditional-access change, admin revoke. These kill the token regardless of refreshing and
+  need a **one-time interactive `python graph.py seed`** (rare, event-driven; the fail-loud
+  surfaces it). This is the accepted cost of staying delegated; **Phase-2 app-only** removes
+  even this (no user session → nothing to invalidate).
+- **Concurrency note:** if the cron and a send fire together, both consume + rotate the token;
+  Entra tolerates a brief reuse window, so the race is low-risk at this scale — keep the
+  `graph_credentials` row the single source of truth.
+
 **Send call** (adds HTML body + the `.xlsx`, which the CRM code lacks):
 
 ```
@@ -399,6 +416,7 @@ filling 10 lanes must not generate 10 emails.
 | Batch handling | **Full outstanding per forwarder** — no special subsequent/single-batch path (§14) |
 | Extra template fields | **Blank for now** (Cargo Ready Date / Incoterm / PO(s) / Internal ID deferred) |
 | Graph auth | **Phase 1: delegated refresh-token** reusing the CRM public-client app (`client_id d4a32e7f…` / `tenant cc38fec1…`), no Azure changes (§6c) → **Phase 2: app-only (`Mail.Send`)** + ApplicationAccessPolicy |
+| Token keep-alive | ✅ **Supabase `pg_cron` every 7 days** runs the refresh-grant + updates `graph_credentials`, server-side (machine-independent). Manual re-seed **only** on session-invalidation events (§6c) |
 | Sender mailbox | **Phase 1: seeded** `luismht@primetimepackaging.com` (sends via `/me`) → **Phase 2: shared** `rates@ptpbags.com` (config-only swap) |
 | Trigger | **Edge Function via `invoke`** (vs DB-webhook event-sourced) |
 | Hosting | Edge Function **or** reuse the CRM backend's Graph endpoint *(open)* |
