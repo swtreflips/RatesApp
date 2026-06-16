@@ -268,3 +268,14 @@ rehearsal; note them before trusting the app with external parties' pricing.
 - Vercel raw-URL exposure: Pro deployment-protection vs Hobby login-only (`MOCKDEPLOY.md` §9).
 - Coverage masking before real onboarding: build vs accept noise (#6).
 - App-only Graph migration timing: rehearsal on delegated, switch before scale (#5).
+Recommended next steps, in order
+Prove the send today — graph.py seed once, then test-send to yourself. Zero dependencies, de-risks the whole transport before you build anything.
+Build the Alerts slice — tables (notifications, notification_recipients, graph_credentials), template → Supabase Storage, the notify-forwarders Edge Function (port graph.py to Deno) + the 7-day cron + the two buttons/cooldown + inbound submit→team.
+Build the provider .xlsx upload — close the return loop (same template, both directions).
+Stage 4: deploy + gate — domain + Cloudflare ZT + magic link. Decide the gate option here.
+Harden (Phase E) — route guards, env-gate the dev toggle, and run the isolation test with two forwarder accounts. ← this passing is your green light.
+Onboard real forwarders (data-only flip).
+Top things to keep honest about
+The return path (#3) must exist before you lean on app submission — otherwise keep the email/upload-back fallback.
+The isolation test is the gate, not a nicety — one wrong RLS policy leaks competitor pricing.
+Fail loud on token death so a missed period blast never goes silent.
