@@ -8,3 +8,8 @@ dist
 .agents/
 .claude/
 skills-lock.json
+
+# Python (graph.py reference / Graph send tooling)
+__pycache__/
+*.pyc
+.graph_refresh_token
