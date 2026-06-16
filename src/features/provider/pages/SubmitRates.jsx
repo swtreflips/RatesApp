@@ -19,6 +19,31 @@ import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services
   No fields are required yet.
 */
 
+// Known ocean carrier codes (SCAC-style). Trailing CSV cells that match one of these
+// are read as carriers; anything else is treated as free text and folded into Remarks.
+const CARRIER_CODES = new Set([
+  'CMA', 'COS', 'EMC', 'HMM', 'HPL', 'MATS', 'MSC',
+  'MSK', 'ONE', 'OOCL', 'SML', 'WHL', 'YML', 'ZIM',
+])
+
+const normalizeCarrier = (v) => String(v ?? '').trim().toUpperCase()
+const isCarrierCode = (v) => CARRIER_CODES.has(normalizeCarrier(v))
+
+// Parse a comma-separated carrier string (manual grid entry) → deduped array of
+// recognized codes. Unrecognized tokens are dropped.
+const splitCarriers = (text) => {
+  const seen = new Set()
+  const out = []
+  for (const part of String(text ?? '').split(',')) {
+    const code = normalizeCarrier(part)
+    if (code && isCarrierCode(code) && !seen.has(code)) {
+      seen.add(code)
+      out.push(code)
+    }
+  }
+  return out
+}
+
 // temp id for free rows — string-prefixed so it never collides with a lane's uuid id
 let nextTempId = 1
 
@@ -36,7 +61,7 @@ const makeEmptyRow = () => ({
   lastCy: '',
   rate: '',
   freeDays: '',
-  carrier: '',
+  carrier: [],
   validUntil: null,
   remarks: '',
 })
@@ -56,21 +81,62 @@ const makeRowFromLane = (lane) => ({
   lastCy: lane.last_cy ?? '',
   rate: '',
   freeDays: '',
-  carrier: '',
+  carrier: [],
   validUntil: null,
   remarks: '',
 })
 
-const firstNonEmpty = (row, keys) => {
-  for (const k of keys) {
-    if (row[k] != null && String(row[k]).trim() !== '') return String(row[k]).trim()
-  }
-  return ''
+// Flexible header → column-index map. Each field lists the header aliases it accepts;
+// the first header cell that matches (case-insensitive) wins. Built once per upload so
+// we can read raw rows positionally — which is what lets us reach the unnamed/"ghost"
+// carrier columns the forwarders append to the end of a row.
+const CSV_FIELD_ALIASES = {
+  pol: ['pol', 'Port of Loading', 'port_of_loading'],
+  pod: ['pod', 'Port of Discharge', 'port_of_discharge'],
+  lastCy: ['last_cy', 'Last CY', 'Last CY/CFS', 'lastcy', 'lastCy'],
+  rate: ['rate', 'Rate/Unit', 'Rate per Unit', 'rate_amount'],
+  freeDays: ['free_days', 'Free Days', '# of Free Days', 'freeDays'],
+  carrier: ['carrier'],
+  validUntil: ['valid_until', 'Valid Until', 'validUntil', 'valid until'],
+  remarks: ['remarks', 'notes'],
 }
 
-const makeRowFromCsv = (row) => {
-  const validRaw = firstNonEmpty(row, ['valid_until', 'Valid Until', 'validUntil', 'valid until'])
+const buildHeaderIndex = (headerCells) => {
+  const normalized = headerCells.map((h) => String(h ?? '').trim().toLowerCase())
+  const index = {}
+  for (const [field, aliases] of Object.entries(CSV_FIELD_ALIASES)) {
+    const wanted = aliases.map((a) => a.toLowerCase())
+    const at = normalized.findIndex((h) => h !== '' && wanted.includes(h))
+    if (at !== -1) index[field] = at
+  }
+  return index
+}
+
+const cellAt = (cells, idx) => (idx == null ? '' : String(cells[idx] ?? '').trim())
+
+const makeRowFromCsv = (cells, headerIndex) => {
+  const validRaw = cellAt(cells, headerIndex.validUntil)
   const valid = validRaw ? new Date(validRaw) : null
+
+  // Carriers + trailing comments: scan from the Carrier column to the end of the row.
+  // Recognized codes become carriers; everything else is folded into Remarks.
+  const carriers = []
+  const remarkFragments = []
+  if (headerIndex.carrier != null) {
+    for (let i = headerIndex.carrier; i < cells.length; i++) {
+      const val = String(cells[i] ?? '').trim()
+      if (!val) continue
+      if (isCarrierCode(val)) {
+        const code = normalizeCarrier(val)
+        if (!carriers.includes(code)) carriers.push(code)
+      } else {
+        remarkFragments.push(val)
+      }
+    }
+  }
+
+  const remarks = [cellAt(cells, headerIndex.remarks), ...remarkFragments].filter(Boolean).join('; ')
+
   return {
     id: `new-${nextTempId++}`,
     laneId: null,
@@ -78,19 +144,19 @@ const makeRowFromCsv = (row) => {
     fd: '',
     containerType: '',
     containerCount: '',
-    pol: firstNonEmpty(row, ['pol', 'POL', 'Port of Loading', 'port_of_loading']),
-    pod: firstNonEmpty(row, ['pod', 'POD', 'Port of Discharge', 'port_of_discharge']),
-    lastCy: firstNonEmpty(row, ['last_cy', 'Last CY', 'lastcy', 'lastCy']),
-    rate: firstNonEmpty(row, ['rate', 'Rate', 'Rate/Unit', 'Rate per Unit', 'rate_amount']),
-    freeDays: firstNonEmpty(row, ['free_days', 'Free Days', '# of Free Days', 'freeDays']),
-    carrier: firstNonEmpty(row, ['carrier', 'Carrier']),
+    pol: cellAt(cells, headerIndex.pol),
+    pod: cellAt(cells, headerIndex.pod),
+    lastCy: cellAt(cells, headerIndex.lastCy),
+    rate: cellAt(cells, headerIndex.rate),
+    freeDays: cellAt(cells, headerIndex.freeDays),
+    carrier: carriers,
     validUntil: valid && !isNaN(valid.getTime()) ? valid : null,
-    remarks: firstNonEmpty(row, ['remarks', 'Remarks', 'notes', 'Notes']),
+    remarks,
   }
 }
 
 const isBlankRow = (r) =>
-  !r.laneId && !r.pol && r.rate === '' && !r.pod && !r.lastCy && !r.carrier && !r.remarks
+  !r.laneId && !r.pol && r.rate === '' && !r.pod && !r.lastCy && r.carrier.length === 0 && !r.remarks
 
 const TOAST_COLORS = {
   success: 'bg-sea-600',
@@ -165,7 +231,16 @@ export default function SubmitRates() {
       type: 'number',
       cellClassName: 'font-mono',
     },
-    { field: 'carrier', headerName: 'Carrier', flex: 0.9, minWidth: 80, editable: true },
+    {
+      field: 'carrier',
+      headerName: 'Carrier',
+      flex: 1,
+      minWidth: 96,
+      editable: true,
+      // underlying value is an array of codes; show/edit as a comma-separated string
+      valueGetter: (value, row) => (row.carrier ?? []).join(', '),
+      valueSetter: (value, row) => ({ ...row, carrier: splitCarriers(value) }),
+    },
     {
       field: 'validUntil',
       headerName: 'Valid Until',
@@ -239,13 +314,21 @@ export default function SubmitRates() {
     const file = e.target.files?.[0]
     if (!file) return
 
+    // Parse positionally (header: false) so we can reach the unnamed trailing carrier
+    // columns the forwarders append. Row 0 is the header; remaining rows are data.
     Papa.parse(file, {
-      header: true,
+      header: false,
       skipEmptyLines: true,
       complete(results) {
-        const parsed = results.data
-          .map(makeRowFromCsv)
-          .filter((r) => r.pol || r.rate !== '') // drop fully empty rows
+        const [headerCells, ...dataRows] = results.data
+        if (!headerCells) {
+          showToast('warning', 'CSV had no rows.')
+          return
+        }
+        const headerIndex = buildHeaderIndex(headerCells)
+        const parsed = dataRows
+          .map((cells) => makeRowFromCsv(cells, headerIndex))
+          .filter((r) => r.pol || r.rate !== '' || r.carrier.length > 0) // drop fully empty rows
         if (parsed.length === 0) {
           showToast('warning', 'CSV had no usable rows. Expected columns like POL, Rate.')
           return
@@ -265,7 +348,8 @@ export default function SubmitRates() {
   /* ── submit ──────────────────────────────────────────────────────────── */
 
   const filledRows = rows.filter((r) => r.rate !== '' && r.rate != null)
-  const rateCount = filledRows.length
+  // each filled row fans out into one rate per carrier (≥1, so a carrier-less row still counts as one)
+  const rateCount = filledRows.reduce((n, r) => n + Math.max((r.carrier ?? []).length, 1), 0)
   const hasRequests = rows.some((r) => r.laneId)
 
   const handleSubmit = async () => {

@@ -86,17 +86,33 @@ function toNumber(v) {
 }
 
 /**
+ * The carriers a row should fan out into. A row's `carrier` is normally an array of
+ * codes (one rate is written per code). Falls back to a single non-empty string, and
+ * to `[null]` when there's no carrier — so a carrier-less row still yields exactly one
+ * rate, preserving prior behavior.
+ */
+function carriersOf(r) {
+  if (Array.isArray(r.carrier) && r.carrier.length > 0) return r.carrier
+  if (typeof r.carrier === 'string' && r.carrier.trim() !== '') return [r.carrier.trim()]
+  return [null]
+}
+
+/**
  * Submit provider rates — both lane-linked (answering a request) and independent.
  * @param {{ laneId?: string|null, period?: number|null, pol?: string, fd?: string,
  *           pod?: string, lastCy?: string, rate?: number|string, freeDays?: number|string,
- *           carrier?: string, validUntil?: Date|string, remarks?: string }[]} rows
+ *           carrier?: string[]|string, validUntil?: Date|string, remarks?: string }[]} rows
  *   one entry per filled grid row. Rows with a `laneId` answer a request; rows without
  *   one are independent rates (supply that exists with no matching demand).
  * @returns {{ error: Error|null, count?: number }}
  *
+ * A row's `carrier` may carry multiple codes (forwarders quote the same route + price
+ * under several carriers). Each row fans out into one `rate` row per carrier — see
+ * carriersOf — so the count reflects rates written, not grid rows.
+ *
  * Lane-linked rows ensure exactly one `submitted` acknowledgement per
  * (lane, forwarder, period) — find-or-create against the partial
- * UNIQUE(lane_id, forwarder_id, period) — then APPEND their rate rows.
+ * UNIQUE(lane_id, forwarder_id, period) — then APPEND their (possibly multiple) rate rows.
  * Independent rows insert rate rows directly with no acknowledgement (there is no
  * demand to acknowledge) and null lane_id/submission_id/period.
  */
@@ -111,8 +127,9 @@ export async function submitRates(rows) {
     return { error: new Error('No rates to submit') }
   }
 
-  // shared shape for a rate row; lane_id/submission_id/period default to null (independent)
-  const buildRate = (r, { submissionId = null, laneId = null, period = null }) => ({
+  // shared shape for a rate row; lane_id/submission_id/period default to null (independent).
+  // `carrier` is a single resolved code (the row is fanned out across carriersOf upstream).
+  const buildRate = (r, { submissionId = null, laneId = null, period = null }, carrier = null) => ({
     submission_id: submissionId,
     lane_id: laneId,
     forwarder_id: forwarderId,
@@ -122,7 +139,7 @@ export async function submitRates(rows) {
     pod: r.pod || null,
     last_cy: r.lastCy || null,
     fd: r.fd || null,
-    carrier: r.carrier || null,
+    carrier: carrier || null,
     rate_amount: toNumber(r.rate),
     free_days: toNumber(r.freeDays),
     valid_until: toDateString(r.validUntil),
@@ -167,7 +184,8 @@ export async function submitRates(rows) {
       submissionId = created.id
     }
 
-    const rateRows = laneRows.map((r) => buildRate(r, { submissionId, laneId, period }))
+    const rateRows = laneRows.flatMap((r) =>
+      carriersOf(r).map((c) => buildRate(r, { submissionId, laneId, period }, c)))
     const { error: ratesErr } = await supabase.from('rates').insert(rateRows)
     if (ratesErr) return { error: ratesErr }
     count += rateRows.length
@@ -175,7 +193,7 @@ export async function submitRates(rows) {
 
   // ── independent: no demand to acknowledge → insert rate rows directly
   if (independent.length > 0) {
-    const rateRows = independent.map((r) => buildRate(r, {}))
+    const rateRows = independent.flatMap((r) => carriersOf(r).map((c) => buildRate(r, {}, c)))
     const { error: indErr } = await supabase.from('rates').insert(rateRows)
     if (indErr) return { error: indErr }
     count += rateRows.length
