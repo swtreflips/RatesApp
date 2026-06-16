@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
-import { Trash2, Plus, Upload, Send, X, Loader2 } from 'lucide-react'
+import { Trash2, Copy, Plus, Upload, Send, X, Loader2 } from 'lucide-react'
 import Papa from 'papaparse'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services/submissionService'
@@ -73,6 +73,20 @@ const makeRowFromLane = (lane) => ({
   carrier: [],
   validUntil: null,
   remarks: '',
+})
+
+// Duplicate a row to quote another variation of the same lane: carry the request-template
+// fields (POL + guides) and blank every rate field for the user to fill. Starts from a
+// blank row so it gets a fresh temp id (id ≠ laneId ⇒ never mistaken for the lane's
+// primary row) while keeping laneId/period so its rates group under the lane's submission.
+const makeCopyRow = (source) => ({
+  ...makeEmptyRow(),
+  laneId: source.laneId ?? null,
+  period: source.period ?? null,
+  pol: source.pol,
+  fd: source.fd,
+  containerType: source.containerType,
+  containerCount: source.containerCount,
 })
 
 // Flexible header → column-index map. Each field lists the header aliases it accepts
@@ -237,18 +251,28 @@ export default function SubmitRates() {
     {
       field: 'actions',
       headerName: '',
-      width: 40,
+      width: 72,
       sortable: false,
       filterable: false,
       renderCell: (params) => (
-        <button
-          className="rounded-md p-1 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
-          onClick={() => handleDeleteRow(params.row)}
-          tabIndex={-1}
-          title={params.row.laneId ? 'Skip this lane' : 'Remove this row'}
-        >
-          <Trash2 size={15} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
+            onClick={() => handleCopyRow(params.row)}
+            tabIndex={-1}
+            title="Duplicate this row"
+          >
+            <Copy size={15} />
+          </button>
+          <button
+            className="rounded-md p-1 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
+            onClick={() => handleDeleteRow(params.row)}
+            tabIndex={-1}
+            title={params.row.id === params.row.laneId ? 'Skip this lane' : 'Remove this row'}
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
       ),
     },
   ]
@@ -262,9 +286,19 @@ export default function SubmitRates() {
 
   const handleAddRow = () => setRows((prev) => [...prev, makeEmptyRow()])
 
+  // Duplicate a row, dropping the copy directly below its source so the grid stays ordered.
+  const handleCopyRow = (row) => setRows((prev) => {
+    const idx = prev.findIndex((r) => r.id === row.id)
+    const next = [...prev]
+    next.splice(idx === -1 ? next.length : idx + 1, 0, makeCopyRow(row))
+    return next
+  })
+
   const handleDeleteRow = async (row) => {
-    // Free/independent row — never persisted, so just drop it locally.
-    if (!row.laneId) {
+    // Free rows and copies (temp id ⇒ id !== laneId) are never persisted on their own —
+    // drop them locally. Only the lane's primary row (id === laneId) persists a skip.
+    const isPrimaryLaneRow = row.laneId && row.id === row.laneId
+    if (!isPrimaryLaneRow) {
       setRows((prev) => {
         const filtered = prev.filter((r) => r.id !== row.id)
         return filtered.length === 0 ? [makeEmptyRow()] : filtered
