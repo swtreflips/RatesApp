@@ -455,6 +455,7 @@ export default function SubmitRates() {
             rows={rows}
             columns={columns}
             processRowUpdate={processRowUpdate}
+            tabNavigation="content"
             disableRowSelectionOnClick
             hideFooter
             autoHeight
