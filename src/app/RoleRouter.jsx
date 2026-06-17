@@ -2,12 +2,13 @@ import React, { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { useAuth } from './providers/AuthProvider'
+import { ROLES } from '../lib/roles'
 
-// Feature domains are code-split so the heavy requester grid (MUI X DataGrid)
+// Feature domains are code-split so the heavy internal grid (MUI X DataGrid)
 // is only fetched when that domain is actually visited — keeps the initial
 // bundle small (Vercel react-best-practices: bundle-dynamic-imports).
-const RequesterRoot = lazy(() => import('../features/requester/pages/RequesterRoot'))
-const ProviderRoot = lazy(() => import('../features/provider/pages/ProviderRoot'))
+const InternalRoot = lazy(() => import('../features/internal/pages/InternalRoot'))
+const ForwarderRoot = lazy(() => import('../features/forwarder/pages/ForwarderRoot'))
 
 /** Lightweight fallback shown while a lazy domain chunk loads. */
 function RouteFallback() {
@@ -31,14 +32,14 @@ export default function RoleRouter() {
       {/* Default redirect based on role */}
       <Route
         path="/"
-        element={<Navigate to={role === 'provider' ? '/provider' : '/requester'} replace />}
+        element={<Navigate to={role === ROLES.FORWARDER ? '/forwarder' : '/internal'} replace />}
       />
 
-      {/* Requester feature domain — only mounted for requesters */}
-      {role === 'requester' && <Route path="/requester/*" element={<RequesterRoot />} />}
+      {/* Internal feature domain — only mounted for internal users */}
+      {role === ROLES.INTERNAL && <Route path="/internal/*" element={<InternalRoot />} />}
 
-      {/* Provider feature domain — only mounted for providers */}
-      {role === 'provider' && <Route path="/provider/*" element={<ProviderRoot />} />}
+      {/* Forwarder feature domain — only mounted for forwarders */}
+      {role === ROLES.FORWARDER && <Route path="/forwarder/*" element={<ForwarderRoot />} />}
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />

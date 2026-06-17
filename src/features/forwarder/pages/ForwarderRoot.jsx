@@ -9,7 +9,7 @@ const ActiveRates = lazy(() => import('./ActiveRates'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
-function ProviderDashboard() {
+function ForwarderDashboard() {
   const navigate = useNavigate()
 
   const stats = [
@@ -25,7 +25,7 @@ function ProviderDashboard() {
         subtitle="Demand that needs your attention and the rates you currently have live."
         actions={
           <button
-            onClick={() => navigate('/provider/lanes')}
+            onClick={() => navigate('/forwarder/lanes')}
             className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
           >
             <Ship size={16} className="transition-transform group-hover:scale-110" />
@@ -46,10 +46,10 @@ function ProviderDashboard() {
 
 /* ─── Route mount ─────────────────────────────────────────────────────── */
 
-export default function ProviderRoot() {
+export default function ForwarderRoot() {
   return (
     <Routes>
-      <Route index element={<ProviderDashboard />} />
+      <Route index element={<ForwarderDashboard />} />
       <Route
         path="lanes"
         element={

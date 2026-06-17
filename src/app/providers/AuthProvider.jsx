@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { ROLES, normalizeRole } from '../../lib/roles'
 
 const AuthContext = createContext(null)
 
@@ -12,9 +13,10 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Dev-mode mock: allows toggling role without a real auth session
+  // Dev-mode mock: allows toggling role without a real auth session.
+  // normalizeRole maps any legacy 'requester'/'provider' value left in localStorage.
   const [devRole, setDevRole] = useState(
-    () => localStorage.getItem('dev_role') ?? 'requester'
+    () => normalizeRole(localStorage.getItem('dev_role') ?? ROLES.INTERNAL)
   )
 
   // The signed-in user's forwarder company name (providers only; null for requesters)
@@ -62,10 +64,11 @@ export function AuthProvider({ children }) {
   }, [session?.user?.id])
 
   const user = session?.user ?? null
-  const role = user?.user_metadata?.role ?? devRole
+  // normalizeRole keeps pre-rename codes (requester/provider) working from cached metadata.
+  const role = normalizeRole(user?.user_metadata?.role ?? devRole)
 
   function toggleDevRole() {
-    const next = devRole === 'requester' ? 'provider' : 'requester'
+    const next = devRole === ROLES.INTERNAL ? ROLES.FORWARDER : ROLES.INTERNAL
     setDevRole(next)
     localStorage.setItem('dev_role', next)
   }

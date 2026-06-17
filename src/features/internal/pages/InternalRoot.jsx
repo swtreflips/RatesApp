@@ -11,7 +11,7 @@ const ReceivedRates = lazy(() => import('./ReceivedRates'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
-function RequesterDashboard() {
+function InternalDashboard() {
   const navigate = useNavigate()
 
   const stats = [
@@ -22,12 +22,12 @@ function RequesterDashboard() {
   return (
     <div className="mx-auto w-full max-w-7xl space-y-7">
       <PageHeader
-        kicker="Requester · Overview"
+        kicker="Internal · Overview"
         title="Dashboard"
         subtitle="Overview of your rate requests and incoming quotes."
         actions={
           <button
-            onClick={() => navigate('/requester/new')}
+            onClick={() => navigate('/internal/new')}
             className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
           >
             <FilePlus size={16} className="transition-transform group-hover:scale-110" />
@@ -48,10 +48,10 @@ function RequesterDashboard() {
 
 /* ─── Route mount ─────────────────────────────────────────────────────── */
 
-export default function RequesterRoot() {
+export default function InternalRoot() {
   return (
     <Routes>
-      <Route index element={<RequesterDashboard />} />
+      <Route index element={<InternalDashboard />} />
       <Route
         path="new"
         element={

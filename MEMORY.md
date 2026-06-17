@@ -9,6 +9,13 @@
 > `MOCKDEPLOY.md §4/§5` and `PROVIDER_VIEW_MODEL.md` are now **partially stale** — see
 > "Divergences" below. When in doubt, trust this doc.
 
+> 🔁 **Role rename (June 17, 2026):** roles are now **`internal`** (was `requester`) and
+> **`forwarder`** (was `provider`). Frontend is migrated (with a `normalizeRole` back-compat
+> shim in `src/lib/roles.js`). **The live DB migration SQL must still be run** — see the
+> role-rename plan / the migration script that updates `profiles.role`, the CHECK constraint,
+> the 5 role-referencing RLS policies, and `auth.users` `user_metadata.role`. The DDL/RLS
+> below already reflect the **new** values.
+
 ---
 
 ## 1. Divergences from the planning docs (important)
@@ -22,7 +29,7 @@ The deployed schema differs from `MOCKDEPLOY.md §4/§5` in these ways:
 | `rate_submissions`/`rates` have no `forwarder_id` | both have **`forwarder_id uuid not null`** |
 | `UNIQUE(lane_id, provider_id, period)` | **`UNIQUE(lane_id, forwarder_id, period)`** |
 | `rates.pol`/`rates.fd` are `NOT NULL` | **both nullable** (to allow FD-less independent rates) |
-| requester RLS scoped to own batches | requester RLS is **team-wide** (`current_role_is('requester')`) |
+| requester RLS scoped to own batches | requester RLS is **team-wide** (`current_role_is('internal')`) |
 
 Why: **forwarders are companies with multiple analysts who share visibility**, and
 **requesters are one internal team who all see the shared demand pool.** See §4.
@@ -42,8 +49,8 @@ create table forwarders (
 -- ── identity bridge: auth user → role + forwarder ─────────────────────────
 create table profiles (
   id           uuid primary key references auth.users(id) on delete cascade,
-  role         text not null check (role in ('requester','provider')),
-  forwarder_id uuid references forwarders(id),          -- null for requester
+  role         text not null check (role in ('internal','forwarder')),
+  forwarder_id uuid references forwarders(id),          -- null for internal
   full_name    text,
   company      text,
   created_at   timestamptz not null default now()
@@ -146,29 +153,29 @@ create policy "read forwarders" on forwarders
 
 -- batches: requester TEAM manages all; insert/update stamps the creator
 create policy "requester batches" on rate_request_batches
-  for all using (current_role_is('requester'))
-  with check (requester_id = auth.uid() and current_role_is('requester'));
+  for all using (current_role_is('internal'))
+  with check (requester_id = auth.uid() and current_role_is('internal'));
 
 -- lanes: requester TEAM manages all; providers read ALL lanes (shared demand)
 create policy "requester lanes" on rate_request_lanes
-  for all using (current_role_is('requester'))
-  with check (current_role_is('requester'));
+  for all using (current_role_is('internal'))
+  with check (current_role_is('internal'));
 create policy "providers read lanes" on rate_request_lanes
-  for select using (current_role_is('provider'));
+  for select using (current_role_is('forwarder'));
 
 -- submissions: the COMPANY sees/manages its acks; insert stamps the acting analyst
 create policy "forwarder submissions" on rate_submissions
   for all using (forwarder_id = my_forwarder())
   with check (forwarder_id = my_forwarder() and provider_id = auth.uid());
 create policy "requester reads submissions" on rate_submissions
-  for select using (current_role_is('requester') and lane_id is not null);
+  for select using (current_role_is('internal') and lane_id is not null);
 
 -- rates: THE isolation line is the COMPANY; requester team reads lane-linked rates only
 create policy "forwarder rates" on rates
   for all using (forwarder_id = my_forwarder())
   with check (forwarder_id = my_forwarder() and provider_id = auth.uid());
 create policy "requester reads rates" on rates
-  for select using (current_role_is('requester') and lane_id is not null);
+  for select using (current_role_is('internal') and lane_id is not null);
 ```
 
 **Net effect:** forwarder A's analysts share everything and can't see forwarder B; the
@@ -241,8 +248,8 @@ requester team sees all lanes + all lane-linked rates/skips; independent rates
 ## 7. Onboarding / seeding notes
 
 - A user works only if: (a) a Supabase **auth user** exists with `user_metadata.role`
-  (`requester`|`provider`), AND (b) a matching **`profiles`** row (`id` = auth uid, same
-  `role`, `forwarder_id` set for providers). Keep `user_metadata.role` ↔ `profiles.role` in sync.
+  (`internal`|`forwarder`), AND (b) a matching **`profiles`** row (`id` = auth uid, same
+  `role`, `forwarder_id` set for forwarders). Keep `user_metadata.role` ↔ `profiles.role` in sync.
 - Seed forwarders, then profiles. The SQL editor bypasses RLS (service role), which is why
   there are no insert policies on `forwarders`/`profiles`.
 - Adding a forwarder/analyst later = data-only (insert forwarder + auth user + profile),

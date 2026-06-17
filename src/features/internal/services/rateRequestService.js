@@ -80,9 +80,9 @@ export async function fetchReceivedRates() {
 }
 
 /**
- * Fetches the requester team's OPEN requests — active lanes still within the 10-day
- * window — with a count of rates received on each. RLS scopes lanes to the requester
- * team (current_role_is('requester')), so no owner filter is needed.
+ * Fetches the internal team's OPEN requests — active lanes still within the 10-day
+ * window — with a count of rates received on each. RLS scopes lanes to the internal
+ * team (current_role_is('internal')), so no owner filter is needed.
  *
  * `rates(count)` is an embedded aggregate (PostgREST), returned as `[{ count }]`.
  *

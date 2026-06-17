@@ -7,7 +7,7 @@ import { fetchOpenRequests } from '../services/rateRequestService'
 /*
   Requester "Open Requests" — active rate-request lanes still within their 10-day
   window, with a count of rates received on each. Shared across the requester team
-  (RLS scopes lanes to current_role_is('requester')). Minimal: a flat table, soonest
+  (RLS scopes lanes to current_role_is('internal')). Minimal: a flat table, soonest
   to expire first. Deferred: per-lane response roster (submitted / skipped / no-response).
 */
 
@@ -57,7 +57,7 @@ export default function OpenRequests() {
               Refresh
             </button>
             <button
-              onClick={() => navigate('/requester/new')}
+              onClick={() => navigate('/internal/new')}
               className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
             >
               <FilePlus size={16} className="transition-transform group-hover:scale-110" />

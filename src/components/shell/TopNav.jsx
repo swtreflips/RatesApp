@@ -9,18 +9,14 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../../app/providers/AuthProvider'
 import { supabase } from '../../lib/supabase'
-
-const ROLE_LABELS = {
-  requester: 'Requester',
-  provider:  'Freight Forwarder',
-}
+import { ROLES, ROLE_LABELS } from '../../lib/roles'
 
 export default function TopNav({ onMenuToggle }) {
   const { user, role, devRole, toggleDevRole, forwarderName } = useAuth()
 
-  // Workspace breadcrumb label: requesters are "PTP"; providers show their forwarder.
+  // Workspace breadcrumb label: internal users are "PTP"; forwarders show their company.
   const workspaceLabel =
-    role === 'provider' ? (forwarderName ?? ROLE_LABELS.provider) : 'PTP'
+    role === ROLES.FORWARDER ? (forwarderName ?? ROLE_LABELS.forwarder) : 'PTP'
   const [accountOpen, setAccountOpen] = useState(false)
   const menuRef = useRef(null)
 
@@ -119,7 +115,7 @@ export default function TopNav({ onMenuToggle }) {
                     className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs text-signal-700 transition-colors hover:bg-signal-50"
                   >
                     <span className="rounded bg-signal-100 px-1.5 py-0.5 font-mono font-bold text-signal-800">DEV</span>
-                    Switch to {devRole === 'requester' ? 'Provider' : 'Requester'}
+                    Switch to {devRole === ROLES.INTERNAL ? ROLE_LABELS.forwarder : ROLE_LABELS.internal}
                   </button>
                 </>
               )}

@@ -140,8 +140,8 @@ create table suppliers (
 -- ── identity bridge: auth user → role + supplier ──────────────────────────
 create table profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
-  role        text not null check (role in ('requester','provider')),
-  supplier_id uuid references suppliers(id),          -- null for requester
+  role        text not null check (role in ('internal','forwarder')),
+  supplier_id uuid references suppliers(id),          -- null for internal
   full_name   text,
   company     text,
   created_at  timestamptz not null default now()
@@ -258,7 +258,7 @@ create policy "requester lanes" on rate_request_lanes
     batch_id in (select id from rate_request_batches where requester_id = auth.uid())
   );
 create policy "providers read lanes" on rate_request_lanes
-  for select using (current_role_is('provider'));
+  for select using (current_role_is('forwarder'));
 
 -- submissions: a provider sees/writes ONLY their own; requester reads those on their lanes
 create policy "provider own submissions" on rate_submissions
@@ -329,8 +329,8 @@ won't group. Acceptable for the rehearsal; flag it when reviewing results.
       `http://localhost:5173` and the production domain (add the domain once chosen in
       Step 4). Magic links fail silently if the return URL isn't listed.
 - [ ] For each user, set `user_metadata`:
-      `{ "role": "requester", "full_name": "Jordan" }` /
-      `{ "role": "provider", "full_name": "Silvia" }` etc.
+      `{ "role": "internal", "full_name": "Jordan" }` /
+      `{ "role": "forwarder", "full_name": "Silvia" }` etc.
 - [ ] SQL: insert the two `suppliers`, then a `profiles` row per user linking
       `id` (from auth.users), `role`, and `supplier_id` (forwarders only):
       ```sql
@@ -380,7 +380,7 @@ no code, no schema change, no redeploy:
 
 1. **Supabase:** `insert into suppliers (name) values ('Real Forwarder Co');`
 2. **Supabase:** Authentication → Add user (their email; magic link needs no
-   password); set `user_metadata.role = 'provider'`.
+   password); set `user_metadata.role = 'forwarder'`.
 3. **Supabase:** `insert into profiles (id, role, supplier_id, full_name, company)
    values ('<their-uuid>', 'provider', '<supplier-uuid>', '...', 'Real Forwarder Co');`
 4. **Cloudflare:** add their email to the Access policy.

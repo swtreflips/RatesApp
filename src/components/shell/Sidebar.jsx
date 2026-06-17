@@ -12,20 +12,21 @@ import {
   FileText,
 } from 'lucide-react'
 import { useAuth } from '../../app/providers/AuthProvider'
+import { ROLES, ROLE_LABELS } from '../../lib/roles'
 
 /* ─── Nav item definitions per role ──────────────────────────────────── */
 
-const REQUESTER_NAV = [
-  { label: 'Dashboard',        icon: LayoutDashboard, to: '/requester',          end: true },
-  { label: 'New Rate Request', icon: FilePlus,        to: '/requester/new' },
-  { label: 'Open Requests',    icon: ClipboardList,   to: '/requester/requests' },
-  { label: 'Active Rates',     icon: CheckSquare,     to: '/requester/rates' },
+const INTERNAL_NAV = [
+  { label: 'Dashboard',        icon: LayoutDashboard, to: '/internal',          end: true },
+  { label: 'New Rate Request', icon: FilePlus,        to: '/internal/new' },
+  { label: 'Open Requests',    icon: ClipboardList,   to: '/internal/requests' },
+  { label: 'Active Rates',     icon: CheckSquare,     to: '/internal/rates' },
 ]
 
-const PROVIDER_NAV = [
-  { label: 'Dashboard',     icon: LayoutDashboard, to: '/provider',             end: true },
-  { label: 'Open Requests', icon: Ship,            to: '/provider/lanes' },
-  { label: 'Active Rates',  icon: FileText,        to: '/provider/submissions' },
+const FORWARDER_NAV = [
+  { label: 'Dashboard',     icon: LayoutDashboard, to: '/forwarder',             end: true },
+  { label: 'Open Requests', icon: Ship,            to: '/forwarder/lanes' },
+  { label: 'Active Rates',  icon: FileText,        to: '/forwarder/submissions' },
 ]
 
 /* ─── Shared nav item ────────────────────────────────────────────────── */
@@ -74,8 +75,8 @@ function NavItem({ to, icon: Icon, label, collapsed, end, onClick }) {
 
 export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
   const { role } = useAuth()
-  const navItems = role === 'provider' ? PROVIDER_NAV : REQUESTER_NAV
-  const roleLabel = role === 'provider' ? 'Freight Forwarder' : 'Requester'
+  const navItems = role === ROLES.FORWARDER ? FORWARDER_NAV : INTERNAL_NAV
+  const roleLabel = role === ROLES.FORWARDER ? ROLE_LABELS.forwarder : ROLE_LABELS.internal
 
   const desktopClasses = open ? 'w-60' : 'w-16'
   const mobileClasses = open
