@@ -302,6 +302,7 @@ export default function NewRateRequest() {
           rows={rows}
           columns={columns}
           processRowUpdate={processRowUpdate}
+          tabNavigation="content"
           disableRowSelectionOnClick
           hideFooter
           autoHeight
