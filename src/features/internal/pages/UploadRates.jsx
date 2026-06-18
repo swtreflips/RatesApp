@@ -140,6 +140,7 @@ export default function UploadRates() {
       width: 180,
       editable: true,
       // free-text with inline ghost completion; resolved to an id at submit
+      renderCell: (params) => params.value ?? '',
       renderEditCell: (params) => <ForwarderGhostInput {...params} forwarders={forwarders} />,
     },
     { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true },
