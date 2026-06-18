@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader2, ClipboardList, RefreshCw, FilePlus } from 'lucide-react'
-import { PageHeader } from '../../../components/ui/DashboardPrimitives'
+import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
 import { fetchOpenRequests } from '../services/rateRequestService'
 
 /*
@@ -84,10 +84,9 @@ export default function OpenRequests() {
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-fog-200 bg-white shadow-card">
-          <table className="w-full min-w-[920px] text-left text-sm">
+        <ScrollTable minWidth="920px">
             <thead>
-              <tr className="border-b border-fog-200 bg-fog-50 font-mono text-[10px] uppercase tracking-[0.06em] text-fog-500">
+              <tr className="border-b border-fog-200 font-mono text-[10px] uppercase tracking-[0.06em] text-fog-500">
                 <th className="px-3 py-2.5 font-semibold">Port of Loading</th>
                 <th className="px-3 py-2.5 font-semibold">Port of Discharge</th>
                 <th className="px-3 py-2.5 font-semibold">Last CY</th>
@@ -122,8 +121,7 @@ export default function OpenRequests() {
                 )
               })}
             </tbody>
-          </table>
-        </div>
+        </ScrollTable>
       )}
     </div>
   )

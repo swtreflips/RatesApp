@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Loader2, Inbox, RefreshCw } from 'lucide-react'
-import { PageHeader } from '../../../components/ui/DashboardPrimitives'
+import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
 import { fetchReceivedRates } from '../services/rateRequestService'
 
 /*
@@ -68,10 +68,9 @@ export default function ReceivedRates() {
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-fog-200 bg-white shadow-card">
-          <table className="w-full min-w-[820px] text-left text-sm">
+        <ScrollTable minWidth="820px">
             <thead>
-              <tr className="border-b border-fog-200 bg-fog-50 font-mono text-[10px] uppercase tracking-[0.06em] text-fog-500">
+              <tr className="border-b border-fog-200 font-mono text-[10px] uppercase tracking-[0.06em] text-fog-500">
                 <th className="px-3 py-2.5 font-semibold">Forwarder</th>
                 <th className="px-3 py-2.5 font-semibold">POL</th>
                 <th className="px-3 py-2.5 font-semibold">POD</th>
@@ -100,8 +99,7 @@ export default function ReceivedRates() {
                 </tr>
               ))}
             </tbody>
-          </table>
-        </div>
+        </ScrollTable>
       )}
     </div>
   )

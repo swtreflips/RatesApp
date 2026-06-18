@@ -5,6 +5,7 @@ import Papa from 'papaparse'
 import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
+import { gridScrollHeight } from '../../rates/rateGrid'
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
@@ -305,8 +306,8 @@ export default function NewRateRequest() {
           tabNavigation="content"
           disableRowSelectionOnClick
           hideFooter
-          autoHeight
           sx={{
+            height: gridScrollHeight(rows.length),
             border: 'none',
             fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
             '& .MuiDataGrid-columnHeaders': {

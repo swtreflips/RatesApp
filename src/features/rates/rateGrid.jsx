@@ -269,6 +269,13 @@ export const DATA_GRID_SX = {
   },
 }
 
+/* Grid height that fits the rows but caps at `cap` (default 70vh) so the body scrolls — and MUI
+   keeps the column headers pinned — once there are more rows than fit. Use instead of autoHeight
+   so few-row grids stay compact while long ones get a frozen header. (Defaults: 52px rows / 56px
+   header, MUI X defaults.) */
+export const gridScrollHeight = (rowCount, { cap = '70vh', rowH = 52, headerH = 56 } = {}) =>
+  `min(${headerH + rowCount * rowH + 2}px, ${cap})`
+
 /* ── shared toast ─────────────────────────────────────────────────────────── */
 const TOAST_COLORS = {
   success: 'bg-sea-600',

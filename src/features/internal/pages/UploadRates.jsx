@@ -6,7 +6,7 @@ import { fetchOpenRequests } from '../services/rateRequestService'
 import { fetchForwarders, submitRatesOnBehalf } from '../services/recordRatesService'
 import {
   makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput,
-  buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, Toast,
+  buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
 } from '../../rates/rateGrid'
 
 /*
@@ -374,8 +374,7 @@ export default function UploadRates() {
             tabNavigation="content"
             disableRowSelectionOnClick
             hideFooter
-            autoHeight
-            sx={DATA_GRID_SX}
+            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(rows.length) }}
           />
         </div>
       )}

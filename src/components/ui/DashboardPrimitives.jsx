@@ -92,6 +92,31 @@ export function SectionCard({ title, action, children }) {
   )
 }
 
+/* ─── Scroll table ────────────────────────────────────────────────────── */
+
+/**
+ * Bounded-height card for a data table whose header stays pinned while the body scrolls.
+ * `<main>` is the app's scroll container (TopNav sits above it), so making this card its own
+ * scroll context lets the sticky header anchor to the card top. Pass the usual `<thead>/<tbody>`
+ * as children.
+ * @param {{ minWidth?: string|number, maxHeight?: string|number, children: React.ReactNode }} props
+ */
+export function ScrollTable({ minWidth, maxHeight = '70vh', children }) {
+  return (
+    <div
+      className="overflow-auto rounded-2xl border border-fog-200 bg-white shadow-card"
+      style={{ maxHeight }}
+    >
+      <table
+        className="w-full text-left text-sm [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10 [&_thead_th]:bg-fog-50"
+        style={minWidth ? { minWidth } : undefined}
+      >
+        {children}
+      </table>
+    </div>
+  )
+}
+
 /* ─── Quick actions ───────────────────────────────────────────────────── */
 
 /**

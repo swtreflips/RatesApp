@@ -5,7 +5,7 @@ import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services/submissionService'
 import {
   makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput,
-  buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, Toast,
+  buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
 } from '../../rates/rateGrid'
 
 /*
@@ -313,8 +313,7 @@ export default function SubmitRates() {
             tabNavigation="content"
             disableRowSelectionOnClick
             hideFooter
-            autoHeight
-            sx={DATA_GRID_SX}
+            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(rows.length) }}
           />
         </div>
       )}
