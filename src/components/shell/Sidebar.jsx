@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Ship,
   FileText,
+  Upload,
 } from 'lucide-react'
 import { useAuth } from '../../app/providers/AuthProvider'
 import { ROLES, ROLE_LABELS } from '../../lib/roles'
@@ -21,6 +22,7 @@ const INTERNAL_NAV = [
   { label: 'New Rate Request', icon: FilePlus,        to: '/internal/new' },
   { label: 'Open Requests',    icon: ClipboardList,   to: '/internal/requests' },
   { label: 'Active Rates',     icon: CheckSquare,     to: '/internal/rates' },
+  { label: 'Upload Rates',     icon: Upload,          to: '/internal/upload' },
 ]
 
 const FORWARDER_NAV = [

@@ -8,6 +8,7 @@ import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives
 const NewRateRequest = lazy(() => import('./NewRateRequest'))
 const OpenRequests = lazy(() => import('./OpenRequests'))
 const ReceivedRates = lazy(() => import('./ReceivedRates'))
+const UploadRates = lazy(() => import('./UploadRates'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
@@ -85,6 +86,18 @@ export default function InternalRoot() {
             </div>
           }>
             <ReceivedRates />
+          </Suspense>
+        }
+      />
+      <Route
+        path="upload"
+        element={
+          <Suspense fallback={
+            <div className="flex min-h-[55vh] items-center justify-center">
+              <Loader2 size={26} className="animate-spin text-fog-400" />
+            </div>
+          }>
+            <UploadRates />
           </Suspense>
         }
       />

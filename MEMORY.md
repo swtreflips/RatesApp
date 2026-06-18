@@ -176,11 +176,26 @@ create policy "forwarder rates" on rates
   with check (forwarder_id = my_forwarder() and provider_id = auth.uid());
 create policy "requester reads rates" on rates
   for select using (current_role_is('internal') and lane_id is not null);
+
+-- ── "Upload Rates" feature (internal records rates on behalf of a forwarder) ──────
+-- Internal users are trusted; they pick the forwarder per row and stamp themselves as enterer.
+-- Does NOT breach forwarder↔forwarder isolation (the actor is internal, who already sees all
+-- lane-linked rates). Added June 17, 2026.
+create policy "requester writes rates" on rates
+  for insert with check (current_role_is('internal') and provider_id = auth.uid());
+create policy "requester writes submissions" on rate_submissions
+  for insert with check (current_role_is('internal') and provider_id = auth.uid());
+create policy "requester updates submissions" on rate_submissions
+  for update using (current_role_is('internal')) with check (current_role_is('internal'));
+create policy "requester reads own-recorded rates" on rates
+  for select using (current_role_is('internal') and provider_id = auth.uid());
 ```
 
 **Net effect:** forwarder A's analysts share everything and can't see forwarder B; the
 requester team sees all lanes + all lane-linked rates/skips; independent rates
-(`lane_id IS NULL`) stay private to the forwarder.
+(`lane_id IS NULL`) stay private to the forwarder. Internal users can additionally **record
+rates on behalf of any forwarder** (the four `requester writes/updates/reads own-recorded`
+policies above) — stamped `provider_id = the internal user`, `forwarder_id = the chosen forwarder`.
 
 ---
 

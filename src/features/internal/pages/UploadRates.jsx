@@ -1,46 +1,117 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { DataGrid } from '@mui/x-data-grid'
+import { DataGrid, useGridApiContext } from '@mui/x-data-grid'
 import { Trash2, Copy, Plus, Upload, Send, Loader2 } from 'lucide-react'
 import Papa from 'papaparse'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services/submissionService'
+import { fetchOpenRequests } from '../services/rateRequestService'
+import { fetchForwarders, submitRatesOnBehalf } from '../services/recordRatesService'
 import {
   splitCarriers, makeEmptyRow, makeRowFromLane, makeCopyRow,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, DATA_GRID_SX, Toast,
 } from '../../rates/rateGrid'
 
 /*
-  Forwarder rate-entry grid — unified (request-driven + free entry). Shared grid primitives
-  (carrier parsing, row factories, CSV parser, styling, toast) live in features/rates/rateGrid.
+  Internal "Upload Rates" — record rates on behalf of a forwarder.
 
-  - Active lanes preload as guide rows (POL · FD · Container Type · # Containers; FD/type/count
-    are request-side guides, not part of a rate).
-  - The forwarder can also add free rows or upload a CSV for rates independent of any request
-    (PROVIDER_VIEW_MODEL §4) — those carry no laneId → written with null lane_id/submission_id/period.
+  Same grid as the forwarder Submit Rates page, with ONE extra required column: Forwarder (who
+  the rate belongs to) — a type-ahead autocomplete over the forwarders list, bound to the
+  forwarder id (restricted to the list). The open request lanes preload as guide rows; the
+  internal user picks a forwarder + fills the rate, or uploads the filled template / a CSV.
 
-  A rate = POL · POD · Last CY · Rate/Unit · Free Days · Carrier · Valid Until · Remarks.
+  One lane carries rates from SEVERAL forwarders: add each forwarder's quote with copy-row (or
+  multiple CSV rows for the same lane). Uniqueness is per (lane, forwarder, period) — the service
+  creates one acknowledgement per forwarder — so they never collapse together.
+
+  Recorded rates attach to the matching open lane (by POL+FD) and create the same acknowledgement,
+  so they look identical to a forwarder's own submission in Active/Received Rates. Writes require
+  the internal-write RLS policies (plan.md §1).
 */
 
-export default function SubmitRates() {
+const norm = (s) => String(s ?? '').trim().toLowerCase()
+
+// Inline ghost completion appears only after this many typed characters.
+const FORWARDER_MIN_CHARS = 3
+
+/* DataGrid edit cell for the Forwarder column. A plain text input (accepts ANY value) that, once
+   ≥ FORWARDER_MIN_CHARS are typed, shows the best prefix match as faint inline "ghost" text;
+   Tab / → accepts it. The cell stores the typed NAME; it's resolved to a forwarder id at submit
+   (unknown names are rejected there). No dropdown, no arrow. */
+function ForwarderGhostInput({ id, field, value, forwarders }) {
+  const apiRef = useGridApiContext()
+  const inputRef = useRef(null)
+  const text = value ?? ''
+
+  const suggestion = text.trim().length >= FORWARDER_MIN_CHARS
+    ? (forwarders.find((f) => f.name.toLowerCase().startsWith(text.toLowerCase()))?.name ?? '')
+    : ''
+  const ghost = suggestion.length > text.length ? suggestion.slice(text.length) : ''
+
+  const setValue = (v) => apiRef.current.setEditCellValue({ id, field, value: v })
+
+  const onKeyDown = (e) => {
+    if (!ghost) return
+    const atEnd = inputRef.current && inputRef.current.selectionStart === text.length
+    if (e.key === 'Tab' || (e.key === 'ArrowRight' && atEnd)) {
+      e.preventDefault()
+      setValue(suggestion)
+    }
+  }
+
+  return (
+    <div className="relative flex h-full w-full items-center px-2">
+      {/* ghost overlay: invisible typed text reserves width, then the faint completion */}
+      <div className="pointer-events-none absolute inset-0 flex items-center px-2 font-sans text-[0.8rem]">
+        <span className="invisible whitespace-pre">{text}</span>
+        <span className="whitespace-pre text-fog-400">{ghost}</span>
+      </div>
+      <input
+        ref={inputRef}
+        autoFocus
+        className="relative z-10 h-full w-full border-0 bg-transparent p-0 font-sans text-[0.8rem] text-harbor-900 outline-none"
+        value={text}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={onKeyDown}
+      />
+    </div>
+  )
+}
+
+export default function UploadRates() {
   const [rows, setRows] = useState([])
+  const [forwarders, setForwarders] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast] = useState(null)
   const fileInputRef = useRef(null)
+  // lookup tables rebuilt on load
+  const laneIndexRef = useRef(new Map())   // `${pol}|${fd}` → { laneId, period }
+  const nameToIdRef = useRef(new Map())    // forwarder name (lower) → id
 
-  /* ── load active lanes (seed an empty free row when there are none) ───── */
+  /* ── load forwarders + open lanes ────────────────────────────────────── */
 
-  const loadLanes = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
-    const { lanes, error } = await fetchActiveLanes()
-    if (error) setLoadError(error.message)
-    else setRows(lanes.length ? lanes.map(makeRowFromLane) : [makeEmptyRow()])
+    const [{ forwarders, error: fErr }, { lanes, error: lErr }] = await Promise.all([
+      fetchForwarders(),
+      fetchOpenRequests(),
+    ])
+    if (fErr || lErr) {
+      setLoadError((fErr || lErr).message)
+      setLoading(false)
+      return
+    }
+    setForwarders(forwarders)
+    nameToIdRef.current = new Map(forwarders.map((f) => [norm(f.name), f.id]))
+    laneIndexRef.current = new Map(
+      (lanes ?? []).map((l) => [`${norm(l.pol)}|${norm(l.fd)}`, { laneId: l.id, period: l.period }])
+    )
+    setRows(lanes.length ? lanes.map(makeRowFromLane) : [makeEmptyRow()])
     setLoading(false)
   }, [])
 
-  useEffect(() => { loadLanes() }, [loadLanes])
+  useEffect(() => { load() }, [load])
 
   /* ── auto-dismiss toast ──────────────────────────────────────────────── */
 
@@ -50,7 +121,7 @@ export default function SubmitRates() {
     return () => clearTimeout(timer)
   }, [toast])
 
-  const showToast = (severity, message, action = null) => setToast({ severity, message, action })
+  const showToast = (severity, message) => setToast({ severity, message })
 
   /* ── columns ─────────────────────────────────────────────────────────── */
 
@@ -64,9 +135,17 @@ export default function SubmitRates() {
       cellClassName: 'font-mono text-fog-400',
       renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
     },
+    {
+      field: 'forwarderName',
+      headerName: 'Forwarder',
+      width: 180,
+      editable: true,
+      // free-text with inline ghost completion; resolved to an id at submit
+      renderEditCell: (params) => <ForwarderGhostInput {...params} forwarders={forwarders} />,
+    },
     { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true },
-    // template guides (request-side only; blank for free rows)
-    { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86 },
+    // template guides (request-side; preloaded from the lane)
+    { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true },
     { field: 'containerType', headerName: 'Cont. Type', width: 88, cellClassName: 'font-mono' },
     { field: 'containerCount', headerName: '# Cont.', width: 70, type: 'number', cellClassName: 'font-mono' },
     // rate fields
@@ -94,7 +173,6 @@ export default function SubmitRates() {
       flex: 1,
       minWidth: 96,
       editable: true,
-      // underlying value is an array of codes; show/edit as a comma-separated string
       valueGetter: (value, row) => (row.carrier ?? []).join(', '),
       valueSetter: (value, row) => ({ ...row, carrier: splitCarriers(value) }),
     },
@@ -118,7 +196,7 @@ export default function SubmitRates() {
             className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
             onClick={() => handleCopyRow(params.row)}
             tabIndex={-1}
-            title="Duplicate this row"
+            title="Duplicate this row (e.g. another forwarder's quote)"
           >
             <Copy size={15} />
           </button>
@@ -126,7 +204,7 @@ export default function SubmitRates() {
             className="rounded-md p-1 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
             onClick={() => handleDeleteRow(params.row)}
             tabIndex={-1}
-            title={params.row.id === params.row.laneId ? 'Skip this lane' : 'Remove this row'}
+            title="Remove this row"
           >
             <Trash2 size={15} />
           </button>
@@ -144,7 +222,6 @@ export default function SubmitRates() {
 
   const handleAddRow = () => setRows((prev) => [...prev, makeEmptyRow()])
 
-  // Duplicate a row, dropping the copy directly below its source so the grid stays ordered.
   const handleCopyRow = (row) => setRows((prev) => {
     const idx = prev.findIndex((r) => r.id === row.id)
     const next = [...prev]
@@ -152,47 +229,18 @@ export default function SubmitRates() {
     return next
   })
 
-  const handleDeleteRow = async (row) => {
-    // Free rows and copies (temp id ⇒ id !== laneId) are never persisted on their own —
-    // drop them locally. Only the lane's primary row (id === laneId) persists a skip.
-    const isPrimaryLaneRow = row.laneId && row.id === row.laneId
-    if (!isPrimaryLaneRow) {
-      setRows((prev) => {
-        const filtered = prev.filter((r) => r.id !== row.id)
-        return filtered.length === 0 ? [makeEmptyRow()] : filtered
-      })
-      return
-    }
+  // Plain removal — no skip concept on the internal side.
+  const handleDeleteRow = (row) => setRows((prev) => {
+    const filtered = prev.filter((r) => r.id !== row.id)
+    return filtered.length === 0 ? [makeEmptyRow()] : filtered
+  })
 
-    // Lane-linked row — persist a skip so it stays cleared (PVM §3).
-    setRows((prev) => prev.filter((r) => r.id !== row.id)) // optimistic
-    const { error } = await skipLane(row.laneId, row.period)
-    if (error) {
-      showToast('error', `Couldn’t skip lane: ${error.message}`)
-      loadLanes() // restore truth
-    } else {
-      showToast('success', 'Lane skipped', { label: 'Undo', onClick: () => handleUndoSkip(row) })
-    }
-  }
-
-  const handleUndoSkip = async (row) => {
-    const { error } = await unskipLane(row.laneId, row.period)
-    if (error) {
-      showToast('error', `Couldn’t undo: ${error.message}`)
-    } else {
-      // bring the lane back without disturbing other in-progress rows
-      setRows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
-    }
-  }
-
-  /* ── CSV upload (independent rates) ──────────────────────────────────── */
+  /* ── CSV / template upload ───────────────────────────────────────────── */
 
   const handleCsvUpload = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    // Parse positionally (header: false) so we can reach the unnamed trailing carrier
-    // columns the forwarders append. Row 0 is the header; remaining rows are data.
     Papa.parse(file, {
       header: false,
       skipEmptyLines: true,
@@ -205,44 +253,59 @@ export default function SubmitRates() {
         const headerIndex = buildHeaderIndex(headerCells)
         const parsed = dataRows
           .map((cells) => makeRowFromCsv(cells, headerIndex))
-          .filter((r) => r.pol || r.rate !== '' || r.carrier.length > 0) // drop fully empty rows
+          .filter((r) => r.pol || r.rate !== '' || r.carrier.length > 0)
+          .map((r) => {
+            // match to an open lane by POL + FD → attach; else standalone. The forwarder name is
+            // kept as typed and resolved to an id at submit.
+            const match = laneIndexRef.current.get(`${norm(r.pol)}|${norm(r.fd)}`)
+            return { ...r, laneId: match?.laneId ?? null, period: match?.period ?? null }
+          })
+
         if (parsed.length === 0) {
-          showToast('warning', 'CSV had no usable rows. Expected columns like POL, Rate.')
+          showToast('warning', 'CSV had no usable rows. Expected columns like Forwarder, POL, Rate.')
           return
         }
-        // drop the blank placeholder row(s), then append the parsed rates
         setRows((prev) => [...prev.filter((r) => !isBlankRow(r)), ...parsed])
-        showToast('success', `Loaded ${parsed.length} rate(s) from CSV`)
+        const matched = parsed.filter((r) => r.laneId).length
+        showToast('success', `Loaded ${parsed.length} rate(s) — ${matched} matched to open lanes`)
       },
       error() {
         showToast('error', 'Failed to parse CSV file')
       },
     })
 
-    e.target.value = '' // allow re-selecting the same file
+    e.target.value = ''
   }
 
   /* ── submit ──────────────────────────────────────────────────────────── */
 
   const filledRows = rows.filter((r) => r.rate !== '' && r.rate != null)
-  // each filled row fans out into one rate per carrier (≥1, so a carrier-less row still counts as one)
   const rateCount = filledRows.reduce((n, r) => n + Math.max((r.carrier ?? []).length, 1), 0)
-  const hasRequests = rows.some((r) => r.laneId)
 
   const handleSubmit = async () => {
     if (rateCount === 0) {
       showToast('warning', 'Fill in at least one rate (Rate/Unit) before submitting')
       return
     }
+    // resolve each row's typed forwarder name → id; only known forwarders are accepted
+    const resolved = filledRows.map((r) => ({
+      ...r,
+      forwarderId: r.forwarderName ? (nameToIdRef.current.get(norm(r.forwarderName)) ?? null) : null,
+    }))
+    const unknown = [...new Set(resolved.filter((r) => !r.forwarderId).map((r) => r.forwarderName || '(blank)'))]
+    if (unknown.length > 0) {
+      showToast('warning', `Unknown forwarder(s): ${unknown.join(', ')}`)
+      return
+    }
     setSubmitting(true)
-    const { error, count } = await submitRates(filledRows)
+    const { error, count } = await submitRatesOnBehalf(resolved)
     setSubmitting(false)
 
     if (error) {
       showToast('error', `Submit failed: ${error.message}`)
     } else {
-      showToast('success', `Submitted ${count} rate(s)`)
-      loadLanes() // reset to a clean slate
+      showToast('success', `Recorded ${count} rate(s)`)
+      load() // reset to a clean slate
     }
   }
 
@@ -251,13 +314,9 @@ export default function SubmitRates() {
   return (
     <div className="space-y-6">
       <PageHeader
-        kicker="Freight Forwarder · Rates"
-        title="Submit Rates"
-        subtitle={
-          hasRequests
-            ? 'Lanes requested by your customers. Fill in your rate for each — or add rows / upload a CSV for rates outside these requests.'
-            : 'No open requests right now — add rates directly or upload a CSV to submit them independently.'
-        }
+        kicker="Internal · Rates"
+        title="Upload Rates"
+        subtitle="Record rates a forwarder sent — pick the forwarder, fill in the rate (or upload their sheet). Recorded rates attach to your open lanes, just like a forwarder's own submission."
         actions={
           <span className="inline-flex items-center gap-2 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
             <span className="font-mono text-lg font-semibold leading-none text-harbor-900">{rateCount}</span>
@@ -294,7 +353,7 @@ export default function SubmitRates() {
           disabled={submitting || loading || rateCount === 0}
         >
           <Send size={16} className="transition-transform group-hover:translate-x-0.5" />
-          {submitting ? 'Submitting…' : 'Submit Rates'}
+          {submitting ? 'Recording…' : 'Record Rates'}
         </button>
       </div>
 
@@ -305,7 +364,7 @@ export default function SubmitRates() {
         </div>
       ) : loadError ? (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-6 text-center text-sm text-red-700 shadow-card">
-          Couldn’t load lanes: {loadError}
+          Couldn’t load: {loadError}
         </div>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card" style={{ width: '100%' }}>
