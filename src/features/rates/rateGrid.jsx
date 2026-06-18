@@ -9,9 +9,10 @@
   `forwarderId` (used only by the internal grid; ignored by the forwarder grid).
 */
 
-import React from 'react'
+import React, { useState, useRef } from 'react'
 import { X } from 'lucide-react'
 import Papa from 'papaparse'
+import { useGridApiContext } from '@mui/x-data-grid'
 
 /* ── file upload (CSV or XLSX) ─────────────────────────────────────────────
    Turn an uploaded .csv OR .xlsx/.xls file into Papa results, then hand them to the caller's
@@ -50,6 +51,60 @@ export const normalizeCarrier = (v) => String(v ?? '').trim().toUpperCase()
 // Comma-separated carrier string (manual grid entry) → deduped array of recognized codes.
 export const splitCarriers = (text) =>
   [...new Set(String(text ?? '').split(',').map(normalizeCarrier).filter((c) => CARRIER_CODES.has(c)))]
+
+/* Inline ghost-completion edit cell for the multi-value Carrier column — same UX as the
+   Forwarder field. Suggestions appear after the FIRST character, completing the last
+   comma-separated token against the known SCAC codes; Tab / → accepts. Input is uppercased
+   (codes are uppercase) and the committed value is the validated code array (splitCarriers). */
+const CARRIER_MIN_CHARS = 1
+const CARRIER_LIST = [...CARRIER_CODES]
+
+export function CarrierGhostInput({ id, field, value }) {
+  const apiRef = useGridApiContext()
+  const inputRef = useRef(null)
+  const [text, setText] = useState(() =>
+    (Array.isArray(value) ? value.join(', ') : String(value ?? '')).toUpperCase())
+
+  // complete the current (last comma-separated) token
+  const lastComma = text.lastIndexOf(',')
+  const token = (lastComma === -1 ? text : text.slice(lastComma + 1)).trim()
+  const suggestion = token.length >= CARRIER_MIN_CHARS
+    ? (CARRIER_LIST.find((c) => c.startsWith(token)) ?? '')
+    : ''
+  const ghost = suggestion.length > token.length ? suggestion.slice(token.length) : ''
+
+  const commit = (t) => {
+    const up = t.toUpperCase()
+    setText(up)
+    apiRef.current.setEditCellValue({ id, field, value: splitCarriers(up) })
+  }
+
+  const onKeyDown = (e) => {
+    if (!ghost) return
+    const atEnd = inputRef.current && inputRef.current.selectionStart === text.length
+    if (e.key === 'Tab' || (e.key === 'ArrowRight' && atEnd)) {
+      e.preventDefault()
+      commit(text + ghost)
+    }
+  }
+
+  return (
+    <div className="relative flex h-full w-full items-center px-2">
+      <div className="pointer-events-none absolute inset-0 flex items-center px-2 font-sans text-[0.8rem]">
+        <span className="invisible whitespace-pre">{text}</span>
+        <span className="whitespace-pre text-fog-400">{ghost}</span>
+      </div>
+      <input
+        ref={inputRef}
+        autoFocus
+        className="relative z-10 h-full w-full border-0 bg-transparent p-0 font-sans text-[0.8rem] text-harbor-900 outline-none"
+        value={text}
+        onChange={(e) => commit(e.target.value)}
+        onKeyDown={onKeyDown}
+      />
+    </div>
+  )
+}
 
 /* ── row factories ────────────────────────────────────────────────────────
    Temp ids are string-prefixed so they never collide with a lane's uuid id. */

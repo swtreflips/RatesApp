@@ -5,7 +5,7 @@ import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchOpenRequests } from '../services/rateRequestService'
 import { fetchForwarders, submitRatesOnBehalf } from '../services/recordRatesService'
 import {
-  splitCarriers, makeEmptyRow, makeRowFromLane, makeCopyRow,
+  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, Toast,
 } from '../../rates/rateGrid'
 
@@ -173,8 +173,9 @@ export default function UploadRates() {
       flex: 1,
       minWidth: 96,
       editable: true,
-      valueGetter: (value, row) => (row.carrier ?? []).join(', '),
-      valueSetter: (value, row) => ({ ...row, carrier: splitCarriers(value) }),
+      // multi-value codes; inline ghost completion after the 1st char
+      renderCell: (params) => (params.value ?? []).join(', '),
+      renderEditCell: (params) => <CarrierGhostInput {...params} />,
     },
     {
       field: 'validUntil',

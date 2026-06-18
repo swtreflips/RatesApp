@@ -4,7 +4,7 @@ import { Trash2, Copy, Plus, Upload, Send, Loader2 } from 'lucide-react'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services/submissionService'
 import {
-  splitCarriers, makeEmptyRow, makeRowFromLane, makeCopyRow,
+  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, Toast,
 } from '../../rates/rateGrid'
 
@@ -93,9 +93,9 @@ export default function SubmitRates() {
       flex: 1,
       minWidth: 96,
       editable: true,
-      // underlying value is an array of codes; show/edit as a comma-separated string
-      valueGetter: (value, row) => (row.carrier ?? []).join(', '),
-      valueSetter: (value, row) => ({ ...row, carrier: splitCarriers(value) }),
+      // multi-value codes; inline ghost completion after the 1st char
+      renderCell: (params) => (params.value ?? []).join(', '),
+      renderEditCell: (params) => <CarrierGhostInput {...params} />,
     },
     {
       field: 'validUntil',
