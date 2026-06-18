@@ -11,6 +11,31 @@
 
 import React from 'react'
 import { X } from 'lucide-react'
+import Papa from 'papaparse'
+
+/* ── file upload (CSV or XLSX) ─────────────────────────────────────────────
+   Turn an uploaded .csv OR .xlsx/.xls file into Papa results, then hand them to the caller's
+   `complete` — so both grids share one parser and the CSV pipeline is identical for both file
+   types. For a spreadsheet, the FIRST sheet is converted to CSV and run through the same parser
+   (no xlsx-specific ingestion). SheetJS is imported lazily so it only loads for spreadsheets. */
+const PAPA_OPTS = { header: false, skipEmptyLines: true }
+
+export function parseRateFile(file, { complete, error }) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase()
+  if (ext === 'xlsx' || ext === 'xls') {
+    file.arrayBuffer()
+      .then(async (buf) => {
+        const XLSX = await import('xlsx')
+        const wb = XLSX.read(buf, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]] // first sheet only
+        if (!ws) return error?.()
+        Papa.parse(XLSX.utils.sheet_to_csv(ws), { ...PAPA_OPTS, complete, error })
+      })
+      .catch(() => error?.())
+  } else {
+    Papa.parse(file, { ...PAPA_OPTS, complete, error })
+  }
+}
 
 /* ── carriers ─────────────────────────────────────────────────────────────
    SCAC-style codes. Trailing CSV cells matching one are read as carriers; anything else

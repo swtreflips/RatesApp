@@ -1,12 +1,11 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
 import { Trash2, Copy, Plus, Upload, Send, Loader2 } from 'lucide-react'
-import Papa from 'papaparse'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services/submissionService'
 import {
   splitCarriers, makeEmptyRow, makeRowFromLane, makeCopyRow,
-  buildHeaderIndex, makeRowFromCsv, isBlankRow, DATA_GRID_SX, Toast,
+  buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, Toast,
 } from '../../rates/rateGrid'
 
 /*
@@ -185,21 +184,19 @@ export default function SubmitRates() {
     }
   }
 
-  /* ── CSV upload (independent rates) ──────────────────────────────────── */
+  /* ── CSV / XLSX upload (independent rates) ───────────────────────────── */
 
-  const handleCsvUpload = (e) => {
+  // Parse positionally (header: false) so we can reach the unnamed trailing carrier columns the
+  // forwarders append. Row 0 is the header; remaining rows are data. .xlsx → first sheet as CSV.
+  const handleFileUpload = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    // Parse positionally (header: false) so we can reach the unnamed trailing carrier
-    // columns the forwarders append. Row 0 is the header; remaining rows are data.
-    Papa.parse(file, {
-      header: false,
-      skipEmptyLines: true,
+    parseRateFile(file, {
       complete(results) {
         const [headerCells, ...dataRows] = results.data
         if (!headerCells) {
-          showToast('warning', 'CSV had no rows.')
+          showToast('warning', 'File had no rows.')
           return
         }
         const headerIndex = buildHeaderIndex(headerCells)
@@ -212,10 +209,10 @@ export default function SubmitRates() {
         }
         // drop the blank placeholder row(s), then append the parsed rates
         setRows((prev) => [...prev.filter((r) => !isBlankRow(r)), ...parsed])
-        showToast('success', `Loaded ${parsed.length} rate(s) from CSV`)
+        showToast('success', `Loaded ${parsed.length} rate(s)`)
       },
       error() {
-        showToast('error', 'Failed to parse CSV file')
+        showToast('error', 'Failed to read file')
       },
     })
 
@@ -282,9 +279,9 @@ export default function SubmitRates() {
           onClick={() => fileInputRef.current?.click()}
         >
           <Upload size={16} />
-          Upload CSV
+          Upload File
         </button>
-        <input ref={fileInputRef} type="file" accept=".csv" hidden onChange={handleCsvUpload} />
+        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" hidden onChange={handleFileUpload} />
 
         <div className="flex-1" />
 
