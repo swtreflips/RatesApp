@@ -13,3 +13,4 @@ skills-lock.json
 __pycache__/
 *.pyc
 .graph_refresh_token
+/msal/          # local virtualenv for graph.py (msal/requests/openpyxl)

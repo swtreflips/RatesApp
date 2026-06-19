@@ -37,7 +37,9 @@ REUSED VARIABLES (from the CRM auth.py — delegated public client; NO client se
 CLI
 ---
     python graph.py seed                       # one-time: device-code login → save refresh token
-    python graph.py test-send you@example.com  # send yourself a sample rate-request email
+    python graph.py send-template [to]         # BASIC: email the raw template (default: to luismht@)
+    python graph.py refresh                    # keep-alive: redeem + rotate the token (no send)
+    python graph.py test-send you@example.com  # send yourself a sample (filled) rate-request email
     python graph.py test-reminder you@example.com
 """
 
@@ -128,7 +130,10 @@ def seed_refresh_token() -> str:
     """
     import msal  # imported here so the send path doesn't require msal
 
-    app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
+    # A SerializableTokenCache is required to read the refresh token back out — the default
+    # in-memory TokenCache has no .serialize().
+    cache = msal.SerializableTokenCache()
+    app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY, token_cache=cache)
 
     flow = app.initiate_device_flow(scopes=SCOPES)
     if "user_code" not in flow:
@@ -142,7 +147,7 @@ def seed_refresh_token() -> str:
         )
 
     # The refresh token lives in the serialized MSAL cache, not the result dict.
-    cache_json = json.loads(app.token_cache.serialize())
+    cache_json = json.loads(cache.serialize())
     rt_entries = cache_json.get("RefreshToken", {})
     if not rt_entries:
         raise RuntimeError("No refresh token in cache — ensure offline_access was granted.")
@@ -283,6 +288,41 @@ def send_mail(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BASIC SEND + KEEP-ALIVE (Phase-1 validation — the smallest end-to-end pieces)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def send_template(to_email: str = SENDER) -> None:
+    """
+    Smallest real send: attach the RAW PTP OFQ Rates Template.xlsx (no fill) and email it.
+    Proves the whole chain — stored refresh token → access token (rotated) → /me/sendMail with
+    an .xlsx attachment. Defaults to the seeded mailbox (sends to yourself).
+    """
+    with open(TEMPLATE_PATH, "rb") as f:
+        attachment = f.read()
+
+    token = get_access_token()  # refresh-grant + persists the rotated token (keep-alive on use)
+    body = (
+        "<p>Hello,</p>"
+        "<p>Attached is the rate request template "
+        "(<b>PTP OFQ Rates Template.xlsx</b>).</p>"
+        f"<p>Thanks,<br>{SENDER_NAME}</p>"
+    )
+    send_mail(token, to_email, "PTP OFQ Rates Template", body,
+              attachment, os.path.basename(TEMPLATE_PATH))
+    print(f"✅ sent the template to {to_email}")
+
+
+def refresh_token_keepalive() -> None:
+    """
+    Keep-alive: redeem + ROTATE the refresh token without sending anything. This is exactly the
+    call the production Supabase pg_cron job runs every 7 days (ALERTS.md §6c). Schedule it (e.g.
+    weekly) so the token never lapses during quiet stretches; each real send keeps it fresh too.
+    """
+    get_access_token()
+    print("✅ refresh token redeemed + rotated (chain alive)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ACTIONS — Send Rate Request / Send Reminder (one engine, ALERTS.md §3/§14)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -359,6 +399,14 @@ def _main(argv: list[str]) -> int:
 
     if cmd == "seed":
         seed_refresh_token()
+        return 0
+
+    if cmd == "send-template":
+        send_template(argv[1] if len(argv) > 1 else SENDER)
+        return 0
+
+    if cmd == "refresh":
+        refresh_token_keepalive()
         return 0
 
     if cmd in ("test-send", "test-reminder"):
