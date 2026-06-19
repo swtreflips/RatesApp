@@ -441,3 +441,6 @@ email copy/subject — the lane logic is identical.
 
 *Optional future:* a "select specific lanes" override for the rare targeted send (e.g. "just
 these 3 to everyone now"), layered on top without changing the default.
+
+
+Next steps toward the full feature, whenever you're ready, are the ones in ALERTS.md — porting this to the notify-forwarders Edge Function, the graph_credentials row + pg_cron keep-alive, and the Send/Reminder buttons in the app.
