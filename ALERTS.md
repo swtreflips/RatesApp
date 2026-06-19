@@ -316,6 +316,50 @@ POST https://graph.microsoft.com/v1.0/me/sendMail
 *(Optional in-thread reminders: switch to draft-then-send `POST /me/messages` → capture
 `conversationId` → `createReply`, mirroring `followup.ipynb`.)*
 
+## 6d. Edge Function flow — running `graph.py`'s logic on Supabase
+
+`graph.py` stays the **local seed + reference**; the runtime is just its two HTTP calls ported to
+`fetch` inside a Deno Edge Function, with the token moving from the local `.graph_refresh_token`
+file to the `graph_credentials` DB row. **`msal` is only for the one-time seed — never at runtime.**
+
+```
+A. SEED (local, once)
+   python graph.py seed  ──(msal device-code login as luismht@)──►  refresh_token
+        └──────────────── upsert into ──────────────►  graph_credentials row
+
+B. SEND (per click)                                    C. KEEP-ALIVE (scheduled)
+   browser ─ invoke('notify-forwarders',{…}) ─┐         pg_cron every 7 days
+                                               ▼              │ pg_net
+   ┌──────────────────────────────────────────────────┐      ▼
+   │ Edge Function notify-forwarders (Deno)             │   (refresh-only run of step ③)
+   │  ① verify JWT + role='internal'                    │
+   │  ② service-role queries: emails, outstanding lanes │
+   │  ③ TOKEN  read graph_credentials.refresh_token ◄─┐ │ ◄─── same row, same ③
+   │     POST {tenant}/oauth2/v2.0/token (refresh)    │ │
+   │     → access_token + ROTATED refresh_token       │ │
+   │     UPDATE graph_credentials = rotated ──────────┘ │   (persist = keep-alive)
+   │  ④ per forwarder: build .xlsx (SheetJS) +          │
+   │     POST graph.microsoft.com/v1.0/me/sendMail      │
+   │  ⑤ INSERT notifications / notification_recipients  │
+   │  ⑥ return { sent, failed }                         │
+   └───────────────┬─────────────────────┬──────────────┘
+                   ▼                      ▼
+        login.microsoftonline.com   graph.microsoft.com/me/sendMail
+        (token endpoint)                  └─► Outlook/M365 (luismht@…) ─► forwarders
+```
+
+Every actor — your send, a colleague's send, the cron — does the same **read → refresh → write
+rotated** on the one `graph_credentials` row. That rotation persistence *is* the keep-alive (§6c).
+
+| `graph.py` (local) | Edge Function (Deno) |
+|---|---|
+| `seed_refresh_token()` (msal) | — stays local, one-time → upsert into `graph_credentials` |
+| `load/save_refresh_token()` (file) | `select` / `update graph_credentials` (service role) |
+| `get_access_token()` | step ③ — `fetch` token endpoint + persist rotated token |
+| `fill_template()` (openpyxl) | SheetJS (`xlsx`, already used in the frontend) |
+| `send_mail()` | step ④ — `fetch` `/me/sendMail` (same payload) |
+| `refresh_token_keepalive()` | the **pg_cron** job (refresh-only) |
+
 ## 7. Data model — audit log (NOT the source of "who responded")
 
 "Who responded" is always **derived from `rate_submissions`** (§3). This log exists for
@@ -444,3 +488,41 @@ these 3 to everyone now"), layered on top without changing the default.
 
 
 Next steps toward the full feature, whenever you're ready, are the ones in ALERTS.md — porting this to the notify-forwarders Edge Function, the graph_credentials row + pg_cron keep-alive, and the Send/Reminder buttons in the app.
+
+## 15. Implementation action plan — from `graph.py` to deployed
+
+**Where I am now:** `graph.py seed` works locally (refresh token in `.graph_refresh_token`);
+`send-template` and `refresh` work; the token rotates on use. Supabase project + app tables are
+live. Goal: move that exact logic into a Supabase Edge Function with a DB-stored, self-renewing
+token (§6c/§6d). No new host, no Azure changes.
+
+1. **DB — token store + audit tables** *(Supabase SQL editor).* Create `graph_credentials`
+   (single row; RLS on, **no policies** → service-role only — §6c) and `notifications` /
+   `notification_recipients` (§7).
+2. **Upsert the seeded token** *(one-time).* Take the value from local `.graph_refresh_token` and
+   put it in the row:
+   ```sql
+   insert into graph_credentials (id, refresh_token) values (1, '<paste from .graph_refresh_token>')
+   on conflict (id) do update set refresh_token = excluded.refresh_token, updated_at = now();
+   ```
+   *(Optional later: a `graph.py push-token` command that upserts via the Supabase REST API instead
+   of pasting — needs the project URL + service-role key locally.)*
+3. **Edge Function `notify-forwarders`** *(Deno/TS; `supabase functions deploy`).* Port the §6d
+   steps: role-gate → resolve emails + outstanding lanes (service role) → **token step ③**
+   (read row → `fetch` refresh grant → `update` rotated token) → per forwarder fill `.xlsx`
+   (SheetJS) + `fetch` `/me/sendMail` → write audit rows. **Secrets:** `MS_TENANT_ID`,
+   `MS_CLIENT_ID`, `APP_URL` (the service-role key is injected into Edge Functions automatically).
+4. **Keep-alive cron.** A **refresh-only** path (e.g. `notify-forwarders` with `kind:'refresh'`, or
+   a tiny `graph-keepalive` function) scheduled via **`pg_cron` + `pg_net` every 7 days** to run
+   token step ③ with no send (§6c).
+5. **App wiring.** Add `Send Rate Request` / `Send Reminder…` on Open Requests (§4 Option C) →
+   `supabase.functions.invoke('notify-forwarders', { kind, forwarderIds, period })`.
+6. **Verify.** Invoke a send → email arrives from `luismht@…`; confirm `graph_credentials.refresh_token`
+   **changed** (rotation); run the cron manually → token refreshes, no send; re-send still works
+   (chain alive). Then the §5 isolation/round-trip checks.
+7. **Phase 2 (later).** Swap delegated → **app-only `Mail.Send` + shared `rates@` mailbox**
+   (client secret/cert, ApplicationAccessPolicy) — config-only on the sender, removes the re-seed
+   need entirely (§6/§13).
+
+**Critical path:** 1 → 2 → 3 (the core slice: a real send from the cloud) → 4 (don't let the token
+lapse) → 5 (UI) → 6. Steps 1–4 can be proven before any UI exists by invoking the function directly.
