@@ -526,3 +526,68 @@ token (§6c/§6d). No new host, no Azure changes.
 
 **Critical path:** 1 → 2 → 3 (the core slice: a real send from the cloud) → 4 (don't let the token
 lapse) → 5 (UI) → 6. Steps 1–4 can be proven before any UI exists by invoking the function directly.
+
+## 16. Security — protecting the Graph token & the Supabase account
+
+Expands §10. Two assets carry almost all the risk here:
+
+- **The Graph refresh token** — long-lived; whoever holds it can **send email as `luismht@`**
+  (`Mail.Send`, *delegated* → scoped to that **one mailbox**, not the whole tenant). A leak =
+  someone phishing/impersonating from your address. Lives in `graph_credentials` (and, in dev,
+  `.graph_refresh_token`).
+- **The Supabase service-role key** — **bypasses RLS** → full DB read/write (including the token
+  row). Lives only in the Edge Function env.
+
+Both are **server-side only** and **must never reach the browser**.
+
+### Framework — how this class of system is normally secured
+1. **Least privilege.** Request the **minimum Graph scope** (`Mail.Send` only — not full-mailbox).
+   Phase 2 app-only adds an **ApplicationAccessPolicy** pinning the app to a single mailbox so it
+   can't send as arbitrary tenant users. The Edge Function holds the service role, but **every
+   invocation is role-gated**.
+2. **Secrets never client-side.** Refresh token, service-role key, (Phase-2) client secret →
+   Edge Function env / locked DB row. **Never** a `VITE_` var, never in the repo, never in the
+   bundle. (The anon key is public *by design*; RLS is the real boundary.)
+3. **Token at rest.** `graph_credentials` has **RLS on + no policies** (service-role only). Harden
+   further by **encrypting the column** (Supabase **Vault** / pgsodium) so a DB dump or backup
+   leak doesn't expose a usable token.
+4. **The Edge Function is the trust boundary.** It must: (a) verify the caller's **JWT + role**
+   before anything; (b) **resolve recipient emails server-side** from your own `forwarders`/
+   `profiles` — **never accept raw addresses from the client** (so it can't be abused as an open
+   relay); (c) read the token with the service role only *after* auth-gating; (d) **never log or
+   return** tokens.
+5. **Short access tokens + rotation.** Access tokens last ~1h; the refresh token **rotates on
+   every use** and the prior one dies — so a stale leaked token self-expires (also the keep-alive
+   mechanic, §6c).
+6. **Transport.** Everything over HTTPS (Graph, Supabase); no secrets in URLs or logs.
+7. **Audit + monitor.** The `notifications` log records **who triggered** each send
+   (`triggered_by`) — accountability. Watch the mailbox's **Sent Items** + Supabase function logs
+   for anomalies.
+8. **Account hygiene (the real perimeter).** **MFA on**: the `luismht@` M365 account, the
+   **Supabase** account, and the **GitHub** account (pushes auto-deploy to Vercel). Limit who holds
+   the service-role key, the Supabase dashboard, and the Azure app-registration.
+9. **Abuse limiting.** A compromised *internal* user could blast email from your domain
+   (reputational/phishing risk). The **cooldown** (§9) + role-gate + audit log + a hard per-period
+   cap contain the blast.
+
+### For YOUR flow — concrete checklist while building
+- [ ] `graph_credentials`: RLS **enabled**, **no policies** (service-role only); consider Vault
+  encryption on `refresh_token`.
+- [ ] `.graph_refresh_token` stays **gitignored** (done); never commit/paste it publicly; treat the
+  seed machine as sensitive.
+- [ ] Edge Function: first lines = **verify JWT + `profiles.role='internal'`**; reject otherwise.
+- [ ] Client sends **`forwarderIds`**, never email strings; the function resolves addresses itself.
+- [ ] Service-role key: only the Edge Function env (auto-injected) — **never** app/`VITE_`/repo.
+- [ ] Keep-alive: callable only by **pg_cron / service role**, not anonymous HTTP.
+- [ ] No secret in any `console.log` / error response.
+- [ ] Per-period send cap + cooldown (§9).
+
+### Break-glass / revocation (know this *before* go-live)
+- **Token compromised** → Entra: **revoke sign-in sessions** for `luismht@` (invalidates the
+  refresh token) + reset password → re-seed (`graph.py seed`) → upsert the new token (§15.2).
+- **Service-role key compromised** → rotate it in Supabase → update the Edge Function env.
+- **Supabase / GitHub account compromised** → rotate keys, review recent deploys, check the audit
+  log + Sent Items.
+- **Phase 2 improves posture:** an app-only token (no human session to hijack) + a
+  **rotatable/expiring client secret or certificate** + ApplicationAccessPolicy scoping — plan that
+  migration before scaling beyond the rehearsal.
