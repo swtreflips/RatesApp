@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Loader2, ClipboardList, RefreshCw, FilePlus } from 'lucide-react'
+import { Loader2, ClipboardList, RefreshCw, FilePlus, Send, BellRing } from 'lucide-react'
 import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
+import { Toast } from '../../rates/rateGrid'
 import { fetchOpenRequests } from '../services/rateRequestService'
+import SendModal from '../components/SendModal'
 
 /*
   Requester "Open Requests" — active rate-request lanes still within their 10-day
@@ -29,6 +31,13 @@ export default function OpenRequests() {
   const [lanes, setLanes] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [sendMode, setSendMode] = useState(null) // 'request' | 'reminder' | null
+  const [toast, setToast] = useState(null)
+
+  function showToast(severity, message) {
+    setToast({ severity, message })
+    setTimeout(() => setToast(null), 5000)
+  }
 
   async function load() {
     setLoading(true)
@@ -55,6 +64,22 @@ export default function OpenRequests() {
             >
               <RefreshCw size={15} />
               Refresh
+            </button>
+            <button
+              onClick={() => setSendMode('reminder')}
+              disabled={lanes.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-fog-300 bg-white px-3 py-2 text-sm font-medium text-harbor-700 shadow-sm transition-all hover:border-harbor-300 hover:bg-fog-50 hover:text-harbor-900 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <BellRing size={15} />
+              Send Reminder
+            </button>
+            <button
+              onClick={() => setSendMode('request')}
+              disabled={lanes.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-fog-300 bg-white px-3 py-2 text-sm font-medium text-harbor-700 shadow-sm transition-all hover:border-harbor-300 hover:bg-fog-50 hover:text-harbor-900 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Send size={15} />
+              Send Rate Request
             </button>
             <button
               onClick={() => navigate('/internal/new')}
@@ -123,6 +148,15 @@ export default function OpenRequests() {
             </tbody>
         </ScrollTable>
       )}
+
+      {sendMode && (
+        <SendModal
+          mode={sendMode}
+          onClose={() => setSendMode(null)}
+          onResult={showToast}
+        />
+      )}
+      <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   )
 }
