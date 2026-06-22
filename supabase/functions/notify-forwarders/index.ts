@@ -39,13 +39,26 @@ function env(name: string, fallback?: string): string {
   return v
 }
 
+// CORS — the modal calls this cross-origin from the browser, so answer the preflight + echo headers.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...corsHeaders },
+  })
 
 const ackKey = (forwarderId: string, laneId: string, period: number | null) =>
   `${forwarderId}|${laneId}|${period ?? ''}`
 
 Deno.serve(async (req) => {
+  // CORS preflight — must return before any auth/work.
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+
   try {
     // ── parse ──
     const { kind, forwarderIds, period } = await req.json().catch(() => ({})) as {
@@ -133,6 +146,7 @@ Deno.serve(async (req) => {
           else if (s === 'skipped') skipped++
           else outstanding++
         }
+        const emails = emailsByForwarder.get(f.id) ?? []
         return {
           forwarderId: f.id,
           name: f.name,
@@ -140,7 +154,8 @@ Deno.serve(async (req) => {
           outstandingCount: outstanding,
           respondedCount: responded,
           skippedCount: skipped,
-          recipientCount: (emailsByForwarder.get(f.id) ?? []).length,
+          emails,                       // shown to the internal user in the modal (trusted view)
+          recipientCount: emails.length,
           lastNotifiedAt: lastNotifiedAt.get(f.id) ?? null,
         }
       })

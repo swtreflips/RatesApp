@@ -1,10 +1,19 @@
 # Alerts & Notifications Model
 
-**Status:** Design spec. **Not implemented.** Build during/after the MOCKDEPLOY rehearsal.
-**Created:** June 15, 2026
+**Status:** **Phase 1 outbound is BUILT & deployed** (seed → cloud send → Send/Reminder buttons),
+June 21, 2026. Inbound (§8), keep-alive cron (§6c), and Phase 2 (app-only / shared mailbox) still
+pending. **Created:** June 15, 2026.
 **Relates to:** `CLAUDE.md` (Edge Functions for notifications), `PROVIDER_VIEW_MODEL.md`
 §6 (response roster), `COVERAGE_MODEL.md` (per-forwarder lane relevance), `MOCKDEPLOY.md`
 (M365 tenant + Cloudflare gate).
+
+> **This file has two parts:**
+> **Part A — As-Built Record (§0)** — what is *actually deployed* now: the implemented system,
+> schemas, files, flows, and the decisions made while building it. Source of truth for the current
+> mental/system model.
+> **Part B — Design & Planning Spec (§1 onward)** — the original design guidelines. Some is now
+> built (see Part A), some is still pending. Where they differ, **Part A wins for "what is,"
+> Part B for "why / what's next."**
 
 **Locked decisions / tech stack:** emails are sent **truly from the M365 / Outlook mailbox**
 via the **Microsoft Graph API** (`sendMail`), called from a **Supabase Edge Function** —
@@ -16,6 +25,159 @@ requester-controlled**, never automatic per lane-post. (Power Automate is a low-
 only — **not used here**, since Graph is already wired.)
 
 ---
+
+# Part A — As-Built Record (implemented June 21, 2026)
+
+> What is **actually deployed and working** today, plus the decisions taken while building it.
+> Part B (§1+) is the original spec. This section is the current system/mental model.
+
+## 0. As-Built
+
+### 0.1 The headline shift — local Python → Supabase + Deno, "everything online"
+The send pipeline moved off a local machine entirely. The Python reference (`graph.py`) is now
+**seed + reference only**; the runtime lives in Supabase Edge Functions (Deno/TS).
+
+- **The single remaining local + Python step is `python graph.py seed`** — the one-time, interactive
+  device-code login (`msal`) that mints the first refresh token. It *cannot* run in an Edge Function.
+  After seeding, **every send + token refresh runs in the cloud**, machine-independent (colleagues
+  send with your computer off). Re-seed only on session-invalidation events (password/MFA/CA change).
+- **Logic reused, code re-implemented.** `graph.py`'s mechanics were ported to Deno: openpyxl→XML
+  surgery, `msal/requests` refresh+send→`fetch`, the local `.graph_refresh_token` file→a DB row.
+- **Philosophy:** keep the trust boundary in the Edge Function (next to the data/RLS); secrets never
+  reach the browser; the client sends IDs, the server resolves everything sensitive.
+
+### 0.2 Outbound template fill — XML surgery, not a spreadsheet library (DECIDED)
+The filled `.xlsx` attachment is produced by **direct XML/zip surgery** (`npm:fflate`), **not ExcelJS**.
+- **Why:** the template's POD / Last CY / Carrier dropdowns are **x14 extension-list data validations**
+  (10 of them, column-wide sqref e.g. `M2:M1048576`). Both ExcelJS *and* openpyxl **drop x14
+  validations on re-save**. Surgery writes **only the cell values** into `xl/worksheets/sheet1.xml`
+  (as inline strings, so `sharedStrings.xml` is untouched) and leaves every other zip entry
+  **byte-for-byte identical** → styles, dropdowns, and the `Validation` sheet survive 100%.
+- **Verified:** generated file has all 13 entries preserved, `styles.xml`/`sharedStrings.xml`/
+  `Validation` byte-identical, all 10 x14 validations intact; round-trips back through the inbound
+  parser; opens clean in Excel with working dropdowns.
+- **Inbound stays SheetJS, unchanged.** SheetJS reads an uploaded `.xlsx` → first sheet → CSV (values
+  only; styles irrelevant inbound). **No conflict:** SheetJS = read (frontend), fflate surgery =
+  write (Edge Function). Two opposite directions.
+- **Template delivery = base64-embedded TS** (`templateBytes.ts`), not a bundled binary asset or
+  `Deno.readFile` — guaranteed to deploy because it's code. (Supabase Storage is still the §6a
+  end-state; deferred.)
+
+### 0.3 Files built this session
+| File | Role |
+|---|---|
+| `supabase/functions/_shared/fillTemplate.ts` | XML-surgery fill (mirrors `graph.py` column map C/D/H/I/L/M/N, rows from 2) |
+| `supabase/functions/_shared/templateBytes.ts` | the template, base64-embedded (regenerate from the `.xlsx` if it changes) |
+| `supabase/functions/_shared/graph.ts` | shared Graph helpers: `getAccessToken` (refresh+rotate+persist), `sendMail` (multi-recipient), `invitationHtml`, `toBase64` |
+| `supabase/functions/send-template/` | **throwaway smoke test** (`--no-verify-jwt`, open endpoint) — RETIRE once confident |
+| `supabase/functions/notify-forwarders/` | **the real function** — role-gated; `kind: request \| reminder \| preview` |
+| `supabase/migrations/20260621120000_notify_forwarders.sql` | audit tables + flags + recipient resolver |
+| `src/features/internal/services/notifyService.js` | client wrapper (`previewNotification` / `sendNotification`) |
+| `src/features/internal/components/SendModal.jsx` | shared recipient picker (roster badges, All toggle, cooldown warn) |
+| `src/features/internal/pages/OpenRequests.jsx` | **Send Rate Request** + **Send Reminder** buttons + toast |
+
+### 0.4 Schemas added (live on the remote DB)
+```sql
+-- token store (created earlier, §6c): single row, RLS ON + NO policies → service-role only
+graph_credentials(id int pk =1, refresh_token text, updated_at timestamptz)
+
+-- audit log (§7): internal can SELECT; forwarders no access; inserts via service role (bypasses RLS)
+notifications(id uuid, kind 'request'|'reminder', triggered_by uuid→auth.users, period int, created_at)
+notification_recipients(id, notification_id→notifications, forwarder_id→forwarders,
+                        email text /*snapshot, joined*/, lane_count int,
+                        status 'queued'|'sent'|'failed', error text, sent_at timestamptz)
+
+-- recipient controls (multi-analyst model)
+forwarders.active                boolean default true   -- whole-company on/off (default recipient set)
+profiles.receives_rate_requests  boolean default true   -- per-analyst opt-out
+
+-- recipient resolver: SECURITY DEFINER, EXECUTE revoked from public/anon/authenticated,
+-- granted to service_role only (auth.users.email never reaches the browser)
+get_forwarder_recipients(p_forwarder_ids uuid[]) → (forwarder_id, forwarder_name, email)
+  = forwarders(active) ⨝ profiles(receives_rate_requests) ⨝ auth.users(email)
+```
+
+### 0.5 Recipient model — DECIDED (fits multi-analyst access)
+A forwarder company has **many analysts** (multiple `profiles` sharing `forwarder_id`).
+- **Analysts ARE the contacts.** Email = **`auth.users.email`** (their login) — **never duplicated**
+  into `profiles`. No separate "contact" column.
+- **One email per forwarder**, with **all that forwarder's opted-in analysts** in `toRecipients`.
+- **Two control knobs:** `forwarders.active` (company) and `profiles.receives_rate_requests`
+  (analyst). Today these are **set via SQL / Table Editor — no in-app UI yet** (a future
+  "Recipients" admin screen is the natural next slice).
+
+### 0.6 Token lifecycle (as-built)
+1. **Seed (local, once):** `graph.py seed` → device-code login as `luismht@` → upsert the refresh
+   token into `graph_credentials` (id=1).
+2. **Per send (cloud):** function reads the row → POST `{tenant}/oauth2/v2.0/token`
+   (`grant_type=refresh_token`, no secret) → gets `access_token` + a **rotated** `refresh_token` →
+   **persists the rotated token back** to the row. That rotation-persistence *is* the keep-alive.
+3. **Fail-loud:** a non-200 grant (≈90-day lapse / MFA / CA change) throws a clear "re-seed required"
+   error rather than failing silently.
+4. **Keep-alive cron — NOT YET BUILT** (§6c/§15.4): a weekly `pg_cron` refresh-only run is still
+   pending. Until then, the chain stays alive only through regular sends.
+
+### 0.7 notify-forwarders — system flow (as-built)
+```
+Browser (internal user, Open Requests)
+  supabase.functions.invoke('notify-forwarders', { kind, forwarderIds?, period? })   // IDs only, never emails
+        │  (supabase-js auto-attaches the user's JWT)
+        ▼
+Edge Function notify-forwarders (Deno, deployed WITH jwt verification)
+  0. CORS preflight (OPTIONS) handled + CORS headers on every response   ← required for browser calls
+  1. ROLE-GATE: getUser() from the caller's JWT → require profiles.role = 'internal'  (else 401/403)
+  2. service-role client: forwarder set (explicit ids, else all active)
+  3. recipients = rpc('get_forwarder_recipients', ids) → emails grouped per forwarder
+  4. open lanes (expires_at > now) + all rate_submissions acks → outstanding anti-join
+  5a. kind='preview'  → return roster {responded/skipped/outstanding/recipientCount/lastNotifiedAt}; SEND NOTHING
+  5b. kind='request'  → lanes per forwarder = ALL open lanes
+      kind='reminder' → lanes per forwarder = OUTSTANDING only (no ack for (forwarder,lane,period))
+      → token step (0.6) → per forwarder: fillTemplate → sendMail(all analyst emails)
+      → insert notifications + notification_recipients (sent/failed per forwarder)
+  6. return { sent, failed }
+        ▼
+login.microsoftonline.com (token)  +  graph.microsoft.com/me/sendMail → Outlook (luismht@) → forwarders
+```
+- **"Who responded" is derived from `rate_submissions`** (the anti-join), **never** from the audit
+  log. `notifications` is audit / "last notified" / future bell only (§7).
+- **Reminder correctness falls out for free:** a forwarder who answered everything has 0 outstanding
+  → skipped; a mid-period new lane reappears for anyone who hasn't quoted it (§14).
+- The **modal is driven by `kind:'preview'`** — counts only, no emails ever sent to the browser.
+
+### 0.8 Security posture (as-built vs §16)
+- ✅ Client sends `forwarderIds` only; emails resolved server-side (`get_forwarder_recipients`,
+  service-role-only). Browser never holds the recipient list or the token.
+- ✅ `notify-forwarders` is **role-gated + deployed with JWT verification**.
+- ✅ Refresh token in the locked `graph_credentials` row (RLS on, no policies); service-role key only
+  in the Edge env (auto-injected); never `VITE_`, never logged.
+- ⚠️ **`send-template` is still deployed `--no-verify-jwt` = an open mail-sending endpoint.**
+  **Action: delete it** (`supabase functions delete send-template`) once `notify-forwarders` is trusted.
+
+### 0.9 Ops / deploy model (learned this session)
+- **Two independent deploys:** (a) **Edge Functions** → `npx supabase functions deploy <name>` (to
+  Supabase); (b) **frontend** → `git push main` → **Vercel**. A git push does **not** deploy functions,
+  and a function deploy does **not** touch the app.
+- **DB changes:** `npx supabase db push` (or paste SQL in the editor). Remote push needs **no Docker**
+  (the Docker warning only affects an optional local catalog cache).
+- **Three separate config stores — do not conflate:** Vercel `VITE_*` (frontend, public) ·
+  Edge `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` (auto-injected) · Edge secrets
+  `MS_TENANT_ID`/`MS_CLIENT_ID`/`SENDER_NAME`/`APP_URL` (`supabase secrets set`).
+- **Toolchain:** Supabase CLI = npm dev-dep (`npx supabase`); Deno installed for local typecheck/test.
+  This CLI (v2.107) has **no `functions invoke`** → invoke functions over HTTP (`curl`) or from the app.
+- **CORS:** any browser-invoked function must answer the `OPTIONS` preflight and return
+  `Access-Control-Allow-*` headers (added to `notify-forwarders`; was the cause of the first
+  "Failed to send a request to the Edge Function" error).
+
+### 0.10 Still open (tracked in Part B)
+- Retire `send-template` (0.8). · Keep-alive `pg_cron` (0.6 / §6c). · In-app recipient management UI
+  (0.5). · Inbound `notify-submission` (§8). · Phase 2: app-only `Mail.Send` + shared `rates@` mailbox
+  (§6c/§13). · Coverage-aware lane filtering (§11 / `COVERAGE_MODEL.md`).
+
+---
+
+# Part B — Design & Planning Spec
+
+> The original design guidelines (predates the build). Cross-check against Part A for current state.
 
 ## 1. Two directions
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { X, Send, Loader2, AlertTriangle, Clock, Mail } from 'lucide-react'
+import { X, Send, Loader2, Clock, Mail } from 'lucide-react'
 import { previewNotification, sendNotification } from '../services/notifyService'
 
 /*
@@ -14,11 +14,6 @@ import { previewNotification, sendNotification } from '../services/notifyService
 
 const COOLDOWN_MS = 12 * 60 * 60 * 1000 // soft re-send warning window (ALERTS.md §9)
 
-function fmtWhen(iso) {
-  if (!iso) return null
-  return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
-
 export default function SendModal({ mode, onClose, onResult }) {
   const isReminder = mode === 'reminder'
   const [roster, setRoster] = useState([])
@@ -28,7 +23,7 @@ export default function SendModal({ mode, onClose, onResult }) {
   const [sending, setSending] = useState(false)
 
   const laneCountFor = (r) => (isReminder ? r.outstandingCount : r.openCount)
-  const selectable = (r) => r.recipientCount > 0 && laneCountFor(r) > 0
+  const selectable = (r) => (r.emails?.length ?? 0) > 0 && laneCountFor(r) > 0
 
   useEffect(() => {
     let active = true
@@ -144,7 +139,7 @@ export default function SendModal({ mode, onClose, onResult }) {
                 {roster.map((r) => {
                   const lanes = laneCountFor(r)
                   const can = selectable(r)
-                  const recent = r.lastNotifiedAt && Date.now() - new Date(r.lastNotifiedAt).getTime() < COOLDOWN_MS
+                  const emails = r.emails ?? []
                   return (
                     <li
                       key={r.forwarderId}
@@ -158,24 +153,10 @@ export default function SendModal({ mode, onClose, onResult }) {
                         className="h-4 w-4 rounded border-fog-300 text-signal-600 focus:ring-signal-400 disabled:opacity-50"
                       />
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-medium text-harbor-900">{r.name}</span>
-                          {r.recipientCount === 0 && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 ring-1 ring-red-100">
-                              <AlertTriangle size={10} /> no email
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[11px] text-fog-500">
-                          <span className="text-sea-700">✓ {r.respondedCount}/{r.openCount}</span>
-                          {r.skippedCount > 0 && <span>⤫ {r.skippedCount}</span>}
-                          <span className={r.outstandingCount > 0 ? 'text-signal-700' : ''}>— {r.outstandingCount} pending</span>
-                          {recent && (
-                            <span className="inline-flex items-center gap-1 text-signal-700">
-                              <Clock size={10} /> notified {fmtWhen(r.lastNotifiedAt)}
-                            </span>
-                          )}
-                        </div>
+                        <span className="block truncate text-sm font-medium text-harbor-900">{r.name}</span>
+                        <span className={`block truncate text-xs ${emails.length ? 'text-fog-500' : 'text-red-500'}`}>
+                          {emails.length ? emails.join(', ') : 'no active recipients'}
+                        </span>
                       </div>
                       <span className="shrink-0 font-mono text-xs font-semibold text-harbor-700">
                         {lanes} lane{lanes === 1 ? '' : 's'}
