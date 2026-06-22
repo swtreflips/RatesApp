@@ -80,7 +80,8 @@ create policy "forwarder rates" on rates
 Consequences:
 - **Company-level isolation.** Two analysts at the same forwarder **share** their company's Active
   Rates (teammates, by design). Different forwarders **cannot** see each other's rates.
-- **Internal users** see all lane-linked rates via a separate `requester reads rates` policy.
+- **Internal users** see **all** rates (lane-linked *and* independent) via the `requester reads
+  rates` policy (`current_role_is('internal')`).
 - **Fails closed.** Forget the `profiles` row (or `forwarder_id` is null) → `my_forwarder()` is null →
   user sees **nothing**, never someone else's data. The only way to leak across companies is putting
   the **wrong** `forwarder_id` on step B.3 → **double-check the company UUID.**

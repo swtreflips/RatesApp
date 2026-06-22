@@ -175,7 +175,7 @@ create policy "forwarder rates" on rates
   for all using (forwarder_id = my_forwarder())
   with check (forwarder_id = my_forwarder() and provider_id = auth.uid());
 create policy "requester reads rates" on rates
-  for select using (current_role_is('internal') and lane_id is not null);
+  for select using (current_role_is('internal'));   -- ALL rates: lane-linked + independent (June 22, 2026)
 
 -- ── "Upload Rates" feature (internal records rates on behalf of a forwarder) ──────
 -- Internal users are trusted; they pick the forwarder per row and stamp themselves as enterer.
@@ -187,15 +187,15 @@ create policy "requester writes submissions" on rate_submissions
   for insert with check (current_role_is('internal') and provider_id = auth.uid());
 create policy "requester updates submissions" on rate_submissions
   for update using (current_role_is('internal')) with check (current_role_is('internal'));
-create policy "requester reads own-recorded rates" on rates
-  for select using (current_role_is('internal') and provider_id = auth.uid());
+-- "requester reads own-recorded rates" was DROPPED June 22, 2026 — superseded by the broadened
+-- "requester reads rates" above (internal now reads every rate, so the per-user read is redundant).
 ```
 
 **Net effect:** forwarder A's analysts share everything and can't see forwarder B; the
-requester team sees all lanes + all lane-linked rates/skips; independent rates
-(`lane_id IS NULL`) stay private to the forwarder. Internal users can additionally **record
-rates on behalf of any forwarder** (the four `requester writes/updates/reads own-recorded`
-policies above) — stamped `provider_id = the internal user`, `forwarder_id = the chosen forwarder`.
+internal team sees **all rates** (lanes + lane-linked *and* independent rates — June 22, 2026;
+the old `lane_id is not null` restriction was dropped). Internal users can additionally **record
+rates on behalf of any forwarder** (the `requester writes/updates` policies above) — stamped
+`provider_id = the internal user`, `forwarder_id = the chosen forwarder`.
 
 ---
 
@@ -213,8 +213,10 @@ policies above) — stamped `provider_id = the internal user`, `forwarder_id = t
    `status='submitted'` (1+ rates) or `status='skipped'` (0 rates). One per
    `(lane, forwarder, period)`.
 5. **Independent rates.** Rates can exist with no request (`lane_id/submission_id/period`
-   all null). Requesters do NOT see them (RLS `lane_id is not null`); the forwarder does
-   (Active Rates). A rate = POL, POD, Last CY, Rate, Free Days, Carrier, Valid Until, Remarks.
+   all null). **Internal sees them too** (June 22, 2026 — the `lane_id is not null` read
+   restriction was dropped; internal Active Rates shows lane-linked + independent, tagged
+   Request/Standalone); the forwarder sees their own company's (Active Rates). A rate = POL,
+   POD, Last CY, Rate, Free Days, Carrier, Valid Until, Remarks.
    FD/container type/count are **request guides only**, not part of a rate.
 6. **Append-only storage.** Rates are never deleted on re-submit (history preserved);
    display is "latest" (dedup not yet built).
