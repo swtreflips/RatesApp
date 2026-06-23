@@ -5,9 +5,10 @@ import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchOpenRequests } from '../services/rateRequestService'
 import { fetchForwarders, submitRatesOnBehalf } from '../services/recordRatesService'
 import {
-  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput,
+  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, AutocompleteEditCell,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
 } from '../../rates/rateGrid'
+import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS } from '../../rates/locationOptions'
 
 /*
   Internal "Upload Rates" — record rates on behalf of a forwarder.
@@ -143,14 +144,17 @@ export default function UploadRates() {
       renderCell: (params) => params.value ?? '',
       renderEditCell: (params) => <ForwarderGhostInput {...params} forwarders={forwarders} />,
     },
-    { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true },
+    { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} /> },
     // template guides (request-side; preloaded from the lane)
     { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true },
     { field: 'containerType', headerName: 'Cont. Type', width: 88, cellClassName: 'font-mono' },
     { field: 'containerCount', headerName: '# Cont.', width: 70, type: 'number', cellClassName: 'font-mono' },
     // rate fields
-    { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true },
-    { field: 'lastCy', headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true },
+    { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_DISCHARGE} /> },
+    { field: 'lastCy', headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} /> },
     {
       field: 'rate',
       headerName: 'Rate/Unit',

@@ -5,7 +5,8 @@ import Papa from 'papaparse'
 import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { gridScrollHeight } from '../../rates/rateGrid'
+import { gridScrollHeight, AutocompleteEditCell } from '../../rates/rateGrid'
+import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS } from '../../rates/locationOptions'
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
@@ -82,6 +83,7 @@ export default function NewRateRequest() {
       flex: 1,
       minWidth: 180,
       editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} />,
     },
     {
       field: 'pod',
@@ -89,6 +91,7 @@ export default function NewRateRequest() {
       flex: 1,
       minWidth: 170,
       editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_DISCHARGE} />,
     },
     {
       field: 'lastCy',
@@ -96,6 +99,7 @@ export default function NewRateRequest() {
       flex: 0.8,
       minWidth: 140,
       editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} />,
     },
     {
       field: 'fd',

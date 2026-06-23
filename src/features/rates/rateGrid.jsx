@@ -13,6 +13,7 @@ import React, { useState, useRef } from 'react'
 import { X } from 'lucide-react'
 import Papa from 'papaparse'
 import { useGridApiContext } from '@mui/x-data-grid'
+import { Autocomplete, TextField } from '@mui/material'
 
 /* ── file upload (CSV or XLSX) ─────────────────────────────────────────────
    Turn an uploaded .csv OR .xlsx/.xls file into Papa results, then hand them to the caller's
@@ -103,6 +104,65 @@ export function CarrierGhostInput({ id, field, value }) {
         onKeyDown={onKeyDown}
       />
     </div>
+  )
+}
+
+/* ── predictive (Google-style) edit cell ───────────────────────────────────
+   A DataGrid edit cell that shows a dropdown of matching suggestions once `minChars` are typed
+   (default 3), prefix matches first then substring, capped at 8. `freeSolo` keeps typed values
+   that aren't in the list (locations evolve). Used for POL / POD / Last CY; parameterized by
+   `options` (see locationOptions.js). Commits on every keystroke (so free text persists) and
+   closes the editor on select. */
+export function AutocompleteEditCell({ id, field, value, options, minChars = 3 }) {
+  const apiRef = useGridApiContext()
+  const [input, setInput] = useState(value ?? '')
+
+  const q = input.trim().toLowerCase()
+  let matches = []
+  if (q.length >= minChars) {
+    const starts = []
+    const has = []
+    for (const o of options) {
+      const lo = o.toLowerCase()
+      if (lo.startsWith(q)) starts.push(o)
+      else if (lo.includes(q)) has.push(o)
+    }
+    matches = [...starts, ...has].slice(0, 8)
+  }
+
+  const commit = (v) => apiRef.current.setEditCellValue({ id, field, value: v ?? '' })
+
+  return (
+    <Autocomplete
+      open={matches.length > 0}
+      freeSolo
+      autoHighlight
+      fullWidth
+      disableClearable
+      options={matches}
+      filterOptions={(o) => o}   // already filtered above (keeps prefix-first ordering)
+      inputValue={input}
+      onInputChange={(_, v) => { setInput(v); commit(v) }}
+      onChange={(_, v) => {
+        const val = v ?? ''
+        setInput(val)
+        commit(val)
+        apiRef.current.stopCellEditMode({ id, field })
+      }}
+      slotProps={{ paper: { sx: { fontSize: '0.8rem', fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif' } } }}
+      sx={{
+        width: '100%',
+        '& .MuiInput-root': {
+          height: '100%',
+          fontSize: '0.8rem',
+          fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
+          color: '#132236',
+        },
+        '& .MuiInput-root:before, & .MuiInput-root:after': { borderBottom: 'none !important' },
+        '& .MuiInput-input': { padding: '0 8px' },
+      }}
+      renderInput={(params) => <TextField {...params} autoFocus variant="standard" />}
+    />
   )
 }
 
