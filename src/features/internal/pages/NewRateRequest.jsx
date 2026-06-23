@@ -6,7 +6,7 @@ import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { gridScrollHeight, AutocompleteEditCell } from '../../rates/rateGrid'
-import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS } from '../../rates/locationOptions'
+import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS, FINAL_DESTINATIONS } from '../../rates/locationOptions'
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
@@ -107,6 +107,7 @@ export default function NewRateRequest() {
       flex: 1,
       minWidth: 180,
       editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={FINAL_DESTINATIONS} />,
     },
     {
       field: 'containerType',

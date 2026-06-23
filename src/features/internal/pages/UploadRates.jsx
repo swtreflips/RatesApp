@@ -8,7 +8,7 @@ import {
   makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, AutocompleteEditCell,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
 } from '../../rates/rateGrid'
-import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS } from '../../rates/locationOptions'
+import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS, FINAL_DESTINATIONS } from '../../rates/locationOptions'
 
 /*
   Internal "Upload Rates" — record rates on behalf of a forwarder.
@@ -147,7 +147,8 @@ export default function UploadRates() {
     { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true,
       renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} /> },
     // template guides (request-side; preloaded from the lane)
-    { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true },
+    { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={FINAL_DESTINATIONS} /> },
     { field: 'containerType', headerName: 'Cont. Type', width: 88, cellClassName: 'font-mono' },
     { field: 'containerCount', headerName: '# Cont.', width: 70, type: 'number', cellClassName: 'font-mono' },
     // rate fields
