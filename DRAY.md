@@ -2,14 +2,24 @@
 
 **Status:** Design spec. **Not implemented.** Created June 24, 2026.
 **Relates to:** `MEMORY.md` (schema/RLS), `ONBOARDING.md` (onboarding), `ALERTS.md` (notifications).
-**Decisions (locked):** split tables per service · `forwarder_services` join table · two per-service
-opt-in booleans on `profiles` · keep `internal | forwarder` roles.
+**Decisions (locked):** split tables per service · **no rename — keep existing ocean table names,
+add `drayage_*` alongside** · `forwarder_services` join table · two per-service opt-in booleans on
+`profiles` · keep `internal | forwarder` roles.
+
+> **No-rename approach (chosen).** Every DB change is **additive** — existing ocean tables, their RLS
+> policies, and their data are untouched; we only `create` new drayage tables + `add` new policies/
+> columns. The naming asymmetry (`rates` vs `drayage_rates`) is hidden inside one place,
+> `serviceConfig` (§3), so the rest of the code stays uniform. This removes the riskiest step (the
+> rename + retrofitting every existing reference) and keeps everything on one codebase.
 
 ## 1. The core idea
 The app was built ocean-only. Drayage is the *same shape* of workflow (request lanes → forwarder
 fills a template → rates, with notifications) but **different columns and longer validity**. Model it
 as a **second service that runs in parallel**, not a fork of the app:
 
+- **Ocean tables keep their current names** (`rates`, `rate_request_lanes`, `rate_submissions`,
+  `rate_request_batches`) — ocean is the implied default. Drayage gets new `drayage_*` tables. No
+  renames anywhere, so existing ocean code/RLS/data are untouched.
 - **One company, N services.** A `forwarders` row (provider company) gains capability rows in a new
   `forwarder_services` table: `ocean`, `drayage`, or both. Onboard/remove a service = insert/delete
   one row (data-only — same philosophy as `ONBOARDING.md`).
@@ -36,23 +46,21 @@ create table forwarder_services (
 insert into forwarder_services (forwarder_id, service)
   select id, 'ocean' from forwarders;
 
--- per-service notification opt-in (replaces the single receives_rate_requests)
-alter table profiles rename column receives_rate_requests to receives_ocean_requests;
+-- per-service notification opt-in.
+-- KEEP the existing receives_rate_requests as the OCEAN flag (no rename); just add drayage.
 alter table profiles add column receives_drayage_requests boolean not null default true;
+-- (receives_rate_requests = the ocean opt-in; referenced as such in get_forwarder_recipients below)
 ```
 
-### 2b. Per-service pipelines (rename ocean, add drayage)
+### 2b. Per-service pipelines (keep ocean as-is, add drayage)
 ```sql
--- rename the ocean pipeline for clarity
-alter table rate_request_lanes rename to ocean_request_lanes;
-alter table rate_submissions   rename to ocean_submissions;
-alter table rates              rename to ocean_rates;
+-- NO RENAMES. Ocean stays: rates / rate_request_lanes / rate_submissions / rate_request_batches.
 
--- batches stay shared but tagged
+-- batches stay shared but tagged (additive column; existing rows default to 'ocean')
 alter table rate_request_batches add column service text not null default 'ocean'
   check (service in ('ocean','drayage'));
 
--- drayage mirrors (COLUMNS = TBD — see §6; longer validity by default)
+-- drayage mirrors (NEW tables only — COLUMNS = TBD, see §6; longer validity by default)
 create table drayage_request_lanes ( id uuid pk …, batch_id uuid → rate_request_batches,
   /* drayage demand columns */ posted_at, period,
   expires_at timestamptz not null default (now() + interval '30 days') );   -- longer TTL
@@ -63,9 +71,9 @@ create table drayage_rates         ( … submission_id → drayage_submissions, 
 ```
 
 ### 2c. RLS + helpers (no new helpers needed)
-`my_forwarder()` / `current_role_is()` are reused. Replicate the existing ocean policies onto each
-new table verbatim (the isolation predicate `forwarder_id = my_forwarder()` is identical):
-`ocean_rates`/`drayage_rates`, `ocean_submissions`/`drayage_submissions`, lanes, etc. Add:
+`my_forwarder()` / `current_role_is()` are reused. **Existing ocean policies stay untouched.** Just
+**add** policies on the new `drayage_*` tables, copied verbatim from the ocean ones (the isolation
+predicate `forwarder_id = my_forwarder()` is identical). Also add:
 ```sql
 alter table forwarder_services enable row level security;
 create policy "read services" on forwarder_services
@@ -85,7 +93,7 @@ language sql stable security definer set search_path = public, auth as $$
   from forwarders f
   join forwarder_services fs on fs.forwarder_id = f.id and fs.service = p_service and fs.active
   join profiles p on p.forwarder_id = f.id
-    and case p_service when 'drayage' then p.receives_drayage_requests else p.receives_ocean_requests end
+    and case p_service when 'drayage' then p.receives_drayage_requests else p.receives_rate_requests end
   join auth.users u on u.id = p.id
   where f.id = any(p_forwarder_ids) and f.active and u.email is not null;
 $$;
@@ -96,7 +104,7 @@ $$;
 | Area | Change |
 |---|---|
 | **`AuthProvider`** | Load the user's services: forwarder → `select service from forwarder_services` for their company; internal → `['ocean','drayage']`. Expose `services` in context. |
-| **`serviceConfig.js`** (new, in `features/rates/`) | One object per service: `{ label, slug, icon, tables:{lanes,subs,rates}, columns, options, templateId, validityDays }`. Single source that parameterizes grids + data calls. |
+| **`serviceConfig.js`** (new, in `features/rates/`) | One object per service: `{ label, slug, icon, tables:{lanes,subs,rates}, columns, options, templateId, validityDays }`. **Ocean's `tables` point at the existing names** (`rates`/`rate_request_lanes`/`rate_submissions`); drayage at `drayage_*`. This one file absorbs the naming asymmetry; everything else reads `serviceConfig[service].tables.*` uniformly. |
 | **`Sidebar`** | Render **sections** from `services` (see Diagram A): a labeled group per service. One service → just that group; both → two groups. Internal always shows both. |
 | **Routing** | Add a `:service` segment: internal `/internal/:service/{new,requests,rates,upload}`, forwarder `/forwarder/:service/{lanes,submissions}`. Roots guard access (redirect if the company lacks `:service`). Dashboards stay at `/internal` `/forwarder`. |
 | **Feature pages** | Existing pages (SubmitRates, ActiveRates, NewRateRequest, OpenRequests, ReceivedRates, UploadRates) read `useParams().service` → pull columns/options/table-fns from `serviceConfig`. Shared `rateGrid` primitives already support per-column config + `AutocompleteEditCell`. |
@@ -122,7 +130,7 @@ login → role?
 forwarders ──<  forwarder_services (service, active)        ← capability
      │
      ├──<  profiles (role, forwarder_id,
-     │             receives_ocean_requests, receives_drayage_requests)   ← per-service directory
+     │             receives_rate_requests [ocean], receives_drayage_requests)   ← per-service directory
      │
 rate_request_batches (service) ──< ocean_request_lanes  ──< ocean_submissions  ──< ocean_rates
                                 └─< drayage_request_lanes──< drayage_submissions──< drayage_rates
@@ -150,16 +158,17 @@ internal clicks Send on /internal/ocean/requests   →  invoke(notify-forwarders
    → fill THAT service's template → /me/sendMail → notifications(service)
 ```
 
-## 5. Migration sequence
-1. **DB:** `forwarder_services` (+ backfill ocean) · profiles opt-in rename/add · rename ocean tables ·
-   `notifications.service` · service-aware `get_forwarder_recipients`. (Ocean keeps working.)
-2. **App refactor (ocean → service-parameterized):** `serviceConfig`, `:service` routes, AuthProvider
-   `services`, sidebar sections, parameterized pages/services. Ocean now lives under `/…/ocean/…` with
-   **no behavior change**. Coordinate with the table rename in one deploy (or add temporary DB views
-   `rates`→`ocean_rates` as aliases to de-risk).
-3. **notify-forwarders** service-aware + redeploy.
-4. **Add drayage:** define drayage columns + template, create `drayage_*` tables, add `drayage` to
-   `serviceConfig`, onboard a company into drayage (insert `forwarder_services` row).
+## 5. Migration sequence (all additive — ocean untouched)
+1. **DB (additive only):** create `forwarder_services` (+ backfill every forwarder with `ocean`) ·
+   add `profiles.receives_drayage_requests` · add `rate_request_batches.service` ·
+   add `notifications.service` · update `get_forwarder_recipients` to take `service`. **No renames.**
+2. **App refactor (ocean → service-parameterized):** `serviceConfig` (ocean tables = existing names),
+   `:service` routes, AuthProvider `services`, sidebar sections, parameterized pages/services. Ocean
+   now lives under `/…/ocean/…` with **no behavior change** — it still reads the same tables, so this
+   is a pure frontend refactor with nothing to coordinate at the DB level.
+3. **notify-forwarders** service-aware (`service` in payload) + redeploy.
+4. **Add drayage:** define drayage columns + template, create `drayage_*` tables (+ their RLS),
+   add `drayage` to `serviceConfig`, onboard a company into drayage (insert a `forwarder_services` row).
 
 ## 6. Open items (define before building drayage)
 - **Drayage lane + rate columns** (the actual fields — e.g. origin ramp/port, delivery zip/city,
