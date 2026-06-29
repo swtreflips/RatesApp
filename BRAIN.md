@@ -1,7 +1,7 @@
 # BRAIN.md — Wiring the Geo/Routing "Brain" into rates-app
 
 **Status:** Design + integration spec. **Path A chosen first** (standalone geo service); Path B kept
-as a future migration (§8). Created June 29, 2026.
+as a future migration (§9). Created June 29, 2026.
 **Relates to:** `geoapi-next` repo (the brain), `SUPA.md` in that repo (PostGIS/cache setup), `DRAY.md`
 (drayage service — the eventual consumer of routes).
 
@@ -16,7 +16,11 @@ as a future migration (§8). Created June 29, 2026.
 - rates-app talks to the brain over **plain HTTPS** (`fetch`). Secrets (HERE key, Supabase
   service-role key) live in the **brain's Vercel env vars — never in the browser bundle**.
 - The brain and rates-app already **share one Supabase project** (the "rates" project), so the cache
-  tables (`geocode_cache`, `here_route_cache`, `us_ports`) are common ground.
+  tables (`geocode_cache`, `here_route_cache`, `us_ports`) are common ground. **Same project (same
+  `SUPABASE_URL`) ≠ same key** — each app uses a *different* key (§3a). Don't conflate them.
+- **The DB connection is already solved; the open task is reachability.** Today the brain runs
+  *local-only* (`localhost`), which the deployed rates-app cannot reach. The integration is a
+  **promotion path** from local↔local dev to a public Vercel URL (§7).
 - Because the boundary is just an HTTP URL, **migrating to Path B (Supabase Edge Function) later
   changes only the URL/invoke call in rates-app — nothing else.**
 
@@ -98,6 +102,31 @@ the only thing that ever sees a secret or an upstream API.
 
 > Rule of thumb: if a value can drain money or bypass security, it lives with the brain. rates-app only
 > ever knows **where** the brain is, never **how** it authenticates upstream.
+
+### 3a. Same Supabase *project*, two *different* keys (do not conflate)
+
+Both apps point at the **same project** → the same `SUPABASE_URL`. That is why the cache tables are
+shared and why "the DB connection is already done." But they authenticate with **two different keys**,
+and that difference is the whole security model — it is **not** a thing to unify:
+
+| | rates-app (browser) | geoapi-next (the brain, server) |
+|---|---|---|
+| Var | `VITE_SUPABASE_ANON_KEY` (`src/lib/supabase.js`) | `SUPABASE_SERVICE_ROLE_KEY` (`lib/config.ts`) |
+| Key type | **anon** — public by design | **service-role** — secret, god-mode |
+| RLS | **enforced** (user sees only their rows) | **bypassed** (full table access) |
+| Safe in browser? | ✅ meant to be | ❌ **never** — `VITE_`-prefixing it ships it to every visitor |
+
+```
+                 SUPABASE_URL  (shared — copy this between apps freely)
+                 ┌─────────────┴─────────────┐
+   rates-app ──► anon key (RLS on)     service-role key (RLS off) ◄── geoapi-next
+   (browser)     public, fine                secret, server-only       (server)
+```
+
+> ✅ Share the **URL**.  ❌ Never copy rates-app's key into the brain, or the brain's key into rates-app.
+> Each pulls its own key from Supabase → Settings → API: rates-app the **anon** key, the brain the
+> **service_role** key. "It uses the same keys" is the one sentence that, if acted on, leaks god-mode
+> into the browser bundle.
 
 ---
 
@@ -224,7 +253,7 @@ is fine, but before real use add **one** of:
 ## 6. How rates-app calls the brain
 
 One thin client module — the **only** place rates-app knows the brain exists. Keep the interface
-identical to what a future Edge Function would expose, so the swap in §8 is a one-file change.
+identical to what a future Edge Function would expose, so the swap in §9 is a one-file change.
 
 ```js
 // rates-app/src/lib/geo.js
@@ -254,7 +283,98 @@ DrayageLaneRow  ──►  getRoute(origin, dest)  ──►  src/lib/geo.js  �
 
 ---
 
-## 7. Setup checklist (Path A)
+## 7. From local-only to deployed (the promotion path)
+
+This is the integration's real work. The DB side is **already done** (§3a) — the gap is **reachability**:
+who can actually open a network connection to the brain. The brain moves through *three* stages; the
+internal-role feature in rates-app only works against the brain once it reaches Stage 3.
+
+### Why local-only can't serve the deployed app
+
+```
+deployed rates-app (Vercel, on the public internet)
+        │  fetch('http://localhost:3000/api/route')
+        ▼
+   localhost  =  "this same machine."  To Vercel's servers and to a user's browser,
+                 localhost is THEIR machine, not yours. Your laptop on :3000 is not
+                 addressable from the internet.  ❌  request never arrives.
+```
+
+`localhost` is never a shared address. So a local brain can only be reached by software running on the
+**same machine** — which is fine for development, useless for the deployed app.
+
+### Stage 1 — Local ↔ Local (where you are now; do this first to learn the wiring)
+
+Both dev servers on your machine; they reach each other via `localhost`, and both reach the shared
+**cloud** Supabase DB.
+
+```
+ your laptop
+ ┌──────────────────────────────┐
+ │ rates-app  vite dev  :5173    │
+ │   VITE_GEO_API_URL=            │       ┌─────────────────────┐
+ │     http://localhost:3000  ───┼──────►│ geoapi-next  :3000   │
+ │ VITE_SUPABASE_URL=<rates proj>│  ✅    │  .env.local:         │
+ │ VITE_SUPABASE_ANON_KEY=<anon> │ same   │  SUPABASE_URL=<same> │
+ └───────────────┬───────────────┘ box   │  SERVICE_ROLE_KEY    │
+                 │                        │  HERE_API_KEY        │
+                 │                        └──────────┬───────────┘
+                 └────────────┬──────────────────────┘
+                              ▼
+                 Supabase "rates" project (cloud) — shared cache + tables
+```
+- rates-app `.env.local`: `VITE_GEO_API_URL=http://localhost:3000`
+- geoapi-next `.env.local`: already correct (URL + service-role + HERE key).
+- Run both; call `getRoute()` from a dev screen → full loop works, real cache, real HERE. **No deploy.**
+
+### Stage 2 — Deploy the brain to a public URL
+
+`vercel deploy` the **geoapi-next** project as its own Vercel project. Move every secret from
+`.env.local` into that project's **Vercel → Settings → Environment Variables** (`SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `HERE_API_KEY`, `CONTACT_EMAIL`, `ALLOWED_ORIGIN`). You get a public URL:
+
+```
+ https://geoapi-next-<hash>.vercel.app   ← now reachable from anywhere, incl. the deployed rates-app
+```
+Smoke-test before touching rates-app: `curl 'https://…/api/route?a=Los Angeles, CA&b=Long Beach, CA'`.
+
+### Stage 3 — Point the deployed rates-app at the deployed brain (internal-role access)
+
+In **rates-app's Vercel** env, set `VITE_GEO_API_URL=https://geoapi-next-<hash>.vercel.app` and
+redeploy (Vite bakes env vars in **at build time**, so a redeploy is required — changing the var
+without rebuilding does nothing).
+
+```
+deployed rates-app (Vercel)            deployed brain (Vercel)
+  internal-role screen                   /api/route (CORS: ALLOWED_ORIGIN = rates-app domain)
+        │  getRoute(a,b)                        │
+        └──────── HTTPS ───────────────────────┘
+                          └──► Supabase "rates" + HERE (cache-first)
+```
+
+> **Internal-role gating is rates-app's job, not the brain's.** The brain is a dumb geo service; it
+> doesn't know roles. Render the route feature only inside internal-role views (the same role check
+> the rest of rates-app uses), so non-internal users never call `getRoute()`. If you later need the
+> brain itself to *enforce* "internal only," that's the access-control work in §5b (shared secret or
+> Supabase-JWT check) — note it now, build it when the feature goes beyond internal-only convenience.
+
+### Per-environment env summary
+
+| Var | Stage 1 (local) | Stage 3 (deployed) | Set where |
+|---|---|---|---|
+| `VITE_GEO_API_URL` (rates-app) | `http://localhost:3000` | `https://geoapi-next-….vercel.app` | rates-app `.env.local` / Vercel env |
+| `HERE_API_KEY` (brain) | geoapi `.env.local` | brain's Vercel env | never in rates-app |
+| `SUPABASE_URL` (brain) | geoapi `.env.local` (rates proj) | brain's Vercel env (same value) | both stages identical |
+| `SUPABASE_SERVICE_ROLE_KEY` (brain) | geoapi `.env.local` | brain's Vercel env | never in rates-app |
+| `ALLOWED_ORIGIN` (brain CORS) | `http://localhost:5173` | rates-app's prod domain | brain env (§5a) |
+
+> The **only** value that changes between "local" and "deployed" on the rates-app side is
+> `VITE_GEO_API_URL`. Everything else is just moving the brain's secrets from a local file into Vercel's
+> env store. That is the entire promotion.
+
+---
+
+## 8. Setup checklist (Path A)
 
 ```
 Brain (geoapi-next):
@@ -273,7 +393,7 @@ rates-app:
 
 ---
 
-## 8. Path B — future alternative (Supabase Edge Function)
+## 9. Path B — future alternative (Supabase Edge Function)
 
 When the brain proves itself and the cross-origin / abuse friction of §5 starts to feel like overhead,
 collapse it onto Supabase. **This is a one-way improvement in elegance and data-locality, and rates-app
