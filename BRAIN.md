@@ -238,15 +238,52 @@ Set `ALLOWED_ORIGIN` to your real rates-app domain in production rather than `*`
 
 ### 5b. Abuse / access control — the brain is public by default
 
-A public URL means anyone can call it and spend your HERE/Nominatim quota. For a learning phase `*` CORS
-is fine, but before real use add **one** of:
-- a **shared secret header** rates-app sends (`Authorization: Bearer <token>` checked in the route), or
-- verify the **Supabase JWT** rates-app already has (the brain can validate the user's access token), or
-- basic per-IP rate limiting.
+A public URL means anyone can call it and spend your HERE/Nominatim quota. Access control is the gap to
+close before real use. **Chosen direction: a layered approach — shared-secret now, Supabase JWT before
+real/wider use, per-IP rate limiting as a complement.**
+
+#### First, two things that are NOT access control (don't reach for these)
+
+- **A custom domain does nothing.** Renaming `geoapi-next-<hash>.vercel.app` to `geo.mycompany.com`
+  only changes the *label* of a still-public URL. Anyone who sees or guesses it can call it. Buy a
+  domain only for a *stable/nice URL* (so a brain redeploy doesn't change the hash in rates-app's env) —
+  that's convenience/branding, **completely separate from abuse control.**
+- **CORS does nothing against scripts.** CORS is enforced by *browsers*, not by your server. `curl`,
+  Python, Postman, etc. ignore it and can spoof the `Origin` header. CORS only stops *other websites*
+  from calling the brain inside *a user's* browser — it does not stop a script hammering `/api/route`
+  to burn quota. (Still required for §5a's legitimate browser calls — just not a security boundary.)
+
+> The rule: access control must be something the caller has to **prove**, not just a name or a
+> browser-only convention. A URL and a CORS header prove nothing.
+
+#### The three real options (ranked)
+
+| Option | What rates-app sends | Brain checks | Strength | Verdict |
+|---|---|---|---|---|
+| **1. Shared-secret header** | `Authorization: Bearer <STATIC_TOKEN>` | token === env var | Stops random scanners / accidental hits. Token is **baked into the public JS bundle** → extractable from DevTools by a motivated person. | ✅ **Use now** (internal/early phase) |
+| **2. Verify Supabase JWT** | `Authorization: Bearer <user JWT>` (rates-app already holds it after login) | validate JWT against Supabase | "Only logged-in rates-app users can call the brain." Per-user, short-lived, **nothing secret in the bundle.** Reuses existing auth. | ✅ **Add before real/wider use** |
+| **3. Per-IP rate limiting** | — (nothing) | request count per IP (Vercel KV / Upstash) | Doesn't authenticate anyone; caps *damage*. | ✅ **Complement** to #1/#2, not a replacement |
+
+**Rollout:**
+1. **Today (internal-only):** rely first on rates-app's own role-gating — only internal-role screens
+   call `getRoute()`, so non-internal users never hit the brain (see §7 Stage 3). Add the
+   **shared-secret header (#1)** to keep random internet scanners out. Cheap, a few lines per route.
+2. **Before real/wider use:** switch to the **Supabase JWT check (#2)** — the correct fit for this
+   setup, costs nothing extra since the auth already exists. Keep it as `Authorization: Bearer`, so
+   rates-app's `geo.js` barely changes (swap the static token for `session.access_token`).
+3. **Any time quota abuse is a concern:** layer **per-IP rate limiting (#3)** on top.
+
+#### The cache is your best quota defense (don't forget this)
+
+Because every route/geocode is cached after the first call (§4), repeated abuse of the *same* lanes
+costs **zero** upstream — HERE/Nominatim quota only burns on **novel** origin/destination pairs. Auth
+(#1/#2) exists to stop someone feeding the brain endless *new* pairs; the cache already neutralizes
+replay of known ones.
 
 > This is exactly the friction Path B removes: a Supabase Edge Function sits behind Supabase auth, so
-> "only logged-in rates-app users can call it" is the default, not something you build. Note it now;
-> revisit when you graduate to Path B.
+> option #2 ("only logged-in rates-app users can call it") becomes the **default**, not something you
+> build, and the shared-secret stopgap (#1) can be dropped entirely. Note it now; revisit when you
+> graduate to Path B (§9).
 
 ---
 
@@ -381,14 +418,16 @@ Brain (geoapi-next):
   [ ] Add lib/here.ts (fetchHereRoute) + app/api/route/route.ts (mirror /api/within)
   [ ] Create here_route_cache table in the rates Supabase project (§4d)
   [ ] Add CORS helper + OPTIONS handler to all /api/* routes (§5a)
-  [ ] Vercel env: HERE_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CONTACT_EMAIL, ALLOWED_ORIGIN
+  [ ] Access control (§5b): shared-secret header check now → Supabase JWT before real use
+  [ ] Vercel env: HERE_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CONTACT_EMAIL, ALLOWED_ORIGIN, GEO_SHARED_SECRET
   [ ] Deploy → note the public URL
   [ ] Smoke test: curl '<url>/api/route?a=Los Angeles, CA&b=Long Beach, CA'
 
 rates-app:
   [ ] Add VITE_GEO_API_URL=<brain url>  (Vercel env + .env.local)
-  [ ] Add src/lib/geo.js (§6)
-  [ ] Call getRoute()/geocode() from the feature that needs it
+  [ ] Add VITE_GEO_SHARED_SECRET (matches brain's GEO_SHARED_SECRET) — interim, until JWT (§5b)
+  [ ] Add src/lib/geo.js (§6) — send Authorization: Bearer header
+  [ ] Gate getRoute()/geocode() behind internal-role views only (§7 Stage 3)
 ```
 
 ---
