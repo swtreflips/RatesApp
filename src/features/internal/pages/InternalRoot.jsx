@@ -9,6 +9,7 @@ const NewRateRequest = lazy(() => import('./NewRateRequest'))
 const OpenRequests = lazy(() => import('./OpenRequests'))
 const ReceivedRates = lazy(() => import('./ReceivedRates'))
 const UploadRates = lazy(() => import('./UploadRates'))
+const ApplyRates = lazy(() => import('./ApplyRates'))
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
@@ -98,6 +99,18 @@ export default function InternalRoot() {
             </div>
           }>
             <UploadRates />
+          </Suspense>
+        }
+      />
+      <Route
+        path="apply"
+        element={
+          <Suspense fallback={
+            <div className="flex min-h-[55vh] items-center justify-center">
+              <Loader2 size={26} className="animate-spin text-fog-400" />
+            </div>
+          }>
+            <ApplyRates />
           </Suspense>
         }
       />

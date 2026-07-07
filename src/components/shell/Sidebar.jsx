@@ -11,6 +11,7 @@ import {
   Ship,
   FileText,
   Upload,
+  Route,
 } from 'lucide-react'
 import { useAuth } from '../../app/providers/AuthProvider'
 import { ROLES, ROLE_LABELS } from '../../lib/roles'
@@ -23,6 +24,7 @@ const INTERNAL_NAV = [
   { label: 'Open Requests',    icon: ClipboardList,   to: '/internal/requests' },
   { label: 'Active Rates',     icon: CheckSquare,     to: '/internal/rates' },
   { label: 'Upload Rates',     icon: Upload,          to: '/internal/upload' },
+  { label: 'Apply Rates',      icon: Route,           to: '/internal/apply' },
 ]
 
 const FORWARDER_NAV = [
