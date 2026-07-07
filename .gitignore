@@ -17,3 +17,5 @@ __pycache__/
 
 # Edge Function fill verification output (supabase/functions/_shared/fillTemplate.test.ts)
 out.xlsx
+.vercel
+.env*
