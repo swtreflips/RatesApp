@@ -1,63 +1,63 @@
 /*
-  Apply Rates — job-wide geo call manager over src/lib/geo.js.
+  Apply Rates — thin batch-geo adapter over src/lib/geo.js.
 
-  Two jobs:
-  1. Memoize identical (kind, a, b) pairs across the WHOLE run — many OFQs share the same
-     (last CY, final destination) pair, so total geo calls ≈ unique pairs, never rows × CYs.
-     Memoizing the PROMISE (not the result) also collapses concurrent duplicate requests.
-  2. Funnel everything through a small concurrency pool so the brain (and its upstream
-     Nominatim/HERE rate limits) never sees a request stampede.
-
-  Calls never reject: they resolve { ok:true, ...data } or { ok:false, error } so one bad
-  pair can't blow up a Promise.all in the matcher.
+  The whole job's geo work is TWO POST requests (one within-batch, one route-batch);
+  job-wide pair dedup happens in matcher.matchLanesBatch. This module's jobs:
+  1. never reject — every element resolves { ok:true, ... } | { ok:false, error }
+     (a whole-batch transport failure degrades to per-pair errors);
+  2. normalize the brain's per-pair failure shapes (a_found/b_found:false, detail)
+     into ok:false with a human-readable error — matcher's geo_error counting and
+     the Notes column depend on it;
+  3. tally stats for the review screen.
 */
 
-import { getRoute, withinMiles } from '../../../lib/geo'
-import { norm } from './matcher'
-import { GEO_CONCURRENCY } from './config'
+import { withinBatch, routeBatch } from '../../../lib/geo'
 
-export function createGeoBatch({ concurrency = GEO_CONCURRENCY } = {}) {
-  const memo = new Map()
-  const stats = { calls: 0, memoHits: 0, errors: 0 }
+// "location not found: coppell, tx" beats a bare no_result in the Notes column.
+const missingLabel = (r) => {
+  const missing = [r.a_found === false ? r.a : null, r.b_found === false ? r.b : null].filter(Boolean)
+  return missing.length ? `location not found: ${missing.join(', ')}` : 'no_result'
+}
 
-  let active = 0
-  const queue = []
-  const runNext = () => {
-    if (active >= concurrency || queue.length === 0) return
-    active += 1
-    const { fn, resolve } = queue.shift()
-    fn()
-      .then((data) => resolve({ ok: true, ...data }))
-      .catch((e) => {
-        stats.errors += 1
-        resolve({ ok: false, error: e.message })
+export function createBatchGeo({ onPhase } = {}) {
+  const stats = { withinPairs: 0, routePairs: 0, cacheHits: 0, errors: 0 }
+
+  const run = async (label, fn, pairs, mapResult) => {
+    if (pairs.length === 0) return []
+    onPhase?.(label, pairs.length)
+    try {
+      const results = await fn(pairs)
+      return results.map((r) => {
+        const mapped = mapResult(r)
+        if (!mapped.ok) stats.errors += 1
+        else if (mapped.cached) stats.cacheHits += 1
+        return mapped
       })
-      .finally(() => {
-        active -= 1
-        runNext()
-      })
-  }
-  const schedule = (fn) => new Promise((resolve) => {
-    queue.push({ fn, resolve })
-    runNext()
-  })
-
-  const call = (kind, a, b, fn) => {
-    const key = `${kind}|${norm(a)}|${norm(b)}`
-    if (memo.has(key)) {
-      stats.memoHits += 1
-      return memo.get(key)
+    } catch (e) {
+      stats.errors += pairs.length
+      return pairs.map(() => ({ ok: false, error: e.message }))
     }
-    stats.calls += 1
-    const promise = schedule(fn)
-    memo.set(key, promise)
-    return promise
   }
 
   return {
-    // miles is part of the memo key — per-CY threshold overrides give distinct answers
-    within: (a, b, miles) => call(`within:${miles}`, a, b, () => withinMiles(a, b, miles)),
-    route: (a, b) => call('route', a, b, () => getRoute(a, b)),
+    // pairs: [{ a, b, miles }] → [{ ok, within, cached } | { ok:false, error }]
+    within: (pairs) => {
+      stats.withinPairs += pairs.length
+      return run('within', withinBatch, pairs, (r) => {
+        if (r.ok) return { ok: true, within: r.within, cached: r.cached }
+        if (r.error === 'no_result') return { ok: false, error: missingLabel(r) }
+        return { ok: false, error: r.error ?? 'unknown' }
+      })
+    },
+    // pairs: [{ a, b }] → [{ ok, distance_m, duration_s, cached } | { ok:false, error }]
+    route: (pairs) => {
+      stats.routePairs += pairs.length
+      return run('route', routeBatch, pairs, (r) => {
+        if (r.ok) return { ok: true, distance_m: r.distance_m, duration_s: r.duration_s, cached: r.cached }
+        if (r.detail === 'not_found') return { ok: false, error: missingLabel(r) }
+        return { ok: false, error: r.detail ?? r.error ?? 'unknown' }
+      })
+    },
     stats,
   }
 }

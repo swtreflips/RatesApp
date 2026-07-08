@@ -12,11 +12,8 @@ export const STAGE1_WITHIN_MILES = 100
 // Stage 2 — the real drayage truck route (HERE via /api/route) must be under this.
 export const STAGE2_ROUTE_MILES = 100
 
-// Quota safety: never route-check more than this many candidate CYs per OFQ.
+// Quota safety: never route-check more than this many candidate CYs per lane.
 export const MAX_STAGE2_ROUTES_PER_OFQ = 10
-
-// Concurrent geo calls per job (the brain rate-limits upstream providers; keep small).
-export const GEO_CONCURRENCY = 3
 
 // Per-CY threshold overrides, keyed by NORMALIZED last CY (lowercase, single spaces).
 // Example:

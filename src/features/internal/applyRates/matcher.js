@@ -89,72 +89,97 @@ export const metersToMiles = (m) => m / 1609.344
 export const laneKeyOf = (pol, fd) => `${norm(pol)}|${norm(fd)}`
 
 /*
-  Match one lane (unique POL + Final Destination) against the active rates.
+  Match ALL lanes with exactly two geo round trips (batch endpoints):
+    Phase A — every lane's candidate (CY, FD) pairs, deduped job-wide → geo.within()
+    Phase B — stage-1 survivors, per-lane cap applied first, deduped → geo.route()
 
-  lane: { laneKey, pol, fd, ofqIds }
-  ratesByPol: from indexRatesByPol()
-  geo: { within(a, b, miles), route(a, b) } — resolve { ok:true, ... } | { ok:false, error }
+  geo: createBatchGeo() — { within(pairs), route(pairs) } resolving index-aligned
+  arrays of { ok:true, ... } | { ok:false, error }; never rejects.
 
-  Two-stage qualification per candidate last CY (POL already text-matched):
-    1. straight-line pre-filter (ST_DWithin) — cheap, kills far-away CYs
-    2. real drayage route (HERE) — only for stage-1 survivors, capped per lane
-
-  Returns EVERY yard that passes both stages, sorted by route miles ascending:
-  qualified: [{ cyLabel, cyNorm, miles, rates }]. Which yards actually apply — and the
-  per-OFQ already-applied skip — is decided later (user discards + outputCsv.js).
+  Per-lane logic, statuses, and the result shape are identical to matchLane —
+  the review matrix and outputCsv consume the output unchanged.
 */
-export async function matchLane(lane, ratesByPol, geo) {
-  const base = { laneKey: lane.laneKey, pol: lane.pol, fd: lane.fd, ofqIds: lane.ofqIds, qualified: [], errors: [] }
+export async function matchLanesBatch(lanes, ratesByPol, geo) {
+  // Phase 0 — pure per-lane prep; lanes that can't be geo-checked resolve immediately.
+  const prep = lanes.map((lane) => {
+    const base = { laneKey: lane.laneKey, pol: lane.pol, fd: lane.fd, ofqIds: lane.ofqIds, qualified: [], errors: [] }
+    if (!norm(lane.fd)) return { done: { ...base, status: 'no_destination' } }
+    const candidates = ratesByPol.get(norm(lane.pol)) ?? []
+    if (candidates.length === 0) return { done: { ...base, status: 'no_pol_match' } }
 
-  if (!norm(lane.fd)) return { ...base, status: 'no_destination' }
-  const candidates = ratesByPol.get(norm(lane.pol)) ?? []
-  if (candidates.length === 0) return { ...base, status: 'no_pol_match' }
-
-  // Group candidates by normalized last CY; blank CYs can't be distance-checked.
-  const byCy = new Map()
-  for (const r of candidates) {
-    const cy = norm(r.last_cy)
-    if (!cy) continue
-    if (!byCy.has(cy)) byCy.set(cy, { label: r.last_cy, rates: [] })
-    byCy.get(cy).rates.push(r)
-  }
-  if (byCy.size === 0) return { ...base, status: 'no_last_cy' }
-
-  const errors = []
-
-  // Stage 1 — straight-line pre-filter (parallel; geoBatch caps real concurrency)
-  const cys = [...byCy.keys()]
-  const stage1 = (await Promise.all(cys.map(async (cy) => {
-    const { label } = byCy.get(cy)
-    const res = await geo.within(label, lane.fd, getThresholds(cy).stage1WithinMiles)
-    if (!res.ok) {
-      errors.push(`within ${label}: ${res.error}`)
-      return null
+    const byCy = new Map()
+    for (const r of candidates) {
+      const cy = norm(r.last_cy)
+      if (!cy) continue
+      if (!byCy.has(cy)) byCy.set(cy, { label: r.last_cy, rates: [] })
+      byCy.get(cy).rates.push(r)
     }
-    return res.within ? cy : null
-  }))).filter(Boolean)
+    if (byCy.size === 0) return { done: { ...base, status: 'no_last_cy' } }
 
-  if (stage1.length === 0) {
-    return { ...base, status: errors.length === cys.length ? 'geo_error' : 'no_cy_in_range', errors }
-  }
+    return { lane, base, byCy, errors: [] }
+  })
+  const active = () => prep.filter((p) => !p.done)
 
-  // Stage 2 — drayage route for survivors, capped per lane (quota safety)
-  const capped = stage1.slice(0, MAX_STAGE2_ROUTES_PER_OFQ)
-  const passed = (await Promise.all(capped.map(async (cy) => {
-    const { label, rates } = byCy.get(cy)
-    const res = await geo.route(label, lane.fd)
-    if (!res.ok) {
-      errors.push(`route ${label}: ${res.error}`)
-      return null
+  // Phase A — job-wide deduped within pairs (threshold is part of the identity).
+  const withinPairs = new Map() // `${cyNorm}|${fdNorm}|${miles}` → { a: cyLabel, b: fd, miles }
+  for (const p of active()) {
+    for (const [cy, { label }] of p.byCy) {
+      const miles = getThresholds(cy).stage1WithinMiles
+      const key = `${cy}|${norm(p.lane.fd)}|${miles}`
+      if (!withinPairs.has(key)) withinPairs.set(key, { a: label, b: p.lane.fd, miles })
     }
-    const miles = metersToMiles(res.distance_m)
-    return miles < getThresholds(cy).stage2RouteMiles ? { cyLabel: label, cyNorm: cy, miles, rates } : null
-  }))).filter(Boolean)
+  }
+  const withinKeys = [...withinPairs.keys()]
+  const withinRes = await geo.within([...withinPairs.values()])
+  const withinByKey = new Map(withinKeys.map((k, i) => [k, withinRes[i]]))
 
-  if (passed.length === 0) {
-    return { ...base, status: errors.length >= capped.length && errors.length > 0 ? 'geo_error' : 'no_cy_in_range', errors }
+  for (const p of active()) {
+    p.stage1 = []
+    for (const [cy, { label }] of p.byCy) {
+      const res = withinByKey.get(`${cy}|${norm(p.lane.fd)}|${getThresholds(cy).stage1WithinMiles}`)
+      if (!res.ok) {
+        p.errors.push(`within ${label}: ${res.error}`)
+        continue
+      }
+      if (res.within) p.stage1.push(cy)
+    }
+    if (p.stage1.length === 0) {
+      p.done = { ...p.base, status: p.errors.length === p.byCy.size ? 'geo_error' : 'no_cy_in_range', errors: p.errors }
+    }
   }
 
-  passed.sort((a, b) => a.miles - b.miles)
-  return { ...base, status: 'matched', qualified: passed, errors }
+  // Phase B — per-lane cap FIRST (quota safety, same as matchLane), then dedupe.
+  const routePairs = new Map() // `${cyNorm}|${fdNorm}` → { a: cyLabel, b: fd }
+  for (const p of active()) {
+    p.capped = p.stage1.slice(0, MAX_STAGE2_ROUTES_PER_OFQ)
+    for (const cy of p.capped) {
+      const key = `${cy}|${norm(p.lane.fd)}`
+      if (!routePairs.has(key)) routePairs.set(key, { a: p.byCy.get(cy).label, b: p.lane.fd })
+    }
+  }
+  const routeKeys = [...routePairs.keys()]
+  const routeRes = await geo.route([...routePairs.values()])
+  const routeByKey = new Map(routeKeys.map((k, i) => [k, routeRes[i]]))
+
+  for (const p of active()) {
+    const passed = []
+    for (const cy of p.capped) {
+      const { label, rates } = p.byCy.get(cy)
+      const res = routeByKey.get(`${cy}|${norm(p.lane.fd)}`)
+      if (!res.ok) {
+        p.errors.push(`route ${label}: ${res.error}`)
+        continue
+      }
+      const miles = metersToMiles(res.distance_m)
+      if (miles < getThresholds(cy).stage2RouteMiles) passed.push({ cyLabel: label, cyNorm: cy, miles, rates })
+    }
+    if (passed.length === 0) {
+      p.done = { ...p.base, status: p.errors.length >= p.capped.length && p.errors.length > 0 ? 'geo_error' : 'no_cy_in_range', errors: p.errors }
+    } else {
+      passed.sort((a, b) => a.miles - b.miles)
+      p.done = { ...p.base, status: 'matched', qualified: passed, errors: p.errors }
+    }
+  }
+
+  return prep.map((p) => p.done)
 }

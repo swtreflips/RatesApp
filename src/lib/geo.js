@@ -27,12 +27,68 @@ async function get(path, params) {
   return res.json()
 }
 
+async function post(path, body) {
+  if (!BASE) throw new Error('geo_api_not_configured')
+  const res = await fetch(new URL(path, BASE), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let detail
+    try {
+      detail = (await res.json()).detail
+    } catch {
+      // non-JSON error body; status alone will have to do
+    }
+    throw new Error(`geo ${path} failed: ${res.status}${detail ? ` (${detail})` : ''}`)
+  }
+  return res.json()
+}
+
+// Chunk sizes are sized so a worst-case ALL-NOVEL chunk (every location/route a cache
+// miss, upstreams serialized inside the brain) still finishes within the brain's
+// 60s maxDuration. Chunks go SEQUENTIALLY on purpose: concurrent invocations each
+// carry their own Nominatim rate limiter, which would multiply the polite 1 req/s.
+const WITHIN_BATCH_CHUNK = 30
+const ROUTE_BATCH_CHUNK = 15
+
+async function postChunked(path, pairs, chunkSize) {
+  const results = []
+  for (let i = 0; i < pairs.length; i += chunkSize) {
+    const chunk = pairs.slice(i, i + chunkSize)
+    let data
+    try {
+      data = await post(path, { pairs: chunk })
+    } catch {
+      // One retry: a timed-out cold chunk has already written its cache entries,
+      // so the retry runs warm.
+      data = await post(path, { pairs: chunk })
+    }
+    results.push(...data.results)
+  }
+  return results
+}
+
 // Truck (drayage) route between two US locations. Cache-first in the brain — a known
 // lane never re-spends HERE quota. Returns { origin, destination, distance_m,
 // duration_s, base_duration_s, typical_duration_s, polyline, transport_mode,
 // provider, cached, origin_result, destination_result }.
 export function getRoute(a, b) {
   return get('/api/route', { a, b })
+}
+
+// Batch straight-line proximity checks. pairs: [{ a, b, miles }] → results
+// index-aligned with pairs: { a, b, miles, ok, within, a_found, b_found, cached }
+// or { ok:false, error }. Per-pair failures; chunking handled here.
+export function withinBatch(pairs) {
+  return postChunked('/api/within-batch', pairs, WITHIN_BATCH_CHUNK)
+}
+
+// Batch drayage route summaries (no polyline). pairs: [{ a, b }] → results
+// index-aligned: { a, b, ok, distance_m, duration_s, cached } or { ok:false, detail }.
+export function routeBatch(pairs) {
+  return postChunked('/api/route-batch', pairs, ROUTE_BATCH_CHUNK)
 }
 
 // Geocode a US location (cache → Nominatim). Returns { query, latitude, longitude,

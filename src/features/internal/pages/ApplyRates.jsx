@@ -5,8 +5,8 @@ import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives
 import { parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast } from '../../rates/rateGrid'
 import { fetchActiveRates } from '../services/applyRatesService'
 import { buildApplyHeaderIndex, groupByOfq, deriveLanes } from '../applyRates/inputCsv'
-import { dedupeRates, indexRatesByPol, matchLane } from '../applyRates/matcher'
-import { createGeoBatch } from '../applyRates/geoBatch'
+import { dedupeRates, indexRatesByPol, matchLanesBatch } from '../applyRates/matcher'
+import { createBatchGeo } from '../applyRates/geoBatch'
 import { buildOutputRows, downloadCsv } from '../applyRates/outputCsv'
 
 /*
@@ -64,7 +64,7 @@ export default function ApplyRates() {
   const [activeRates, setActiveRates] = useState([])
   const [ratesLoading, setRatesLoading] = useState(true)
   const [ratesError, setRatesError] = useState(null)
-  const [progress, setProgress] = useState({ done: 0, total: 0, current: null })
+  const [progress, setProgress] = useState({ pct: 0, label: '' })
   const [results, setResults] = useState([]) // matchLane results, one per lane
   const [discarded, setDiscarded] = useState(() => new Map()) // laneKey → Set<cyNorm>
   const [geoStats, setGeoStats] = useState(null)
@@ -105,22 +105,22 @@ export default function ApplyRates() {
   const runMatching = async (lanes) => {
     cancelRef.current = false
     setPhase('running')
-    setProgress({ done: 0, total: lanes.length, current: null })
+    setProgress({ pct: 0, label: 'Preparing…' })
 
     const ratesByPol = indexRatesByPol(dedupeRates(activeRates))
-    const geo = createGeoBatch()
-    const out = []
+    // The whole job is two batch POSTs — progress moves per phase, not per lane.
+    const geo = createBatchGeo({
+      onPhase: (kind, pairCount) => setProgress(kind === 'within'
+        ? { pct: 10, label: `Checking proximity… (${pairCount} pairs)` }
+        : { pct: 55, label: `Calculating drayage routes… (${pairCount} pairs)` }),
+    })
 
-    for (let i = 0; i < lanes.length; i += 1) {
-      if (cancelRef.current) return // unmounted mid-run — drop everything
-      setProgress({ done: i, total: lanes.length, current: `${lanes[i].pol} → ${lanes[i].fd}` })
-      // eslint-disable-next-line no-await-in-loop -- sequential per lane by design (quota safety)
-      out.push(await matchLane(lanes[i], ratesByPol, geo))
-    }
+    const out = await matchLanesBatch(lanes, ratesByPol, geo)
+    if (cancelRef.current) return // unmounted mid-run — drop everything
 
     setResults(out)
     setGeoStats({ ...geo.stats })
-    setProgress({ done: lanes.length, total: lanes.length, current: null })
+    setProgress({ pct: 100, label: '' })
     setPhase('review')
   }
 
@@ -305,7 +305,6 @@ export default function ApplyRates() {
     return acc
   }, {})
   const hiddenTotal = Object.values(hiddenCounts).reduce((a, b) => a + b, 0)
-  const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0
 
   /* ── render ──────────────────────────────────────────────────────────── */
 
@@ -391,7 +390,7 @@ export default function ApplyRates() {
             icon={Play}
             accent="harbor"
             index={3}
-            hint={geoStats ? `${geoStats.calls} geo calls · ${geoStats.memoHits} reused in-job` : undefined}
+            hint={geoStats ? `${geoStats.withinPairs} proximity + ${geoStats.routePairs} route pairs · ${geoStats.cacheHits} cached` : undefined}
           />
         </div>
       )}
@@ -432,12 +431,10 @@ export default function ApplyRates() {
           <Loader2 size={24} className="animate-spin text-fog-400" />
           <div className="w-72">
             <div className="h-2 overflow-hidden rounded-full bg-fog-100">
-              <div className="h-2 rounded-full bg-signal-500 transition-all" style={{ width: `${pct}%` }} />
+              <div className="h-2 rounded-full bg-signal-500 transition-all" style={{ width: `${progress.pct}%` }} />
             </div>
           </div>
-          <div className="font-mono text-xs text-fog-400">
-            {progress.done} / {progress.total} lanes{progress.current ? ` · ${progress.current}` : ''}
-          </div>
+          <div className="font-mono text-xs text-fog-400">{progress.label}</div>
         </div>
       )}
 
