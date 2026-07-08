@@ -80,11 +80,16 @@ export default function ApplyRates() {
 
   const showToast = (severity, message) => setToast({ severity, message })
 
-  /* ── upload + parse ──────────────────────────────────────────────────── */
+  /* ── upload + parse (browse or drag-and-drop) ────────────────────────── */
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files?.[0]
+  const ACCEPTED_EXTS = ['csv', 'xlsx', 'xls']
+
+  const handleFile = (file) => {
     if (!file) return
+    const ext = (file.name.split('.').pop() || '').toLowerCase()
+    if (!ACCEPTED_EXTS.includes(ext)) {
+      return showToast('warning', `Unsupported file type ".${ext}" — expected .csv, .xlsx or .xls`)
+    }
 
     parseRateFile(file, {
       complete(res) {
@@ -105,8 +110,40 @@ export default function ApplyRates() {
         showToast('error', 'Failed to read file')
       },
     })
+  }
 
+  const handleFileUpload = (e) => {
+    handleFile(e.target.files?.[0])
     e.target.value = ''
+  }
+
+  /* ── drag-and-drop (whole page is a drop target, except mid-run) ─────── */
+
+  const [dragOver, setDragOver] = useState(false)
+  // dragenter/dragleave fire on every child crossing — a counter avoids flicker
+  const dragDepthRef = useRef(0)
+
+  const canDrop = phase !== 'running'
+
+  const handleDragEnter = (e) => {
+    e.preventDefault()
+    dragDepthRef.current += 1
+    if (canDrop) setDragOver(true)
+  }
+  const handleDragOver = (e) => {
+    e.preventDefault() // required, or the browser opens the file itself
+  }
+  const handleDragLeave = (e) => {
+    e.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setDragOver(false)
+  }
+  const handleDrop = (e) => {
+    e.preventDefault()
+    dragDepthRef.current = 0
+    setDragOver(false)
+    if (!canDrop) return
+    handleFile(e.dataTransfer?.files?.[0])
   }
 
   /* ── run matching ────────────────────────────────────────────────────── */
@@ -196,7 +233,23 @@ export default function ApplyRates() {
   /* ── render ──────────────────────────────────────────────────────────── */
 
   return (
-    <div className="space-y-6">
+    <div
+      className="relative space-y-6"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* drop cue — covers the page while a file is dragged over it */}
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-signal-400 bg-signal-50/80">
+          <div className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-harbor-900 shadow-card-hover">
+            <Upload size={18} className="text-signal-600" />
+            Drop the OFQ file to {phase === 'idle' ? 'upload' : 'replace the current file'}
+          </div>
+        </div>
+      )}
+
       <PageHeader
         kicker="Internal · Rates"
         title="Apply Rates"
@@ -293,14 +346,18 @@ export default function ApplyRates() {
 
       {/* Body */}
       {phase === 'idle' && (
-        <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-fog-300 bg-white text-center shadow-card">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="flex min-h-[40vh] w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-fog-300 bg-white text-center shadow-card transition-colors hover:border-signal-400 hover:bg-signal-50/40"
+        >
           <Upload size={28} className="text-fog-300" />
           <div className="text-sm text-fog-500">
-            Upload the OFQ export (.csv or .xlsx) to begin.
+            Drag & drop the OFQ export (.csv or .xlsx) here — or click to browse.
             <br />
             Expected columns: OFQID, Port of Loading, Final Destination — plus the applied-rate columns (OFRID…).
           </div>
-        </div>
+        </button>
       )}
 
       {phase === 'parsed' && (
