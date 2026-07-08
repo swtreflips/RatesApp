@@ -9,7 +9,7 @@
   hashed into appliedKeys so the matcher can skip re-applying identical rates.
 */
 
-import { norm, rateKey } from './matcher'
+import { norm, rateKey, laneKeyOf } from './matcher'
 
 export function buildApplyHeaderIndex(headerCells) {
   const headers = headerCells.map((h) => norm(h))
@@ -77,4 +77,20 @@ export function groupByOfq(dataRows, index) {
   }
 
   return { ofqs: [...map.values()], warnings }
+}
+
+// Unique (POL, Final Destination) lanes across the parsed OFQs — the matching unit.
+// First OFQ's display labels win (consistent with groupByOfq's first-row-wins rule).
+export function deriveLanes(ofqs) {
+  const map = new Map()
+  for (const o of ofqs) {
+    const key = laneKeyOf(o.pol, o.fd)
+    let lane = map.get(key)
+    if (!lane) {
+      lane = { laneKey: key, pol: o.pol, fd: o.fd, ofqIds: [] }
+      map.set(key, lane)
+    }
+    lane.ofqIds.push(o.ofqId)
+  }
+  return [...map.values()]
 }

@@ -2,6 +2,11 @@
   Apply Rates — pure matching engine. No I/O: geo calls are injected (see geoBatch.js),
   Supabase rows come in as plain data, so every rule here is unit-testable.
 
+  The matching unit is the LANE — a unique (POL, Final Destination) pair shared by one
+  or more OFQs. A lane's result is EVERY yard that passes both geo stages (sorted by
+  drayage miles ascending); the user picks which ones to apply in the review matrix,
+  and the per-OFQ already-applied skip happens at output build (outputCsv.js).
+
   Identity: a rate is unique per (Forwarder, POL, POD, Last CY, Carrier, Rate, Valid Until).
   Both DB rates and the input file's already-applied rows are hashed through rateKey() so
   they compare equal despite formatting drift ($2,432.00 vs 2432; 7/29/2026 vs 2026-07-29).
@@ -79,24 +84,30 @@ export function indexRatesByPol(rates) {
 
 export const metersToMiles = (m) => m / 1609.344
 
-/*
-  Match one OFQ against the active rates.
+// Lane identity — THE key shared by inputCsv (deriveLanes), outputCsv (buildOutputRows)
+// and the review matrix, so a lane never means two different things.
+export const laneKeyOf = (pol, fd) => `${norm(pol)}|${norm(fd)}`
 
-  ofq: { ofqId, pol, fd, appliedKeys: Set<rateKey> }
+/*
+  Match one lane (unique POL + Final Destination) against the active rates.
+
+  lane: { laneKey, pol, fd, ofqIds }
   ratesByPol: from indexRatesByPol()
   geo: { within(a, b, miles), route(a, b) } — resolve { ok:true, ... } | { ok:false, error }
 
   Two-stage qualification per candidate last CY (POL already text-matched):
     1. straight-line pre-filter (ST_DWithin) — cheap, kills far-away CYs
-    2. real drayage route (HERE) — only for stage-1 survivors, capped per OFQ
-  Winner = the closest qualifying CY by route miles; output = every deduped rate at
-  that CY that is not already applied to this OFQ.
-*/
-export async function matchOfq(ofq, ratesByPol, geo) {
-  const base = { ofqId: ofq.ofqId, pol: ofq.pol, fd: ofq.fd, bestCy: null, routeMiles: null, applied: [], errors: [] }
+    2. real drayage route (HERE) — only for stage-1 survivors, capped per lane
 
-  if (!norm(ofq.fd)) return { ...base, status: 'no_destination' }
-  const candidates = ratesByPol.get(norm(ofq.pol)) ?? []
+  Returns EVERY yard that passes both stages, sorted by route miles ascending:
+  qualified: [{ cyLabel, cyNorm, miles, rates }]. Which yards actually apply — and the
+  per-OFQ already-applied skip — is decided later (user discards + outputCsv.js).
+*/
+export async function matchLane(lane, ratesByPol, geo) {
+  const base = { laneKey: lane.laneKey, pol: lane.pol, fd: lane.fd, ofqIds: lane.ofqIds, qualified: [], errors: [] }
+
+  if (!norm(lane.fd)) return { ...base, status: 'no_destination' }
+  const candidates = ratesByPol.get(norm(lane.pol)) ?? []
   if (candidates.length === 0) return { ...base, status: 'no_pol_match' }
 
   // Group candidates by normalized last CY; blank CYs can't be distance-checked.
@@ -115,7 +126,7 @@ export async function matchOfq(ofq, ratesByPol, geo) {
   const cys = [...byCy.keys()]
   const stage1 = (await Promise.all(cys.map(async (cy) => {
     const { label } = byCy.get(cy)
-    const res = await geo.within(label, ofq.fd, getThresholds(cy).stage1WithinMiles)
+    const res = await geo.within(label, lane.fd, getThresholds(cy).stage1WithinMiles)
     if (!res.ok) {
       errors.push(`within ${label}: ${res.error}`)
       return null
@@ -127,32 +138,23 @@ export async function matchOfq(ofq, ratesByPol, geo) {
     return { ...base, status: errors.length === cys.length ? 'geo_error' : 'no_cy_in_range', errors }
   }
 
-  // Stage 2 — drayage route for survivors, capped per OFQ (quota safety)
+  // Stage 2 — drayage route for survivors, capped per lane (quota safety)
   const capped = stage1.slice(0, MAX_STAGE2_ROUTES_PER_OFQ)
   const passed = (await Promise.all(capped.map(async (cy) => {
-    const { label } = byCy.get(cy)
-    const res = await geo.route(label, ofq.fd)
+    const { label, rates } = byCy.get(cy)
+    const res = await geo.route(label, lane.fd)
     if (!res.ok) {
       errors.push(`route ${label}: ${res.error}`)
       return null
     }
     const miles = metersToMiles(res.distance_m)
-    return miles < getThresholds(cy).stage2RouteMiles ? { cy, miles } : null
+    return miles < getThresholds(cy).stage2RouteMiles ? { cyLabel: label, cyNorm: cy, miles, rates } : null
   }))).filter(Boolean)
 
   if (passed.length === 0) {
     return { ...base, status: errors.length >= capped.length && errors.length > 0 ? 'geo_error' : 'no_cy_in_range', errors }
   }
 
-  const best = passed.reduce((a, b) => (b.miles < a.miles ? b : a))
-  const applied = byCy.get(best.cy).rates.filter((r) => !ofq.appliedKeys.has(keyFromDbRate(r)))
-
-  return {
-    ...base,
-    status: applied.length ? 'matched' : 'all_already_applied',
-    bestCy: byCy.get(best.cy).label,
-    routeMiles: best.miles,
-    applied,
-    errors,
-  }
+  passed.sort((a, b) => a.miles - b.miles)
+  return { ...base, status: 'matched', qualified: passed, errors }
 }

@@ -1,32 +1,33 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
-import { Upload, Play, Download, RotateCcw, Loader2, Route as RouteIcon } from 'lucide-react'
+import { Upload, Play, Download, RotateCcw, Loader2, X, Route as RouteIcon } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 import { parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast } from '../../rates/rateGrid'
 import { fetchActiveRates } from '../services/applyRatesService'
-import { buildApplyHeaderIndex, groupByOfq } from '../applyRates/inputCsv'
-import { dedupeRates, indexRatesByPol, matchOfq } from '../applyRates/matcher'
+import { buildApplyHeaderIndex, groupByOfq, deriveLanes } from '../applyRates/inputCsv'
+import { dedupeRates, indexRatesByPol, matchLane } from '../applyRates/matcher'
 import { createGeoBatch } from '../applyRates/geoBatch'
 import { buildOutputRows, downloadCsv } from '../applyRates/outputCsv'
 
 /*
-  Internal "Apply Rates" — match active rates to customer OFQs by drayage distance.
+  Internal "Apply Rates" — qualify active-rate yards against customer OFQ lanes.
 
-  Upload the AIS OFQ export (ratesInput.csv shape) → the app matches each OFQ against
-  the active rate pool: POL text match, then two-stage geo qualification through the
-  geo brain (straight-line ST_DWithin pre-filter → real HERE truck route), picks the
-  closest qualifying Last CY, skips rates already applied (OFRID rows), and produces
-  the AIS import CSV (ratesTemplate.csv shape). Thresholds live in applyRates/config.js.
+  Upload the AIS OFQ export (ratesInput.csv shape) → matching runs immediately per
+  unique (POL, Final Destination) lane: POL text match, then two-stage geo through
+  the brain (ST_DWithin pre-filter → HERE truck route). The review matrix shows ALL
+  qualifying yards per lane (CY A, CY B, … — closest first); the user discards yards
+  (ⓧ per cell, per-row reset), then Create Rates downloads the AIS import CSV — every
+  remaining yard's rates per OFQ, minus rates already applied to that OFQ (OFRID rows).
+  Thresholds live in applyRates/config.js.
 */
 
 const STATUS_META = {
-  matched:             { label: 'Matched',         cls: 'bg-sea-50 text-sea-700 border-sea-200' },
-  all_already_applied: { label: 'Already applied', cls: 'bg-fog-100 text-fog-500 border-fog-200' },
-  no_pol_match:        { label: 'No POL match',    cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  no_cy_in_range:      { label: 'No CY in range',  cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  no_last_cy:          { label: 'No Last CY',      cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  no_destination:      { label: 'No destination',  cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  geo_error:           { label: 'Geo error',       cls: 'bg-red-50 text-red-700 border-red-200' },
+  matched:        { label: 'Qualified',       cls: 'bg-sea-50 text-sea-700 border-sea-200' },
+  no_pol_match:   { label: 'No POL match',    cls: 'bg-signal-50 text-signal-700 border-signal-200' },
+  no_cy_in_range: { label: 'No CY in range',  cls: 'bg-signal-50 text-signal-700 border-signal-200' },
+  no_last_cy:     { label: 'No Last CY',      cls: 'bg-signal-50 text-signal-700 border-signal-200' },
+  no_destination: { label: 'No destination',  cls: 'bg-signal-50 text-signal-700 border-signal-200' },
+  geo_error:      { label: 'Geo error',       cls: 'bg-red-50 text-red-700 border-red-200' },
 }
 
 function StatusChip({ status }) {
@@ -38,15 +39,43 @@ function StatusChip({ status }) {
   )
 }
 
+/* A qualified-yard cell: input-box look (à la NetSuite) with an ⓧ to discard it from
+   the lane. A discarded yard stays in place, dimmed — column positions and the
+   closest-first ordering stay legible; restore is the row's reset icon. */
+function YardCell({ yard, discarded, onDiscard }) {
+  return (
+    <div
+      className={`inline-flex w-full items-center justify-between gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-xs shadow-sm ${
+        discarded ? 'border-dashed border-fog-300 opacity-40' : 'border-fog-300'
+      }`}
+    >
+      <span className={`truncate text-harbor-900 ${discarded ? 'line-through' : ''}`}>
+        {yard.cyLabel} · {Math.round(yard.miles)} mi · {yard.rates.length} rate{yard.rates.length === 1 ? '' : 's'}
+      </span>
+      {!discarded && (
+        <button
+          className="shrink-0 rounded-full p-0.5 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
+          onClick={onDiscard}
+          tabIndex={-1}
+          title="Discard this yard for this lane"
+        >
+          <X size={13} />
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function ApplyRates() {
-  const [phase, setPhase] = useState('idle') // idle | parsed | running | done
+  const [phase, setPhase] = useState('idle') // idle | running | review
   const [ofqs, setOfqs] = useState([])
   const [fileName, setFileName] = useState(null)
   const [activeRates, setActiveRates] = useState([])
   const [ratesLoading, setRatesLoading] = useState(true)
   const [ratesError, setRatesError] = useState(null)
   const [progress, setProgress] = useState({ done: 0, total: 0, current: null })
-  const [results, setResults] = useState([])
+  const [results, setResults] = useState([]) // matchLane results, one per lane
+  const [discarded, setDiscarded] = useState(() => new Map()) // laneKey → Set<cyNorm>
   const [geoStats, setGeoStats] = useState(null)
   const [toast, setToast] = useState(null)
   const fileInputRef = useRef(null)
@@ -80,6 +109,30 @@ export default function ApplyRates() {
 
   const showToast = (severity, message) => setToast({ severity, message })
 
+  /* ── matching (auto-runs right after a successful parse) ─────────────── */
+
+  const runMatching = async (lanes) => {
+    cancelRef.current = false
+    setPhase('running')
+    setProgress({ done: 0, total: lanes.length, current: null })
+
+    const ratesByPol = indexRatesByPol(dedupeRates(activeRates))
+    const geo = createGeoBatch()
+    const out = []
+
+    for (let i = 0; i < lanes.length; i += 1) {
+      if (cancelRef.current) return // unmounted mid-run — drop everything
+      setProgress({ done: i, total: lanes.length, current: `${lanes[i].pol} → ${lanes[i].fd}` })
+      // eslint-disable-next-line no-await-in-loop -- sequential per lane by design (quota safety)
+      out.push(await matchLane(lanes[i], ratesByPol, geo))
+    }
+
+    setResults(out)
+    setGeoStats({ ...geo.stats })
+    setProgress({ done: lanes.length, total: lanes.length, current: null })
+    setPhase('review')
+  }
+
   /* ── upload + parse (browse or drag-and-drop) ────────────────────────── */
 
   const ACCEPTED_EXTS = ['csv', 'xlsx', 'xls']
@@ -99,12 +152,20 @@ export default function ApplyRates() {
         if (missing.length) return showToast('error', `Missing column(s): ${missing.join(', ')}`)
         const { ofqs: parsed, warnings } = groupByOfq(dataRows, index)
         if (!parsed.length) return showToast('warning', 'No OFQ rows found in the file.')
+
+        // matching starts immediately, so its preconditions gate the upload itself
+        if (!geoConfigured) return showToast('error', 'VITE_GEO_API_URL is not set — geo checks unavailable.')
+        if (ratesLoading || ratesError) {
+          return showToast('warning', 'Active rates are still loading — drop the file again in a moment.')
+        }
+
         setOfqs(parsed)
         setFileName(file.name)
         setResults([])
+        setDiscarded(new Map())
         setGeoStats(null)
-        setPhase('parsed')
         if (warnings.length) showToast('warning', warnings[0])
+        runMatching(deriveLanes(parsed))
       },
       error() {
         showToast('error', 'Failed to read file')
@@ -146,36 +207,29 @@ export default function ApplyRates() {
     handleFile(e.dataTransfer?.files?.[0])
   }
 
-  /* ── run matching ────────────────────────────────────────────────────── */
+  /* ── yard discard / restore (state lives OUTSIDE the grid rows) ──────── */
 
-  const handleRun = async () => {
-    if (!geoConfigured) return showToast('error', 'VITE_GEO_API_URL is not set — geo checks unavailable.')
-    if (ratesLoading || ratesError) return showToast('warning', 'Active rates are not loaded yet.')
+  const discardYard = (laneKey, cyNorm) => setDiscarded((prev) => {
+    const next = new Map(prev)
+    const set = new Set(next.get(laneKey) ?? [])
+    set.add(cyNorm)
+    next.set(laneKey, set)
+    return next
+  })
 
-    cancelRef.current = false
-    setPhase('running')
-    setProgress({ done: 0, total: ofqs.length, current: null })
+  const resetLane = (laneKey) => setDiscarded((prev) => {
+    if (!prev.has(laneKey)) return prev
+    const next = new Map(prev)
+    next.delete(laneKey)
+    return next
+  })
 
-    const ratesByPol = indexRatesByPol(dedupeRates(activeRates))
-    const geo = createGeoBatch()
-    const out = []
+  /* ── output (live: reflects discards instantly) ──────────────────────── */
 
-    for (let i = 0; i < ofqs.length; i += 1) {
-      if (cancelRef.current) return // unmounted mid-run — drop everything
-      setProgress({ done: i, total: ofqs.length, current: ofqs[i].ofqId })
-      // eslint-disable-next-line no-await-in-loop -- sequential per OFQ by design (quota safety)
-      out.push(await matchOfq(ofqs[i], ratesByPol, geo))
-    }
-
-    setResults(out)
-    setGeoStats({ ...geo.stats })
-    setProgress({ done: ofqs.length, total: ofqs.length, current: null })
-    setPhase('done')
-  }
-
-  /* ── download ────────────────────────────────────────────────────────── */
-
-  const outputRows = buildOutputRows(results)
+  const outputRows = useMemo(
+    () => (phase === 'review' ? buildOutputRows(ofqs, results, discarded) : []),
+    [phase, ofqs, results, discarded],
+  )
 
   const handleDownload = () => {
     const date = new Date().toISOString().slice(0, 10)
@@ -186,47 +240,77 @@ export default function ApplyRates() {
     setOfqs([])
     setFileName(null)
     setResults([])
+    setDiscarded(new Map())
     setGeoStats(null)
     setPhase('idle')
   }
 
-  /* ── grid columns ────────────────────────────────────────────────────── */
+  /* ── qualification matrix columns ────────────────────────────────────── */
 
-  const previewColumns = [
-    { field: 'ofqId', headerName: 'OFQ', width: 110, cellClassName: 'font-mono' },
-    { field: 'pol', headerName: 'Port of Loading', flex: 1.1, minWidth: 140 },
-    { field: 'fd', headerName: 'Final Destination', flex: 1.1, minWidth: 140 },
-    { field: 'rowCount', headerName: 'Rows', width: 70, type: 'number', cellClassName: 'font-mono' },
-    { field: 'appliedCount', headerName: 'Already applied', width: 120, type: 'number', cellClassName: 'font-mono' },
-  ]
+  const matrixColumns = useMemo(() => {
+    const maxQualified = results.reduce((m, r) => Math.max(m, r.qualified.length), 0)
 
-  const resultColumns = [
-    { field: 'ofqId', headerName: 'OFQ', width: 110, cellClassName: 'font-mono' },
-    {
-      field: 'status', headerName: 'Status', width: 140, sortable: false,
-      renderCell: (p) => <StatusChip status={p.value} />,
-    },
-    { field: 'pol', headerName: 'Port of Loading', flex: 1, minWidth: 130 },
-    { field: 'fd', headerName: 'Final Destination', flex: 1, minWidth: 130 },
-    { field: 'bestCy', headerName: 'Closest CY', flex: 0.9, minWidth: 110, valueGetter: (v) => v ?? '—' },
-    {
-      field: 'routeMiles', headerName: 'Drayage mi', width: 96, type: 'number', cellClassName: 'font-mono',
-      valueFormatter: (v) => (v == null ? '—' : v.toFixed(1)),
-    },
-    {
-      field: 'applied', headerName: 'Rates to apply', width: 110, type: 'number', cellClassName: 'font-mono',
-      valueGetter: (v) => v?.length ?? 0,
-    },
-    {
-      field: 'errors', headerName: 'Notes', flex: 1.2, minWidth: 140, sortable: false,
+    const cols = [
+      { field: 'pol', headerName: 'Port of Loading', flex: 1, minWidth: 130 },
+      { field: 'fd', headerName: 'Final Destination', flex: 1, minWidth: 130 },
+      {
+        field: 'ofqIds', headerName: 'OFQs', width: 64, sortable: false, cellClassName: 'font-mono',
+        valueGetter: (v) => v?.length ?? 0,
+      },
+      {
+        field: 'status', headerName: 'Status', width: 130, sortable: false,
+        renderCell: (p) => (
+          <div className="flex items-center gap-1.5">
+            <StatusChip status={p.value} />
+            {(discarded.get(p.row.laneKey)?.size ?? 0) > 0 && (
+              <button
+                className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
+                onClick={() => resetLane(p.row.laneKey)}
+                tabIndex={-1}
+                title="Restore this lane's discarded yards"
+              >
+                <RotateCcw size={13} />
+              </button>
+            )}
+          </div>
+        ),
+      },
+    ]
+
+    for (let i = 0; i < maxQualified; i += 1) {
+      cols.push({
+        field: `cy${i}`,
+        headerName: `CY ${String.fromCharCode(65 + i)}`,
+        width: 235,
+        sortable: false,
+        filterable: false,
+        renderCell: (p) => {
+          const yard = p.row.qualified[i]
+          if (!yard) return null
+          return (
+            <div className="flex h-full w-full items-center">
+              <YardCell
+                yard={yard}
+                discarded={discarded.get(p.row.laneKey)?.has(yard.cyNorm) ?? false}
+                onDiscard={() => discardYard(p.row.laneKey, yard.cyNorm)}
+              />
+            </div>
+          )
+        },
+      })
+    }
+
+    cols.push({
+      field: 'errors', headerName: 'Notes', flex: 1.2, minWidth: 130, sortable: false,
       valueGetter: (v) => (v?.length ? v.join(' · ') : ''),
-    },
-  ]
+    })
+
+    return cols
+  }, [results, discarded])
 
   /* ── derived summary ─────────────────────────────────────────────────── */
 
-  const matchedCount = results.filter((r) => r.status === 'matched').length
-  const noMatchCount = results.filter((r) => ['no_pol_match', 'no_cy_in_range', 'no_last_cy', 'no_destination'].includes(r.status)).length
+  const qualifiedLanes = results.filter((r) => r.status === 'matched').length
   const errorCount = results.filter((r) => r.status === 'geo_error').length
   const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0
 
@@ -253,7 +337,7 @@ export default function ApplyRates() {
       <PageHeader
         kicker="Internal · Rates"
         title="Apply Rates"
-        subtitle="Upload the OFQ export — active rates are matched to each quote by POL and drayage distance from the Last CY, and the result downloads as the AIS import file."
+        subtitle="Upload the OFQ export — every qualifying yard per lane is shown closest-first; discard the ones you don't want, then create the AIS import file."
         actions={fileName && (
           <span className="inline-flex items-center gap-2 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
             <span className="font-mono text-xs text-harbor-900">{fileName}</span>
@@ -281,17 +365,7 @@ export default function ApplyRates() {
 
         <div className="flex-1" />
 
-        {phase === 'parsed' && (
-          <button
-            className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
-            onClick={handleRun}
-            disabled={!geoConfigured || ratesLoading || Boolean(ratesError)}
-          >
-            <Play size={16} className="transition-transform group-hover:scale-110" />
-            Run Matching
-          </button>
-        )}
-        {phase === 'done' && (
+        {phase === 'review' && (
           <>
             <button
               className="inline-flex items-center gap-1.5 rounded-lg border border-fog-300 bg-white px-3 py-2 text-sm font-medium text-harbor-700 shadow-sm transition-all hover:border-harbor-300 hover:bg-fog-50 hover:text-harbor-900"
@@ -306,33 +380,18 @@ export default function ApplyRates() {
               disabled={outputRows.length === 0}
             >
               <Download size={16} className="transition-transform group-hover:translate-y-0.5" />
-              Download CSV ({outputRows.length})
+              Create Rates ({outputRows.length})
             </button>
           </>
         )}
       </div>
 
       {/* Stat cards */}
-      {phase === 'parsed' && (
+      {phase === 'review' && (
         <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard label="OFQs found" value={String(ofqs.length)} icon={RouteIcon} accent="harbor" index={0} />
-          <StatCard label="Input rows" value={String(ofqs.reduce((n, o) => n + o.rowCount, 0))} icon={Upload} accent="sea" index={1} />
-          <StatCard label="Already applied" value={String(ofqs.reduce((n, o) => n + o.appliedCount, 0))} icon={Download} accent="signal" index={2} />
-          <StatCard
-            label="Active rates"
-            value={ratesLoading ? '…' : String(activeRates.length)}
-            icon={Play}
-            accent="sea"
-            index={3}
-            hint={ratesError ? `Load failed: ${ratesError}` : 'Pool the OFQs are matched against'}
-          />
-        </div>
-      )}
-      {phase === 'done' && (
-        <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard label="Matched OFQs" value={String(matchedCount)} icon={RouteIcon} accent="sea" index={0} />
-          <StatCard label="Rates to apply" value={String(outputRows.length)} icon={Download} accent="signal" index={1} />
-          <StatCard label="No match" value={String(noMatchCount)} icon={Upload} accent="harbor" index={2} />
+          <StatCard label="Lanes" value={String(results.length)} icon={RouteIcon} accent="harbor" index={0} hint={`${qualifiedLanes} with qualifying yards`} />
+          <StatCard label="OFQs" value={String(ofqs.length)} icon={Upload} accent="sea" index={1} />
+          <StatCard label="Rates to apply" value={String(outputRows.length)} icon={Download} accent="signal" index={2} hint="Live — updates as you discard yards" />
           <StatCard
             label="Geo errors"
             value={String(errorCount)}
@@ -355,22 +414,9 @@ export default function ApplyRates() {
           <div className="text-sm text-fog-500">
             Drag & drop the OFQ export (.csv or .xlsx) here — or click to browse.
             <br />
-            Expected columns: OFQID, Port of Loading, Final Destination — plus the applied-rate columns (OFRID…).
+            Matching runs immediately: each lane shows every qualifying yard, closest first.
           </div>
         </button>
-      )}
-
-      {phase === 'parsed' && (
-        <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card" style={{ width: '100%' }}>
-          <DataGrid
-            rows={ofqs}
-            getRowId={(r) => r.ofqId}
-            columns={previewColumns}
-            disableRowSelectionOnClick
-            hideFooter
-            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(ofqs.length) }}
-          />
-        </div>
       )}
 
       {phase === 'running' && (
@@ -382,20 +428,21 @@ export default function ApplyRates() {
             </div>
           </div>
           <div className="font-mono text-xs text-fog-400">
-            {progress.done} / {progress.total} OFQs{progress.current ? ` · ${progress.current}` : ''}
+            {progress.done} / {progress.total} lanes{progress.current ? ` · ${progress.current}` : ''}
           </div>
         </div>
       )}
 
-      {phase === 'done' && (
+      {phase === 'review' && (
         <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card" style={{ width: '100%' }}>
           <DataGrid
             rows={results}
-            getRowId={(r) => r.ofqId}
-            columns={resultColumns}
+            getRowId={(r) => r.laneKey}
+            columns={matrixColumns}
+            rowHeight={64}
             disableRowSelectionOnClick
             hideFooter
-            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(results.length) }}
+            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(results.length, { rowH: 64 }) }}
           />
         </div>
       )}
