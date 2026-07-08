@@ -21,22 +21,13 @@ import { buildOutputRows, downloadCsv } from '../applyRates/outputCsv'
   Thresholds live in applyRates/config.js.
 */
 
-const STATUS_META = {
-  matched:        { label: 'Qualified',       cls: 'bg-sea-50 text-sea-700 border-sea-200' },
-  no_pol_match:   { label: 'No POL match',    cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  no_cy_in_range: { label: 'No CY in range',  cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  no_last_cy:     { label: 'No Last CY',      cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  no_destination: { label: 'No destination',  cls: 'bg-signal-50 text-signal-700 border-signal-200' },
-  geo_error:      { label: 'Geo error',       cls: 'bg-red-50 text-red-700 border-red-200' },
-}
-
-function StatusChip({ status }) {
-  const meta = STATUS_META[status] ?? { label: status, cls: 'bg-fog-100 text-fog-500 border-fog-200' }
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${meta.cls}`}>
-      {meta.label}
-    </span>
-  )
+// Non-qualified lanes are hidden from the matrix (no applicable rates = nothing to
+// decide) and summarized in one line instead; these are their display labels.
+const HIDDEN_STATUS_LABELS = {
+  no_pol_match: 'no POL match',
+  no_cy_in_range: 'no CY in range',
+  no_last_cy: 'no Last CY on rates',
+  no_destination: 'no destination',
 }
 
 /* A qualified-yard cell: input-box look (à la NetSuite) with an ⓧ to discard it from
@@ -245,10 +236,12 @@ export default function ApplyRates() {
     setPhase('idle')
   }
 
-  /* ── qualification matrix columns ────────────────────────────────────── */
+  /* ── qualification matrix (qualified lanes only) ─────────────────────── */
+
+  const qualifiedRows = useMemo(() => results.filter((r) => r.status === 'matched'), [results])
 
   const matrixColumns = useMemo(() => {
-    const maxQualified = results.reduce((m, r) => Math.max(m, r.qualified.length), 0)
+    const maxQualified = qualifiedRows.reduce((m, r) => Math.max(m, r.qualified.length), 0)
 
     const cols = [
       { field: 'pol', headerName: 'Port of Loading', flex: 1, minWidth: 130 },
@@ -258,22 +251,17 @@ export default function ApplyRates() {
         valueGetter: (v) => v?.length ?? 0,
       },
       {
-        field: 'status', headerName: 'Status', width: 130, sortable: false,
-        renderCell: (p) => (
-          <div className="flex items-center gap-1.5">
-            <StatusChip status={p.value} />
-            {(discarded.get(p.row.laneKey)?.size ?? 0) > 0 && (
-              <button
-                className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
-                onClick={() => resetLane(p.row.laneKey)}
-                tabIndex={-1}
-                title="Restore this lane's discarded yards"
-              >
-                <RotateCcw size={13} />
-              </button>
-            )}
-          </div>
-        ),
+        field: 'reset', headerName: '', width: 48, sortable: false, filterable: false,
+        renderCell: (p) => ((discarded.get(p.row.laneKey)?.size ?? 0) > 0 ? (
+          <button
+            className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
+            onClick={() => resetLane(p.row.laneKey)}
+            tabIndex={-1}
+            title="Restore this lane's discarded yards"
+          >
+            <RotateCcw size={14} />
+          </button>
+        ) : null),
       },
     ]
 
@@ -306,12 +294,17 @@ export default function ApplyRates() {
     })
 
     return cols
-  }, [results, discarded])
+  }, [qualifiedRows, discarded])
 
   /* ── derived summary ─────────────────────────────────────────────────── */
 
-  const qualifiedLanes = results.filter((r) => r.status === 'matched').length
-  const errorCount = results.filter((r) => r.status === 'geo_error').length
+  const geoErrorLanes = results.filter((r) => r.status === 'geo_error')
+  // hidden = nothing to decide on: no applicable rates in the system for the lane
+  const hiddenCounts = results.reduce((acc, r) => {
+    if (HIDDEN_STATUS_LABELS[r.status]) acc[r.status] = (acc[r.status] ?? 0) + 1
+    return acc
+  }, {})
+  const hiddenTotal = Object.values(hiddenCounts).reduce((a, b) => a + b, 0)
   const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0
 
   /* ── render ──────────────────────────────────────────────────────────── */
@@ -389,17 +382,32 @@ export default function ApplyRates() {
       {/* Stat cards */}
       {phase === 'review' && (
         <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard label="Lanes" value={String(results.length)} icon={RouteIcon} accent="harbor" index={0} hint={`${qualifiedLanes} with qualifying yards`} />
+          <StatCard label="Qualified lanes" value={String(qualifiedRows.length)} icon={RouteIcon} accent="harbor" index={0} hint={`of ${results.length} lanes in the file`} />
           <StatCard label="OFQs" value={String(ofqs.length)} icon={Upload} accent="sea" index={1} />
           <StatCard label="Rates to apply" value={String(outputRows.length)} icon={Download} accent="signal" index={2} hint="Live — updates as you discard yards" />
           <StatCard
             label="Geo errors"
-            value={String(errorCount)}
+            value={String(geoErrorLanes.length)}
             icon={Play}
             accent="harbor"
             index={3}
             hint={geoStats ? `${geoStats.calls} geo calls · ${geoStats.memoHits} reused in-job` : undefined}
           />
+        </div>
+      )}
+
+      {/* Geo-error lanes: not "no rates" — often a typo worth fixing, so list them */}
+      {phase === 'review' && geoErrorLanes.length > 0 && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-card">
+          <span className="font-semibold">Couldn’t evaluate {geoErrorLanes.length} lane{geoErrorLanes.length === 1 ? '' : 's'}</span>
+          {' '}(check location spelling):
+          <ul className="mt-1 space-y-0.5">
+            {geoErrorLanes.map((l) => (
+              <li key={l.laneKey} className="font-mono text-xs">
+                {l.pol} → {l.fd} — {l.errors.join(' · ')}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -433,17 +441,32 @@ export default function ApplyRates() {
         </div>
       )}
 
-      {phase === 'review' && (
+      {phase === 'review' && (qualifiedRows.length > 0 ? (
         <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card" style={{ width: '100%' }}>
           <DataGrid
-            rows={results}
+            rows={qualifiedRows}
             getRowId={(r) => r.laneKey}
             columns={matrixColumns}
             rowHeight={64}
             disableRowSelectionOnClick
             hideFooter
-            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(results.length, { rowH: 64 }) }}
+            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(qualifiedRows.length, { rowH: 64 }) }}
           />
+        </div>
+      ) : (
+        <div className="flex min-h-[30vh] flex-col items-center justify-center gap-2 rounded-2xl border border-fog-200 bg-white text-center shadow-card">
+          <RouteIcon size={26} className="text-fog-300" />
+          <div className="text-sm text-fog-500">
+            No lanes qualified — none of the active rates’ yards are within range of these destinations.
+          </div>
+        </div>
+      ))}
+
+      {/* Hidden-lane summary: lanes with no applicable rates in the system */}
+      {phase === 'review' && hiddenTotal > 0 && (
+        <div className="text-xs text-fog-400">
+          {hiddenTotal} lane{hiddenTotal === 1 ? '' : 's'} without applicable rates hidden — {' '}
+          {Object.entries(hiddenCounts).map(([status, count]) => `${count} ${HIDDEN_STATUS_LABELS[status]}`).join(' · ')}
         </div>
       )}
 
