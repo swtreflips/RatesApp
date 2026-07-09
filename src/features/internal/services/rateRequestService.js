@@ -61,25 +61,30 @@ export async function postRateRequestBatch(lanes, requesterId) {
 }
 
 /**
- * Fetches all rates the internal team can see — **lane-linked AND independent** (lane_id NULL).
+ * Fetches rates the internal team can see — **lane-linked AND independent** (lane_id NULL).
  * RLS (`requester reads rates` = current_role_is('internal')) scopes it to internal users, so no
  * explicit filter is needed. `lane_id` is selected to drive the Request/Standalone badge.
  * Flat list, newest first.
  *
+ * @param {{ scope?: 'active' | 'historic' }} [opts]
+ *   'active' (default) → only rates still valid or open-ended (valid_until >= today OR NULL),
+ *     same rule as the forwarder Active Rates and Apply Rates views;
+ *   'historic' → every rate incl. expired (for analytics / rate fluctuation over time).
  * @returns {{ rates, error }}
  */
-export async function fetchReceivedRates() {
-  // "Active Rates" = still valid (or open-ended). Same rule as the forwarder Active
-  // Rates and Apply Rates views — expired rates stay in the DB but drop off this list.
-  const today = new Date().toISOString().slice(0, 10)
-  const { data, error } = await supabase
+export async function fetchReceivedRates({ scope = 'active' } = {}) {
+  let query = supabase
     .from('rates')
     .select(
       'id, lane_id, pol, pod, last_cy, fd, carrier, rate_amount, free_days, currency, valid_until, notes, created_at, forwarder:forwarders(name)'
     )
-    .or(`valid_until.gte.${today},valid_until.is.null`)
-    .order('created_at', { ascending: false })
 
+  if (scope === 'active') {
+    const today = new Date().toISOString().slice(0, 10)
+    query = query.or(`valid_until.gte.${today},valid_until.is.null`)
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false })
   return { rates: data ?? [], error }
 }
 

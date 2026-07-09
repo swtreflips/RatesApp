@@ -5,7 +5,7 @@ import {
   LayoutDashboard,
   FilePlus,
   ClipboardList,
-  CheckSquare,
+  LineChart,
   ChevronLeft,
   ChevronRight,
   Ship,
@@ -22,7 +22,7 @@ const INTERNAL_NAV = [
   { label: 'Dashboard',        icon: LayoutDashboard, to: '/internal',          end: true },
   { label: 'New Rate Request', icon: FilePlus,        to: '/internal/new' },
   { label: 'Open Requests',    icon: ClipboardList,   to: '/internal/requests' },
-  { label: 'Active Rates',     icon: CheckSquare,     to: '/internal/rates' },
+  { label: 'Rates',            icon: LineChart,       to: '/internal/rates' },
   { label: 'Upload Rates',     icon: Upload,          to: '/internal/upload' },
   { label: 'Apply Rates',      icon: Route,           to: '/internal/apply' },
 ]
