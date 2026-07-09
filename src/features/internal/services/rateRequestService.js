@@ -69,11 +69,15 @@ export async function postRateRequestBatch(lanes, requesterId) {
  * @returns {{ rates, error }}
  */
 export async function fetchReceivedRates() {
+  // "Active Rates" = still valid (or open-ended). Same rule as the forwarder Active
+  // Rates and Apply Rates views — expired rates stay in the DB but drop off this list.
+  const today = new Date().toISOString().slice(0, 10)
   const { data, error } = await supabase
     .from('rates')
     .select(
       'id, lane_id, pol, pod, last_cy, fd, carrier, rate_amount, free_days, currency, valid_until, notes, created_at, forwarder:forwarders(name)'
     )
+    .or(`valid_until.gte.${today},valid_until.is.null`)
     .order('created_at', { ascending: false })
 
   return { rates: data ?? [], error }
