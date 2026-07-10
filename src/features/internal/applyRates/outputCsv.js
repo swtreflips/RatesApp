@@ -7,7 +7,7 @@ import Papa from 'papaparse'
 import { laneKeyOf, keyFromDbRate } from './matcher'
 
 export const OUTPUT_HEADERS = [
-  '# of Free Days', 'Carrier', 'Contract Number', 'Date Received', 'External ID',
+  '# of Free Days', 'Carrier', 'Contract Number', 'Contract Name', 'Date Received', 'External ID',
   'Final Destination', 'Forwarder/Carrier', 'Last CY/CFS', 'Last CY/CFS ETA', 'Move',
   'Ocean Freight Quote', 'Port of Discharge', 'Port of Loading', 'Rate/Unit',
   'Shipping Mode', 'Valid Until', 'Vessel ETA', 'Vessel ETD',
@@ -42,6 +42,7 @@ export function buildOutputRows(ofqs, laneResults, discarded) {
           r.free_days ?? '',        // # of Free Days
           r.carrier ?? '',          // Carrier
           r.contract ?? '',         // Contract Number (contract forwarders only; blank otherwise)
+          r.contractname ?? '',     // Contract Name (DB column is lowercase; blank otherwise)
           '',                       // Date Received
           '',                       // External ID
           ofq.fd ?? '',             // Final Destination (from the OFQ)

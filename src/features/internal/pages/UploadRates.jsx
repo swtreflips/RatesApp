@@ -152,6 +152,13 @@ export default function UploadRates() {
       // free text; only contract forwarders carry a value — blank for the rest
       cellClassName: 'font-mono',
     },
+    {
+      field: 'contractName',
+      headerName: 'Contract Name',
+      width: 150,
+      editable: true,
+      // free text; pairs with Contract — blank for non-contract rates
+    },
     { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true,
       renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} /> },
     // template guides (request-side; preloaded from the lane)

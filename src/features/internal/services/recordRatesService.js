@@ -42,7 +42,7 @@ export async function fetchForwarders() {
  * Record rates on behalf of forwarders. Mirrors the forwarder `submitRates` shape but takes the
  * forwarder from each row (`forwarderId`) and stamps `provider_id` = the internal user.
  * @param {{ forwarderId: string, laneId?: string|null, period?: number|null, pol?, pod?, lastCy?,
- *           fd?, contract?, rate?, freeDays?, carrier?: string[]|string, validUntil?, remarks? }[]} rows
+ *           fd?, contract?, contractName?, rate?, freeDays?, carrier?: string[]|string, validUntil?, remarks? }[]} rows
  * @returns {{ error: Error|null, count?: number }}
  */
 export async function submitRatesOnBehalf(rows) {
@@ -72,6 +72,7 @@ export async function submitRatesOnBehalf(rows) {
     last_cy: r.lastCy || null,
     fd: r.fd || null,
     contract: r.contract || null,
+    contractname: r.contractName || null,  // DB column is lowercase (unquoted DDL)
     carrier: carrier || null,
     rate_amount: toNumber(r.rate),
     free_days: toNumber(r.freeDays),
