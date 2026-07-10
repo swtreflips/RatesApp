@@ -41,7 +41,7 @@ export function buildOutputRows(ofqs, laneResults, discarded) {
         rows.push([
           r.free_days ?? '',        // # of Free Days
           r.carrier ?? '',          // Carrier
-          '',                       // Contract Number
+          r.contract ?? '',         // Contract Number (contract forwarders only; blank otherwise)
           '',                       // Date Received
           '',                       // External ID
           ofq.fd ?? '',             // Final Destination (from the OFQ)
