@@ -6,7 +6,7 @@
 
   A row's shape: lane guides (fd/containerType/containerCount), rate fields
   (pol/pod/lastCy/rate/freeDays/carrier[]/validUntil/remarks), laneId/period for grouping, and
-  `forwarderId` (used only by the internal grid; ignored by the forwarder grid).
+  `forwarderId` + `contract` (used only by the internal grid; ignored by the forwarder grid).
 */
 
 import React, { useState, useRef } from 'react'
@@ -175,6 +175,7 @@ export const makeEmptyRow = () => ({
   laneId: null,
   period: null,
   forwarderName: '',        // internal "Upload Rates" only; the forwarder grid ignores it
+  contract: '',             // internal "Upload Rates" only (contract forwarders); forwarder grid ignores it
   // template/guide (blank for free rows)
   fd: '',
   containerType: '',
@@ -195,6 +196,7 @@ export const makeRowFromLane = (lane) => ({
   laneId: lane.id,
   period: lane.period,
   forwarderName: '',
+  contract: '',
   // from the request template (read-only guides)
   fd: lane.fd ?? '',
   containerType: lane.container_type ?? '',
@@ -218,6 +220,7 @@ export const makeCopyRow = (source) => ({
   laneId: source.laneId ?? null,
   period: source.period ?? null,
   forwarderName: source.forwarderName ?? '',
+  contract: source.contract ?? '',
   pol: source.pol,
   fd: source.fd,
   containerType: source.containerType,
@@ -231,6 +234,7 @@ export const makeCopyRow = (source) => ({
    own rate sheets lack those headers, so its behaviour is unchanged. */
 export const CSV_FIELD_ALIASES = {
   forwarder: ['forwarder'],
+  contract: ['contract', 'contract no', 'contract_no', 'contract number', 'contract #'],
   pol: ['pol', 'port of loading', 'port_of_loading'],
   fd: ['fd', 'final destination', 'final_destination'],
   pod: ['pod', 'port of discharge', 'port_of_discharge'],
@@ -278,6 +282,7 @@ export const makeRowFromCsv = (cells, headerIndex) => {
     laneId: null,
     period: null,
     forwarderName: cellAt(cells, headerIndex.forwarder), // raw; resolved → id at submit
+    contract: cellAt(cells, headerIndex.contract),       // internal only; blank for most rates
     fd: cellAt(cells, headerIndex.fd),
     containerType: '',
     containerCount: '',

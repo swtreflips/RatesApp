@@ -144,6 +144,14 @@ export default function UploadRates() {
       renderCell: (params) => params.value ?? '',
       renderEditCell: (params) => <ForwarderGhostInput {...params} forwarders={forwarders} />,
     },
+    {
+      field: 'contract',
+      headerName: 'Contract',
+      width: 130,
+      editable: true,
+      // free text; only contract forwarders carry a value — blank for the rest
+      cellClassName: 'font-mono',
+    },
     { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true,
       renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} /> },
     // template guides (request-side; preloaded from the lane)
