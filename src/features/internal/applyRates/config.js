@@ -23,7 +23,6 @@ export const LONG_DISTANCE_YARDS = [
   'Oakland, CA',
   'Los Angeles, CA',
   'Long Beach, CA',
-  'Dallas, TX',
   'Denver, CO',
   'Minneapolis, MN',
   'New York, NY',
