@@ -34,27 +34,26 @@ const HIDDEN_STATUS_LABELS = {
 }
 
 /* A qualified-route cell: input-box look (à la NetSuite) with an ⓧ to discard it from the
-   lane. Shows the routing being applied — Port of Discharge → Last CY — so rates that merely
-   share a yard but discharge at different ports are never mistaken for one another. Drayage
-   miles (CY → Final Destination) and the rate count are per route. A discarded route stays in
-   place, dimmed — column positions and the closest-first ordering stay legible; restore is the
-   row's reset icon. */
+   lane. Reads as the routing being applied — "Port of Discharge → Last CY" — so rates that
+   merely share a yard but discharge at different ports are never mistaken for one another;
+   drayage miles (CY → Final Destination) and the rate count sit beneath. Full routing is in
+   the title attr, since a long chain truncates. A discarded route stays in place, dimmed —
+   column positions and the closest-first ordering stay legible; restore is the row's reset
+   icon. */
 function RouteCell({ route, discarded, onDiscard }) {
-  const line = (label, value) => (
-    <div className="flex items-baseline gap-1.5">
-      <span className="w-[3.1rem] shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-fog-400">{label}</span>
-      <span className="truncate text-harbor-900">{value || '—'}</span>
-    </div>
-  )
-
   return (
     <div
       className={`flex w-full flex-col gap-0.5 rounded-lg border bg-white px-2.5 py-1.5 text-xs shadow-sm ${
         discarded ? 'border-dashed border-fog-300 opacity-40 line-through' : 'border-fog-300'
       }`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">{line('POD', route.podLabel)}</div>
+      <div className="flex items-center justify-between gap-1.5">
+        {/* the routing being applied: Port of Discharge → Last CY */}
+        <span className="truncate text-harbor-900" title={`${route.podLabel || '—'} → ${route.cyLabel}`}>
+          {route.podLabel || '—'}
+          <span className="mx-1 text-fog-400">→</span>
+          {route.cyLabel}
+        </span>
         {!discarded && (
           <button
             className="-mr-0.5 shrink-0 rounded-full p-0.5 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
@@ -66,7 +65,6 @@ function RouteCell({ route, discarded, onDiscard }) {
           </button>
         )}
       </div>
-      {line('Last CY', route.cyLabel)}
       <div className="font-mono text-[10px] text-fog-500">
         {Math.round(route.miles)} mi · {route.rates.length} rate{route.rates.length === 1 ? '' : 's'}
       </div>
@@ -286,7 +284,7 @@ export default function ApplyRates() {
       cols.push({
         field: `route${i}`,
         headerName: `Route ${String.fromCharCode(65 + i)}`,
-        width: 260,
+        width: 280,
         sortable: false,
         filterable: false,
         renderCell: (p) => {
@@ -461,10 +459,10 @@ export default function ApplyRates() {
             rows={qualifiedRows}
             getRowId={(r) => r.laneKey}
             columns={matrixColumns}
-            rowHeight={84}
+            rowHeight={70}
             disableRowSelectionOnClick
             hideFooter
-            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(qualifiedRows.length, { rowH: 84 }) }}
+            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(qualifiedRows.length, { rowH: 70 }) }}
           />
         </div>
       ) : (
