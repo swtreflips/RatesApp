@@ -15,10 +15,13 @@ import { buildOutputRows, downloadCsv } from '../applyRates/outputCsv'
   Upload the AIS OFQ export (ratesInput.csv shape) → matching runs immediately per
   unique (POL, Final Destination) lane: POL text match, then two-stage geo through
   the brain (ST_DWithin pre-filter → HERE truck route). The review matrix shows ALL
-  qualifying yards per lane (CY A, CY B, … — closest first); the user discards yards
-  (ⓧ per cell, per-row reset), then Create Rates downloads the AIS import CSV — every
-  remaining yard's rates per OFQ, minus rates already applied to that OFQ (OFRID rows).
-  Thresholds live in applyRates/config.js.
+  qualifying ROUTES per lane (Route A, Route B, … — closest first), a route being the
+  (Port of Discharge, Last CY) pair the rates actually run on — so rates sharing a yard
+  but discharging at different ports stay distinct and separately discardable. The user
+  discards routes (ⓧ per cell, per-row reset), then Create Rates downloads the AIS import
+  CSV — every remaining route's rates per OFQ, minus rates already applied to that OFQ
+  (OFRID rows). Qualification itself is per Last CY (see matcher.js); thresholds live in
+  applyRates/config.js.
 */
 
 // Non-qualified lanes are hidden from the matrix (no applicable rates = nothing to
@@ -30,29 +33,43 @@ const HIDDEN_STATUS_LABELS = {
   no_destination: 'no destination',
 }
 
-/* A qualified-yard cell: input-box look (à la NetSuite) with an ⓧ to discard it from
-   the lane. A discarded yard stays in place, dimmed — column positions and the
-   closest-first ordering stay legible; restore is the row's reset icon. */
-function YardCell({ yard, discarded, onDiscard }) {
+/* A qualified-route cell: input-box look (à la NetSuite) with an ⓧ to discard it from the
+   lane. Shows the routing being applied — Port of Discharge → Last CY — so rates that merely
+   share a yard but discharge at different ports are never mistaken for one another. Drayage
+   miles (CY → Final Destination) and the rate count are per route. A discarded route stays in
+   place, dimmed — column positions and the closest-first ordering stay legible; restore is the
+   row's reset icon. */
+function RouteCell({ route, discarded, onDiscard }) {
+  const line = (label, value) => (
+    <div className="flex items-baseline gap-1.5">
+      <span className="w-[3.1rem] shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-fog-400">{label}</span>
+      <span className="truncate text-harbor-900">{value || '—'}</span>
+    </div>
+  )
+
   return (
     <div
-      className={`inline-flex w-full items-center justify-between gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-xs shadow-sm ${
-        discarded ? 'border-dashed border-fog-300 opacity-40' : 'border-fog-300'
+      className={`flex w-full flex-col gap-0.5 rounded-lg border bg-white px-2.5 py-1.5 text-xs shadow-sm ${
+        discarded ? 'border-dashed border-fog-300 opacity-40 line-through' : 'border-fog-300'
       }`}
     >
-      <span className={`truncate text-harbor-900 ${discarded ? 'line-through' : ''}`}>
-        {yard.cyLabel} · {Math.round(yard.miles)} mi · {yard.rates.length} rate{yard.rates.length === 1 ? '' : 's'}
-      </span>
-      {!discarded && (
-        <button
-          className="shrink-0 rounded-full p-0.5 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
-          onClick={onDiscard}
-          tabIndex={-1}
-          title="Discard this yard for this lane"
-        >
-          <X size={13} />
-        </button>
-      )}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">{line('POD', route.podLabel)}</div>
+        {!discarded && (
+          <button
+            className="-mr-0.5 shrink-0 rounded-full p-0.5 text-fog-400 transition-colors hover:bg-red-50 hover:text-red-600"
+            onClick={onDiscard}
+            tabIndex={-1}
+            title="Discard this route for this lane"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+      {line('Last CY', route.cyLabel)}
+      <div className="font-mono text-[10px] text-fog-500">
+        {Math.round(route.miles)} mi · {route.rates.length} rate{route.rates.length === 1 ? '' : 's'}
+      </div>
     </div>
   )
 }
@@ -66,7 +83,7 @@ export default function ApplyRates() {
   const [ratesError, setRatesError] = useState(null)
   const [progress, setProgress] = useState({ pct: 0, label: '' })
   const [results, setResults] = useState([]) // matchLane results, one per lane
-  const [discarded, setDiscarded] = useState(() => new Map()) // laneKey → Set<cyNorm>
+  const [discarded, setDiscarded] = useState(() => new Map()) // laneKey → Set<routeKey>
   const [geoStats, setGeoStats] = useState(null)
   const [toast, setToast] = useState(null)
   const fileInputRef = useRef(null)
@@ -198,12 +215,12 @@ export default function ApplyRates() {
     handleFile(e.dataTransfer?.files?.[0])
   }
 
-  /* ── yard discard / restore (state lives OUTSIDE the grid rows) ──────── */
+  /* ── route discard / restore (state lives OUTSIDE the grid rows) ─────── */
 
-  const discardYard = (laneKey, cyNorm) => setDiscarded((prev) => {
+  const discardRoute = (laneKey, routeKey) => setDiscarded((prev) => {
     const next = new Map(prev)
     const set = new Set(next.get(laneKey) ?? [])
-    set.add(cyNorm)
+    set.add(routeKey)
     next.set(laneKey, set)
     return next
   })
@@ -241,7 +258,7 @@ export default function ApplyRates() {
   const qualifiedRows = useMemo(() => results.filter((r) => r.status === 'matched'), [results])
 
   const matrixColumns = useMemo(() => {
-    const maxQualified = qualifiedRows.reduce((m, r) => Math.max(m, r.qualified.length), 0)
+    const maxRoutes = qualifiedRows.reduce((m, r) => Math.max(m, r.qualified.length), 0)
 
     const cols = [
       { field: 'pol', headerName: 'Port of Loading', flex: 1, minWidth: 130 },
@@ -257,7 +274,7 @@ export default function ApplyRates() {
             className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
             onClick={() => resetLane(p.row.laneKey)}
             tabIndex={-1}
-            title="Restore this lane's discarded yards"
+            title="Restore this lane's discarded routes"
           >
             <RotateCcw size={14} />
           </button>
@@ -265,22 +282,22 @@ export default function ApplyRates() {
       },
     ]
 
-    for (let i = 0; i < maxQualified; i += 1) {
+    for (let i = 0; i < maxRoutes; i += 1) {
       cols.push({
-        field: `cy${i}`,
-        headerName: `CY ${String.fromCharCode(65 + i)}`,
-        width: 235,
+        field: `route${i}`,
+        headerName: `Route ${String.fromCharCode(65 + i)}`,
+        width: 260,
         sortable: false,
         filterable: false,
         renderCell: (p) => {
-          const yard = p.row.qualified[i]
-          if (!yard) return null
+          const route = p.row.qualified[i]
+          if (!route) return null
           return (
             <div className="flex h-full w-full items-center">
-              <YardCell
-                yard={yard}
-                discarded={discarded.get(p.row.laneKey)?.has(yard.cyNorm) ?? false}
-                onDiscard={() => discardYard(p.row.laneKey, yard.cyNorm)}
+              <RouteCell
+                route={route}
+                discarded={discarded.get(p.row.laneKey)?.has(route.routeKey) ?? false}
+                onDiscard={() => discardRoute(p.row.laneKey, route.routeKey)}
               />
             </div>
           )
@@ -329,7 +346,7 @@ export default function ApplyRates() {
       <PageHeader
         kicker="Internal · Rates"
         title="Apply Rates"
-        subtitle="Upload the OFQ export — every qualifying yard per lane is shown closest-first; discard the ones you don't want, then create the AIS import file."
+        subtitle="Upload the OFQ export — every qualifying route (POD → Last CY) per lane is shown closest-first; discard the ones you don't want, then create the AIS import file."
         actions={fileName && (
           <span className="inline-flex items-center gap-2 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
             <span className="font-mono text-xs text-harbor-900">{fileName}</span>
@@ -421,7 +438,7 @@ export default function ApplyRates() {
           <div className="text-sm text-fog-500">
             Drag & drop the OFQ export (.csv or .xlsx) here — or click to browse.
             <br />
-            Matching runs immediately: each lane shows every qualifying yard, closest first.
+            Matching runs immediately: each lane shows every qualifying route, closest first.
           </div>
         </button>
       )}
@@ -444,17 +461,17 @@ export default function ApplyRates() {
             rows={qualifiedRows}
             getRowId={(r) => r.laneKey}
             columns={matrixColumns}
-            rowHeight={64}
+            rowHeight={84}
             disableRowSelectionOnClick
             hideFooter
-            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(qualifiedRows.length, { rowH: 64 }) }}
+            sx={{ ...DATA_GRID_SX, height: gridScrollHeight(qualifiedRows.length, { rowH: 84 }) }}
           />
         </div>
       ) : (
         <div className="flex min-h-[30vh] flex-col items-center justify-center gap-2 rounded-2xl border border-fog-200 bg-white text-center shadow-card">
           <RouteIcon size={26} className="text-fog-300" />
           <div className="text-sm text-fog-500">
-            No lanes qualified — none of the active rates’ yards are within range of these destinations.
+            No lanes qualified — none of the active rates’ Last CY yards are within range of these destinations.
           </div>
         </div>
       ))}

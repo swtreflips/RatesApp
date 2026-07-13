@@ -19,11 +19,11 @@ const EMPTY_SET = new Set()
   One output row per (OFQ, rate):
     ofqs        groupByOfq() output — each with appliedKeys (its OFRID rows)
     laneResults matchLane() results
-    discarded   Map<laneKey, Set<cyNorm>> — yards the user removed in the review matrix
+    discarded   Map<laneKey, Set<routeKey>> — routes the user removed in the review matrix
 
-  Every deduped rate at every non-discarded qualified yard of the OFQ's lane, minus
-  rates already applied to THAT OFQ. Pure + synchronous so the page can useMemo it
-  for a live "rates to apply" count. Note: a yard chip's rate count is lane-level —
+  Every deduped rate on every non-discarded qualified ROUTE (POD + Last CY) of the OFQ's
+  lane, minus rates already applied to THAT OFQ. Pure + synchronous so the page can useMemo
+  it for a live "rates to apply" count. Note: a route chip's rate count is lane-level —
   an OFQ that already has some of those rates emits fewer rows than the chip shows.
   Unmapped columns stay blank; Move is fixed CY/CY; Valid Until passes through as stored.
 */
@@ -34,9 +34,9 @@ export function buildOutputRows(ofqs, laneResults, discarded) {
     const lane = byLane.get(laneKeyOf(ofq.pol, ofq.fd))
     if (!lane || lane.status !== 'matched') continue
     const dropped = discarded.get(lane.laneKey) ?? EMPTY_SET
-    for (const yard of lane.qualified) {
-      if (dropped.has(yard.cyNorm)) continue
-      for (const r of yard.rates) {
+    for (const route of lane.qualified) {
+      if (dropped.has(route.routeKey)) continue
+      for (const r of route.rates) {
         if (ofq.appliedKeys.has(keyFromDbRate(r))) continue
         rows.push([
           r.free_days ?? '',        // # of Free Days

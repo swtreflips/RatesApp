@@ -3,9 +3,14 @@
   Supabase rows come in as plain data, so every rule here is unit-testable.
 
   The matching unit is the LANE — a unique (POL, Final Destination) pair shared by one
-  or more OFQs. A lane's result is EVERY yard that passes both geo stages (sorted by
-  drayage miles ascending); the user picks which ones to apply in the review matrix,
-  and the per-OFQ already-applied skip happens at output build (outputCsv.js).
+  or more OFQs. A lane's result is EVERY qualifying ROUTE — a (Port of Discharge, Last CY)
+  pair — sorted by drayage miles ascending; the user picks which ones to apply in the review
+  matrix, and the per-OFQ already-applied skip happens at output build (outputCsv.js).
+
+  Qualification is per LAST CY (the geo distance is CY→FD; the POD plays no part), so the two
+  geo stages are keyed by CY. Routes only SPLIT a qualifying CY by POD for display/discard —
+  they can never change which yards qualify. That's why one Last CY serving three PODs yields
+  three routes with identical miles, instead of one chip that hides the ocean routing.
 
   Identity: a rate is unique per (Forwarder, POL, POD, Last CY, Carrier, Rate, Valid Until).
   Both DB rates and the input file's already-applied rows are hashed through rateKey() so
@@ -107,16 +112,28 @@ export async function matchLanesBatch(lanes, ratesByPol, geo) {
     const candidates = ratesByPol.get(norm(lane.pol)) ?? []
     if (candidates.length === 0) return { done: { ...base, status: 'no_pol_match' } }
 
-    const byCy = new Map()
+    // Two views of the same candidates:
+    //   byCy    — distinct Last CYs. GEO USES ONLY THIS (distance is CY→FD; the POD plays no
+    //             part), so both stages stay deduped and quota-safe exactly as before.
+    //   byRoute — the display/discard/output unit: one entry per (POD, Last CY). The rates hang
+    //             off the ROUTE, so a yard serving several PODs no longer lumps them together.
+    const byCy = new Map()    // cyNorm → { label }
+    const byRoute = new Map() // `${podNorm}|${cyNorm}` → { routeKey, podLabel, cyLabel, cyNorm, rates }
     for (const r of candidates) {
       const cy = norm(r.last_cy)
       if (!cy) continue
-      if (!byCy.has(cy)) byCy.set(cy, { label: r.last_cy, rates: [] })
-      byCy.get(cy).rates.push(r)
+      if (!byCy.has(cy)) byCy.set(cy, { label: r.last_cy })
+
+      // a rate with no POD keeps its own route (podLabel '') — never silently dropped
+      const routeKey = `${norm(r.pod)}|${cy}`
+      if (!byRoute.has(routeKey)) {
+        byRoute.set(routeKey, { routeKey, podLabel: r.pod ?? '', cyLabel: r.last_cy, cyNorm: cy, rates: [] })
+      }
+      byRoute.get(routeKey).rates.push(r)
     }
     if (byCy.size === 0) return { done: { ...base, status: 'no_last_cy' } }
 
-    return { lane, base, byCy, errors: [] }
+    return { lane, base, byCy, byRoute, errors: [] }
   })
   const active = () => prep.filter((p) => !p.done)
 
@@ -162,21 +179,33 @@ export async function matchLanesBatch(lanes, ratesByPol, geo) {
   const routeByKey = new Map(routeKeys.map((k, i) => [k, routeRes[i]]))
 
   for (const p of active()) {
-    const passed = []
+    // Qualification is per Last CY (unchanged) …
+    const milesByCy = new Map()
     for (const cy of p.capped) {
-      const { label, rates } = p.byCy.get(cy)
+      const { label } = p.byCy.get(cy)
       const res = routeByKey.get(`${cy}|${norm(p.lane.fd)}`)
       if (!res.ok) {
         p.errors.push(`route ${label}: ${res.error}`)
         continue
       }
       const miles = metersToMiles(res.distance_m)
-      if (miles < getThresholds(cy).stage2RouteMiles) passed.push({ cyLabel: label, cyNorm: cy, miles, rates })
+      if (miles < getThresholds(cy).stage2RouteMiles) milesByCy.set(cy, miles)
     }
+
+    // … then each qualifying CY fans out into its routes. Routes sharing a CY share its miles,
+    // so a POD split can never change WHICH yards qualify — only how they're presented.
+    const passed = []
+    for (const route of p.byRoute.values()) {
+      const miles = milesByCy.get(route.cyNorm)
+      if (miles == null) continue // CY failed stage 2, errored, or fell beyond the per-lane cap
+      passed.push({ ...route, miles })
+    }
+
     if (passed.length === 0) {
       p.done = { ...p.base, status: p.errors.length >= p.capped.length && p.errors.length > 0 ? 'geo_error' : 'no_cy_in_range', errors: p.errors }
     } else {
-      passed.sort((a, b) => a.miles - b.miles)
+      // closest-first; routes on the same CY tie on miles → break by POD so ordering is stable
+      passed.sort((a, b) => a.miles - b.miles || a.podLabel.localeCompare(b.podLabel))
       p.done = { ...p.base, status: 'matched', qualified: passed, errors: p.errors }
     }
   }
