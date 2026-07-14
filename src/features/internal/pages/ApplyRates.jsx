@@ -344,7 +344,6 @@ export default function ApplyRates() {
       <PageHeader
         kicker="Internal · Rates"
         title="Apply Rates"
-        subtitle="Upload the OFQ export — every qualifying route (POD → Last CY) per lane is shown closest-first; discard the ones you don't want, then create the AIS import file."
         actions={fileName && (
           <span className="inline-flex items-center gap-2 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
             <span className="font-mono text-xs text-harbor-900">{fileName}</span>
