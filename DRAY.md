@@ -4,7 +4,9 @@
 **Relates to:** `MEMORY.md` (schema/RLS), `ONBOARDING.md` (onboarding), `ALERTS.md` (notifications).
 **Decisions (locked):** split tables per service · **no rename — keep existing ocean table names,
 add `drayage_*` alongside** · `forwarder_services` join table · two per-service opt-in booleans on
-`profiles` · keep `internal | forwarder` roles.
+`profiles` · keep `internal | forwarder` roles · **drayage rates are open-ended** (no expiry —
+staleness, not a clock) · **request-less proactive submission** (blank template, no request needed) ·
+**fuel surcharge %/$ + total resolved by Postgres generated columns**.
 
 > **No-rename approach (chosen).** Every DB change is **additive** — existing ocean tables, their RLS
 > policies, and their data are untouched; we only `create` new drayage tables + `add` new policies/
@@ -14,7 +16,8 @@ add `drayage_*` alongside** · `forwarder_services` join table · two per-servic
 
 ## 1. The core idea
 The app was built ocean-only. Drayage is the *same shape* of workflow (request lanes → forwarder
-fills a template → rates, with notifications) but **different columns and longer validity**. Model it
+fills a template → rates, with notifications) but **different columns and an open-ended validity
+model** (drayage rates don't expire — see §6b). Model it
 as a **second service that runs in parallel**, not a fork of the app:
 
 - **Ocean tables keep their current names** (`rates`, `rate_request_lanes`, `rate_submissions`,
@@ -60,14 +63,23 @@ alter table profiles add column receives_drayage_requests boolean not null defau
 alter table rate_request_batches add column service text not null default 'ocean'
   check (service in ('ocean','drayage'));
 
--- drayage mirrors (NEW tables only — COLUMNS = TBD, see §6; longer validity by default)
+-- drayage mirrors (NEW tables only — COLUMNS now defined in §6a; NO expiry, see §6b)
+-- request lanes are OPTIONAL: they solicit or refresh a lane, but a rate can exist without one (§6c).
 create table drayage_request_lanes ( id uuid pk …, batch_id uuid → rate_request_batches,
-  /* drayage demand columns */ posted_at, period,
-  expires_at timestamptz not null default (now() + interval '30 days') );   -- longer TTL
-create table drayage_submissions   ( … lane_id → drayage_request_lanes, forwarder_id, provider_id,
-  period, status … );  -- mirror ocean_submissions
-create table drayage_rates         ( … submission_id → drayage_submissions, lane_id → drayage_request_lanes,
-  forwarder_id, provider_id, /* drayage rate columns */ valid_until … );   -- longer validity
+  /* drayage demand columns, §6a */ posted_at,
+  kind text not null default 'new' check (kind in ('new','refresh')),   -- refresh = re-quote a lane you already have
+  refresh_of uuid null → drayage_rates );                               -- the rate being refreshed, if any
+create table drayage_submissions   ( … lane_id uuid null → drayage_request_lanes, forwarder_id, provider_id,
+  status … );  -- mirror ocean_submissions; nullable lane_id for request-less fills
+create table drayage_rates         ( … submission_id uuid null → drayage_submissions,
+  lane_id uuid null → drayage_request_lanes,           -- both nullable: proactive rates stand alone (§6c)
+  forwarder_id, provider_id, /* drayage rate + fee columns, §6a */
+  provided_at date not null default current_date,      -- Date Received; staleness anchor (§6b)
+  confirmed_at date not null default current_date,      -- last re-validation; bumped on re-confirm
+  status text not null default 'current' check (status in ('current','superseded')) );  -- NO valid_until
+-- one live rate per (forwarder, lane):
+create unique index drayage_rates_current_uq on drayage_rates (forwarder_id, last_cy_cfs, final_destination)
+  where status = 'current';
 ```
 
 ### 2c. RLS + helpers (no new helpers needed)
@@ -170,13 +182,124 @@ internal clicks Send on /internal/ocean/requests   →  invoke(notify-forwarders
 4. **Add drayage:** define drayage columns + template, create `drayage_*` tables (+ their RLS),
    add `drayage` to `serviceConfig`, onboard a company into drayage (insert a `forwarder_services` row).
 
-## 6. Open items (define before building drayage)
-- **Drayage lane + rate columns** (the actual fields — e.g. origin ramp/port, delivery zip/city,
-  container size, chassis, fuel/accessorials, free time, rate, valid_until). Provide a `drayage.csv`
-  or column list like the ocean template.
-- **Drayage validity length** (30 / 60 / 90 days?) → `expires_at` + `valid_until` defaults.
-- **Drayage Excel template** (the fill-out sheet) → new `drayageTemplateBytes.ts` + column map.
-- Optional later: rename `forwarders`→`providers` for semantic clarity (deferred — bigger migration).
+## 6. Drayage service definition (resolved)
+
+The demand template and rate shape are fixed by **`drayTemplate.csv`**. Four things differ from ocean
+and are specified here: **(a)** columns, **(b)** an open-ended validity model (no expiry), **(c)**
+request-less proactive submission, **(d)** dynamic fuel-surcharge / total math done in the database.
+
+### 6a. Lane + rate columns (from `drayTemplate.csv`)
+
+| CSV column | DB column | Type | Notes |
+|---|---|---|---|
+| Last CY/CFS | `last_cy_cfs` | text | Origin (port / CY area). Lane key part 1. |
+| Final Destination | `final_destination` | text | Delivery city. Lane key part 2. |
+| Drayage Lane | `drayage_lane` | text *(generated)* | `last_cy_cfs \|\| ' - ' \|\| final_destination` |
+| Zip Code | `dest_zip` | text | Destination ZIP — **text** to preserve leading zeros |
+| Rate | `rate` | numeric(12,2) | Base linehaul. **Required.** |
+| Fuel Surcharge % | `fuel_surcharge_pct` | numeric(6,4) null | Fraction (`0.34` = 34%). One of pct / nominal. |
+| Fuel Surcharge | `fuel_surcharge` | numeric(12,2) null | Nominal $. The other of pct / nominal. |
+| — | `fuel_surcharge_amount` | numeric *(generated)* | resolved $ (see §6d) |
+| — | `fuel_surcharge_pct_eff` | numeric *(generated)* | resolved % (see §6d) |
+| — | `total_rate` | numeric *(generated)* | `rate` + resolved surcharge (see §6d) |
+| Toll Fee | `toll_fee` | numeric null | accessorial — **not** in total |
+| Pre-pull Fee | `pre_pull_fee` | numeric null | accessorial |
+| Pier Pass Fee | `pier_pass_fee` | numeric null | accessorial |
+| Clean Truck Fee | `clean_truck_fee` | numeric null | accessorial |
+| Drop Fee | `drop_fee` | numeric null | accessorial |
+| Chassis Fee | `chassis_fee` | numeric null | accessorial |
+| Min Chassis Days | `min_chassis_days` | int null | |
+| Chassis Days Included | `chassis_days_included` | int null | |
+| Storage Fee (/Day) | `storage_fee_per_day` | numeric(12,2) null | per-day storage rate (the `"/Day"` lives in the label, value is a plain amount) |
+| Date Received | `provided_at` | date | staleness anchor (§6b); default `current_date` |
+
+Accessorials (toll → storage) are situational and **excluded from `total_rate`**, which is deliberately
+just `rate + fuel_surcharge` per the product rule. `drayage_lane` and the three resolved fuel/total
+columns are computed, never entered.
+
+### 6b. Validity — open-ended (staleness, not expiry)
+
+Drayage prices move with fuel / the broader economy / each carrier's competitive strategy, not on a
+fixed clock — so a hard `valid_until` would be wrong. Instead:
+
+- **No `valid_until` / `expires_at`.** A rate stays the current known price **indefinitely** until it's
+  superseded or explicitly refreshed.
+- Each rate carries **`provided_at`** (Date Received) and **`confirmed_at`** (last re-validation; =
+  `provided_at` initially). The app derives **age** and shows soft staleness cues — e.g. fresh < 6 mo,
+  aging 6–12 mo, stale > 12 mo. Thresholds are display-only, configurable, **never enforced**.
+- **Supersession, not deletion.** A new rate for the same `(forwarder, lane)` flips the previous one to
+  `superseded` and becomes `current` (unique partial index in §2b). History is retained → audit +
+  negotiation trail.
+- **Refresh request** = a request tied to a lane you *already* have a rate for (`kind='refresh'`,
+  `refresh_of` → that rate). Covers the three real triggers:
+  - **renegotiate** — you've run the rate ~3 months and want to push for better;
+  - **market shock** — war / fuel spike → "is this rate still valid / reinstated?";
+  - **staleness** — it's ~1 year old, you just want an "OK, still good" confirmation.
+  The forwarder responds either by **re-confirming** (bumps `confirmed_at`, same numbers) or
+  **submitting a new rate** (supersedes).
+
+### 6c. Request-less (proactive) submission — mirror ocean
+
+Exactly like ocean's Upload Rates: a forwarder fills the **blank drayage template** and submits rates
+with **no prior request**. The demand-side request lane is *optional context*, not a prerequisite —
+this is the core "a template of demand; a request is not necessary to provide rates" idea.
+
+- `drayage_rates.lane_id` and `submission_id` are **nullable** — a proactively uploaded rate stands on
+  its own, keyed by `(forwarder, last_cy_cfs, final_destination)`.
+- Requests exist only to **solicit** new lanes or **refresh** existing ones; the primary artifact is
+  always the rate itself.
+- Reuse the ocean Upload pipeline (`recordRatesService`), parameterized by service per §3: parse
+  `drayTemplate.csv` → run the §6d math (in-DB) → upsert as `current`, superseding any prior current
+  rate for that `(forwarder, lane)`.
+
+### 6d. Dynamic fuel surcharge & total — computed in Postgres
+
+Forwarders give **`rate` + exactly one of {`fuel_surcharge_pct`, `fuel_surcharge`}**; the system fills
+the other and the total. Some shops think in %, some in $ — accept either, to lower adoption friction.
+Do it with **STORED generated columns** so it's always consistent, needs no trigger, and works
+identically for upload *and* manual entry ("dynamic on Supabase"):
+
+```sql
+-- STORED only what the forwarder typed:  rate (required),
+--   fuel_surcharge_pct (fraction, nullable), fuel_surcharge (nominal $, nullable)
+
+-- resolved nominal surcharge: nominal wins if given; else derive from %; else 0
+fuel_surcharge_amount numeric(12,2) generated always as (
+  coalesce(fuel_surcharge, round(rate * fuel_surcharge_pct, 2), 0)
+) stored,
+
+-- resolved percentage (fraction): % wins if given; else derive from nominal; guard rate>0
+fuel_surcharge_pct_eff numeric(6,4) generated always as (
+  case
+    when fuel_surcharge_pct is not null then fuel_surcharge_pct
+    when fuel_surcharge is not null and rate > 0 then round(fuel_surcharge / rate, 4)
+    else 0
+  end
+) stored,
+
+-- total = base + resolved surcharge.  NB: the base expression is REPEATED here because a
+-- generated column may not reference another generated column in Postgres.
+total_rate numeric(12,2) generated always as (
+  rate + coalesce(fuel_surcharge, round(rate * fuel_surcharge_pct, 2), 0)
+) stored,
+```
+
+Rules encoded above (verified against `drayTemplate.csv`):
+- **% only** → `amount = round(rate × pct, 2)`.  *(row 2: 388 × 0.34 = 131.92 ✓, total 519.92)*
+- **$ only** → `pct_eff = round($ / rate, 4)`.
+- **neither** → surcharge 0, `total = rate`.  *(row 3: 800 → total 800 ✓)*
+- **both given** → keep both as typed; **nominal $ is the source of truth** for money. Add a soft
+  check that **warns** when `abs(rate*pct − $) > 1.00` (likely a typo) — app-side warning or a
+  `NOT VALID` constraint, so a legit rounding gap never blocks a save.
+- Guard: deriving pct requires `rate > 0` (avoids div-by-zero); `rate` is required anyway.
+
+The app reads `fuel_surcharge_amount`, `fuel_surcharge_pct_eff`, `total_rate` and does **no client
+math** — one source of truth for both display and export.
+
+### 6e. Still deferred
+- Rename `forwarders` → `providers` for semantics — bigger migration, not needed for drayage.
+- Whether accessorials ever roll into an optional "all-in" total view (today they're reference-only,
+  excluded from `total_rate`).
 
 ## 7. Verification (once built)
 - Onboard a company as ocean-only / drayage-only / both → sidebar shows exactly the right section(s).
@@ -184,3 +307,9 @@ internal clicks Send on /internal/ocean/requests   →  invoke(notify-forwarders
 - Internal Send on each service emails only that service's opted-in directory; `notifications.service`
   recorded correctly.
 - Ocean behaves identically to today after the refactor (regression check).
+- **Fuel math (§6d):** upload `{rate 388, pct 0.34}` → amount 131.92, total 519.92; `{rate 800, no
+  fuel}` → amount 0, total 800; `{rate, $ only}` → pct back-computed; both-given mismatch warns.
+- **Open-ended validity (§6b):** a drayage rate never auto-expires; age/staleness is shown but not
+  enforced; a new rate for the same `(forwarder, lane)` supersedes the old one (history kept).
+- **Request-less (§6c):** a forwarder uploads the blank drayage template with no prior request → rates
+  appear as `current`. A `refresh` request re-confirms or supersedes the existing rate.
