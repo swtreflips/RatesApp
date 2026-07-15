@@ -6,7 +6,13 @@
 add `drayage_*` alongside** · `forwarder_services` join table · two per-service opt-in booleans on
 `profiles` · keep `internal | forwarder` roles · **drayage rates are open-ended** (no expiry —
 staleness, not a clock) · **request-less proactive submission** (blank template, no request needed) ·
-**fuel surcharge %/$ + total resolved by Postgres generated columns**.
+**fuel surcharge %/$ + total resolved by Postgres generated columns** · **per-analyst notification
+directory** (pick recipients per service; recipients ≠ access — no within-company RLS by service) ·
+**analyst tags** (`Ocean`/`Drayage`/`All` chips derived from the per-service flags; onboarding-set,
+no in-app editor yet) · **recipient prefill derived from the send audit** (each service's modal
+re-checks the last set actually emailed — no new state, §7e) · **stacked per-service sidebar panels**
+(static sections, no in-panel service switcher; §3a) · **neutral shell branding** (tagline/footer no
+longer ocean-specific; §3a).
 
 > **No-rename approach (chosen).** Every DB change is **additive** — existing ocean tables, their RLS
 > policies, and their data are untouched; we only `create` new drayage tables + `add` new policies/
@@ -52,7 +58,10 @@ insert into forwarder_services (forwarder_id, service)
 -- per-service notification opt-in.
 -- KEEP the existing receives_rate_requests as the OCEAN flag (no rename); just add drayage.
 alter table profiles add column receives_drayage_requests boolean not null default true;
--- (receives_rate_requests = the ocean opt-in; referenced as such in get_forwarder_recipients below)
+-- (receives_rate_requests = the ocean opt-in.) NOTE: these two flags are the analyst's TAG
+-- (Ocean/Drayage/All chip, §7a) and the FALLBACK pre-selection in the Send modal (§7b) — never hard
+-- filters. Once a service has been sent at least once, the prefill comes from the send audit instead
+-- (§7e); the sender can always override per analyst on any given send.
 ```
 
 ### 2b. Per-service pipelines (keep ocean as-is, add drayage)
@@ -96,20 +105,43 @@ create policy "read services" on forwarder_services
 ```sql
 alter table notifications add column service text not null default 'ocean'
   check (service in ('ocean','drayage'));
+-- record the exact analyst emailed, not just the company (§7d)
+alter table notification_recipients add column analyst_id uuid references profiles(id);
 
--- recipients resolved per service: company must offer it + the analyst opted in for THAT service
-create or replace function get_forwarder_recipients(p_forwarder_ids uuid[], p_service text)
-returns table (forwarder_id uuid, forwarder_name text, email text)
+-- DIRECTORY (for the Send modal): every analyst of each company that OFFERS the service,
+-- with opted_in = that service's default flag. opted_in drives the default checkbox state — it is
+-- NOT a filter; all analysts are listed so the sender can pick any of them (§7b).
+create or replace function get_service_directory(p_forwarder_ids uuid[], p_service text)
+returns table (forwarder_id uuid, forwarder_name text, analyst_id uuid, analyst_name text,
+               email text, opted_in boolean)
 language sql stable security definer set search_path = public, auth as $$
-  select f.id, f.name, u.email
+  select f.id, f.name, p.id, coalesce(p.full_name, split_part(u.email, '@', 1)), u.email,
+         case p_service when 'drayage' then p.receives_drayage_requests else p.receives_rate_requests end
   from forwarders f
   join forwarder_services fs on fs.forwarder_id = f.id and fs.service = p_service and fs.active
-  join profiles p on p.forwarder_id = f.id
-    and case p_service when 'drayage' then p.receives_drayage_requests else p.receives_rate_requests end
+  join profiles   p on p.forwarder_id = f.id
   join auth.users u on u.id = p.id
   where f.id = any(p_forwarder_ids) and f.active and u.email is not null;
 $$;
+
+-- SEND: resolve emails for EXACTLY the analysts the internal user checked in the modal (§7b).
+create or replace function get_recipients_by_analyst(p_analyst_ids uuid[])
+returns table (forwarder_id uuid, forwarder_name text, analyst_id uuid, email text)
+language sql stable security definer set search_path = public, auth as $$
+  select p.forwarder_id, f.name, p.id, u.email
+  from profiles   p
+  join forwarders f on f.id = p.forwarder_id and f.active
+  join auth.users u on u.id = p.id
+  where p.id = any(p_analyst_ids) and u.email is not null;
+$$;
+-- both SECURITY DEFINER + granted to service_role only, exactly like the original resolver.
 ```
+> Replaces the single per-company `get_forwarder_recipients(ids, service)` with a **directory**
+> resolver + a **by-analyst** send resolver (§7b). Ocean adopts the same two step: its modal simply
+> defaults every opted-in analyst checked, reproducing today's "email all recipients" behavior.
+> The Edge Function's `preview` mode also reads `notifications` + `notification_recipients` (service
+> role; no new SQL objects) to return each company's **last-sent analyst set** for the service — the
+> memory that drives the modal's prefill (§7e).
 
 ## 3. App changes
 
@@ -117,24 +149,81 @@ $$;
 |---|---|
 | **`AuthProvider`** | Load the user's services: forwarder → `select service from forwarder_services` for their company; internal → `['ocean','drayage']`. Expose `services` in context. |
 | **`serviceConfig.js`** (new, in `features/rates/`) | One object per service: `{ label, slug, icon, tables:{lanes,subs,rates}, columns, options, templateId, validityDays }`. **Ocean's `tables` point at the existing names** (`rates`/`rate_request_lanes`/`rate_submissions`); drayage at `drayage_*`. This one file absorbs the naming asymmetry; everything else reads `serviceConfig[service].tables.*` uniformly. |
-| **`Sidebar`** | Render **sections** from `services` (see Diagram A): a labeled group per service. One service → just that group; both → two groups. Internal always shows both. |
+| **`Sidebar`** | Render stacked **sections** from `services` — a labeled group per service (design locked in **§3a**; see Diagram A). One service → one panel; both → two panels; internal always both. Shell branding goes service-neutral (§3a). |
 | **Routing** | Add a `:service` segment: internal `/internal/:service/{new,requests,rates,upload}`, forwarder `/forwarder/:service/{lanes,submissions}`. Roots guard access (redirect if the company lacks `:service`). Dashboards stay at `/internal` `/forwarder`. |
 | **Feature pages** | Existing pages (SubmitRates, ActiveRates, NewRateRequest, OpenRequests, ReceivedRates, UploadRates) read `useParams().service` → pull columns/options/table-fns from `serviceConfig`. Shared `rateGrid` primitives already support per-column config + `AutocompleteEditCell`. |
 | **Data services** | Parameterize by service — `fetchActiveLanes(service)`, `submitRates(service, rows)`, etc. pick the table name from `serviceConfig.tables`; logic is identical. |
-| **`notify-forwarders`** | Payload gains `service`; resolve recipients via `get_forwarder_recipients(ids, service)`, compute outstanding from that service's lanes/subs, fill that service's template, write `notifications.service`. Send modal is already service-scoped (it lives on a `:service` route). |
+| **`notify-forwarders`** | Payload gains `service` + **`analystIds`** (the checked recipients, §7b). `preview` returns the directory via `get_service_directory(ids, service)` **plus each company's last-sent analyst set for that service (the prefill memory, §7e)**; `request`/`reminder` resolve emails via `get_recipients_by_analyst(analystIds)`, compute outstanding from that service's lanes/subs, fill that service's template, write `notifications.service` + one `notification_recipients` row per analyst emailed. Send modal is service-scoped (`:service` route) and now analyst-level (company → analysts with tag chips, §7b). |
 | **Templates** | Ocean = existing `templateBytes.ts`. Drayage = new `drayageTemplateBytes.ts` + its own fill column map; `fillTemplate` parameterized by the service's column map. |
+
+### 3a. Sidebar & shell design (decision)
+
+**Locked: stacked per-service panels — NOT one panel with an ocean/drayage switcher.** Ocean group on
+top (the current menu, unchanged), Drayage group below with its own options. Rationale: no hidden
+state (both services visible at a glance; a switcher forces the user to remember which service they're
+looking at); capability rendering is a trivial map over `services` (two groups / one group — no
+switcher UI, no empty states); stacking scales fine at N=2 (~11 rows + headers fits the `w-60` rail,
+and the nav area already scrolls).
+
+Structure rules:
+- **Shared items live OUTSIDE the groups.** Dashboard stays at the top (routes stay `/internal` ·
+  `/forwarder`, Diagram C).
+- **Ocean group (internal)** = the current menu unchanged: New Rate Request · Open Requests · Rates ·
+  Upload Rates · **Apply Rates** (ocean-specific — it applies *ocean* rates to OFQs — so it stays in
+  the Ocean group).
+- **Drayage group (internal)** = the parallel set: New Rate Request · Open Drayage Requests · Rates ·
+  Upload Rates.
+- **Forwarder** = one group per `forwarder_services` row, each with Open Requests · Active Rates.
+  Both services → two panels; one service → exactly one panel.
+- **Static sections** — always expanded, no accordions. Group header = uppercase mono microcopy
+  (`OCEAN` / `DRAYAGE`) + hairline divider, same style family as the existing role badge and footer.
+- **Collapsed rail (w-16):** icons only — headers hide, a hairline divider still separates the
+  groups; icon tooltips carry the service prefix ("Drayage · Open Requests").
+- **Neutral shell branding.** The two ocean-specific hardcoded strings in `Sidebar.jsx` change: logo
+  tagline "Ocean Freight" → **"Freight Rates"**; footer "Ocean Rate Platform" → **"Rate Platform"**.
+  One brand for the whole app — the groups carry the service identity. (Required the moment a
+  drayage-only forwarder logs in.)
+
+```
+internal                      forwarder (both)              forwarder (drayage only)
+┌─────────────────────┐      ┌─────────────────────┐      ┌─────────────────────┐
+│ ⚓ RatesApp          │      │ ⚓ RatesApp          │      │ ⚓ RatesApp          │
+│   FREIGHT RATES     │      │   FREIGHT RATES     │      │   FREIGHT RATES     │
+│ • INTERNAL          │      │ • FORWARDER         │      │ • FORWARDER         │
+│ ▦ Dashboard         │      │ ▦ Dashboard         │      │ ▦ Dashboard         │
+│                     │      │                     │      │                     │
+│ OCEAN ────────────  │      │ OCEAN ────────────  │      │ DRAYAGE ──────────  │
+│ ▸ New Rate Request  │      │ ▸ Open Requests     │      │ ▸ Open Requests     │
+│ ▸ Open Requests     │      │ ▸ Active Rates      │      │ ▸ Active Rates      │
+│ ▸ Rates             │      │                     │      │                     │
+│ ▸ Upload Rates      │      │ DRAYAGE ──────────  │      │                     │
+│ ▸ Apply Rates       │      │ ▸ Open Requests     │      │                     │
+│                     │      │ ▸ Active Rates      │      │                     │
+│ DRAYAGE ──────────  │      │                     │      │                     │
+│ ▸ New Rate Request  │      │                     │      │                     │
+│ ▸ Open Drayage Req. │      │                     │      │                     │
+│ ▸ Rates             │      │                     │      │                     │
+│ ▸ Upload Rates      │      │                     │      │                     │
+│                     │      │                     │      │                     │
+│   RATE PLATFORM     │      │   RATE PLATFORM     │      │   RATE PLATFORM     │
+└─────────────────────┘      └─────────────────────┘      └─────────────────────┘
+```
 
 ## 4. Diagrams
 
-**A — Capability → sidebar**
+**A — Capability → sidebar** (stacked static sections, §3a; Dashboard is shared, outside the groups)
 ```
 login → role?
- ├─ internal  → always: [Ocean ▸ New · Open · Active · Upload]
- │                       [Drayage ▸ New · Open · Active · Upload]
+ ├─ internal  → always:  Dashboard
+ │                       OCEAN ──── New · Open · Rates · Upload · Apply   ← current menu, unchanged
+ │                       DRAYAGE ── New · Open* · Rates · Upload          ← parallel group; *"Open
+ │                                                                           Drayage Requests"; each
+ │                                                                           Open hosts its own Send
+ │                                                                           button/modal
  └─ forwarder → services = forwarder_services(my company)
-        both        → [Ocean ▸ Open · Active]   [Drayage ▸ Open · Active]
-        ocean only  → [Ocean ▸ Open · Active]
-        drayage only→ [Drayage ▸ Open · Active]
+        both        →  Dashboard · OCEAN ── Open · Active · DRAYAGE ── Open · Active
+        ocean only  →  Dashboard · OCEAN ── Open · Active
+        drayage only→  Dashboard · DRAYAGE ── Open · Active
 ```
 
 **B — Data model**
@@ -160,25 +249,32 @@ RoleRouter
        /forwarder/:service/lanes|submissions          (guarded by forwarder_services)
 ```
 
-**D — Notify per service (separate directories)**
+**D — Notify per service, per analyst (directories + memory)**
 ```
-internal clicks Send on /internal/ocean/requests   →  invoke(notify-forwarders,{service:'ocean', ids})
-                         /internal/drayage/requests →  invoke(notify-forwarders,{service:'drayage', ids})
-   Edge fn → get_forwarder_recipients(ids, service)
-              → ocean   → analysts with receives_ocean_requests   (ocean directory)
-              → drayage → analysts with receives_drayage_requests (drayage directory)
-   → fill THAT service's template → /me/sendMail → notifications(service)
+internal on /internal/ocean/requests    → Send → preview: directory('ocean') + last-send memory
+internal on /internal/drayage/requests  → Send → preview: directory('drayage') + last-send memory
+   modal prefill per company:  memory (who got the LAST send of this service, §7e)
+                               └─ none ever? → tags (analysts whose flag covers this service, §7a)
+   user adjusts checkboxes → Send
+        → invoke(notify-forwarders,{ service, kind, analystIds })
+        → get_recipients_by_analyst(analystIds) → emails
+        → fill THAT service's template → /me/sendMail
+        → notifications(service) + notification_recipients(analyst_id) per analyst
+             └── these audit rows ARE next time's prefill (the loop closes itself)
+   NOTE: A and B still BOTH see BOTH panels — recipients ≠ access (§7c).
 ```
 
 ## 5. Migration sequence (all additive — ocean untouched)
 1. **DB (additive only):** create `forwarder_services` (+ backfill every forwarder with `ocean`) ·
-   add `profiles.receives_drayage_requests` · add `rate_request_batches.service` ·
-   add `notifications.service` · update `get_forwarder_recipients` to take `service`. **No renames.**
+   add `profiles.receives_drayage_requests` (+ optional `profiles.full_name`) · add
+   `rate_request_batches.service` · add `notifications.service` + `notification_recipients.analyst_id` ·
+   add the `get_service_directory` + `get_recipients_by_analyst` resolvers (§2d/§7). **No renames.**
 2. **App refactor (ocean → service-parameterized):** `serviceConfig` (ocean tables = existing names),
    `:service` routes, AuthProvider `services`, sidebar sections, parameterized pages/services. Ocean
    now lives under `/…/ocean/…` with **no behavior change** — it still reads the same tables, so this
    is a pure frontend refactor with nothing to coordinate at the DB level.
-3. **notify-forwarders** service-aware (`service` in payload) + redeploy.
+3. **notify-forwarders** service-aware + per-analyst (`service` + `analystIds` in payload; directory
+   preview + by-analyst send, §7) + redeploy.
 4. **Add drayage:** define drayage columns + template, create `drayage_*` tables (+ their RLS),
    add `drayage` to `serviceConfig`, onboard a company into drayage (insert a `forwarder_services` row).
 
@@ -212,6 +308,7 @@ request-less proactive submission, **(d)** dynamic fuel-surcharge / total math d
 | Chassis Days Included | `chassis_days_included` | int null | |
 | Storage Fee (/Day) | `storage_fee_per_day` | numeric(12,2) null | per-day storage rate (the `"/Day"` lives in the label, value is a plain amount) |
 | Date Received | `provided_at` | date | staleness anchor (§6b); default `current_date` |
+| Notes | `notes` | text null | free-form context the forwarder may add about the rate |
 
 Accessorials (toll → storage) are situational and **excluded from `total_rate`**, which is deliberately
 just `rate + fuel_surcharge` per the product rule. `drayage_lane` and the three resolved fuel/total
@@ -301,11 +398,114 @@ math** — one source of truth for both display and export.
 - Whether accessorials ever roll into an optional "all-in" total view (today they're reference-only,
   excluded from `total_rate`).
 
-## 7. Verification (once built)
-- Onboard a company as ocean-only / drayage-only / both → sidebar shows exactly the right section(s).
+## 7. Notification directories & per-analyst recipients
+
+Onboarding put **multiple analysts under one forwarder company**. Notifications must therefore target
+**people, not just companies**, and independently per service (the ocean contact may differ from the
+drayage contact). This section defines the contact directory and how recipients are chosen. It applies
+to **both services** — it's the piece that makes "ocean → Analyst A, drayage → Analyst B" work.
+
+### 7a. The directory = the company's analysts, with service tags
+No new contact table. A company's directory is simply its **`profiles` rows** (`forwarder_id` = company,
+role `forwarder`) — each already a login with an email. Per analyst we surface: **display name**
+(`profiles.full_name`, falling back to the email local-part), **email** (`auth.users.email`, resolved
+server-side only), and a **service tag** shown as a chip next to the person.
+
+**Tags are derived, never stored separately** — they're just a readable rendering of the two §2a flags:
+
+| `receives_rate_requests` | `receives_drayage_requests` | Tag chip |
+|---|---|---|
+| ✓ | ✗ | `OCEAN` |
+| ✗ | ✓ | `DRAYAGE` |
+| ✓ | ✓ | `ALL` |
+| ✗ | ✗ | *(untagged — listed, never pre-checked)* |
+
+Tags are set at **onboarding only** (data-only insert/update, same philosophy as `ONBOARDING.md`); an
+in-app tag editor is deliberately deferred (§6e-style). Chip styling follows the maritime system:
+`OCEAN` in sea/harbor tones, `DRAYAGE` in signal amber, `ALL` neutral fog ring — mono uppercase
+microcopy like the existing role badge.
+> If `profiles` has no display-name column, add `profiles.full_name text` — nice-to-have, not a blocker.
+
+### 7b. Selection is per-send and per-analyst (memory → tags pre-check)
+The Send modal (service-scoped — each service's Open Requests page has its own Send button) **keeps
+today's layout** (company row + emails, per `SendModal.jsx`), extended one level: each analyst becomes
+a selectable sub-row — checkbox + name + email + tag chip (§7a). Lane counts stay per company.
+
+```
+┌─ Send Drayage Rate Request ────────────────────────────────┐
+│ ☑ Pacific Star Logistics                          4 lanes  │
+│     ☑ Maria Chen      maria@pacstar.com      [DRAYAGE]     │
+│     ☐ John Alvarez    john@pacstar.com       [OCEAN]       │
+│     ☑ Priya Nair      priya@pacstar.com      [ALL]         │
+│ ☑ Harbor Bridge Freight                           2 lanes  │
+│     ☑ Tom Okafor      tom@hbfreight.com      [ALL]         │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Pre-check precedence, per company:**
+1. **Memory** — the analysts emailed in the *most recent* send of **this service** to this company
+   (§7e). The common case becomes zero-click: reopen → same people → Send.
+2. **Tags (fallback)** — if this service was never sent to this company, pre-check the analysts whose
+   tag covers the service (`OCEAN`/`ALL` for ocean; `DRAYAGE`/`ALL` for drayage).
+
+Either way the sender can check/uncheck **individual analysts for this specific send** — that's how one
+company routes ocean to A and drayage to B with no standing-config gymnastics: memory gives the
+default, the modal gives the override.
+
+- **Directory / preview** (for the modal): `get_service_directory(ids, service)` → one row per analyst
+  of each service-offering company (`opted_in` = the tag covers this service), **plus** the last-send
+  memory per company (§7e), both returned by the Edge Function's `preview` mode.
+- **Send** resolver: the modal posts the **explicit analyst ids** checked; the Edge Function resolves
+  their emails via `get_recipients_by_analyst(analyst_ids)` and emails exactly those.
+
+The company gates *which services appear* (via `forwarder_services`); tags and memory only shape
+default selection, never visibility.
+
+### 7c. Recipients ≠ access (no within-company RLS by service) — decision
+**Locked:** notification targeting does **not** restrict what an analyst sees. Every analyst at a company
+can open **both** the ocean and drayage panels for **every service the company offers**, regardless of
+who was emailed for what. Sending ocean to A and drayage to B is purely a *delivery* choice; both A and
+B still see both panels. Rationale: it matches the onboarding model ("any analyst can provide rates for
+the company"), keeps RLS simple (isolation stays **company-level** per §2c — `forwarder_id =
+my_forwarder()`), and avoids brittle per-person row rules we don't want yet. Access is governed only by
+(1) role and (2) the company's `forwarder_services` capability — never by who received a notification.
+
+### 7d. Audit trail (per analyst)
+Extend the existing log so "who did we email, for which service" is answerable:
+- `notifications.service` (§2d) tags each send ocean|drayage.
+- `notification_recipients.analyst_id` (§2d, new) records the exact person emailed (keep `forwarder_id`
+  for company grouping and `email` as the sent-to snapshot). One row per analyst actually emailed.
+
+### 7e. Recipient memory — derived from the audit log (decision)
+Each service's Send modal **remembers the last set of people selected for that rate type**, so the
+sender isn't reselecting every time. **Locked: no new storage** — the §7d audit rows *are* the memory:
+
+- **Definition.** For each `(service, company)`, the prefill set = the `analyst_id`s of the
+  `notification_recipients` rows belonging to the **latest** `notifications` row of that service that
+  included that company.
+- **Where.** Computed inside `notify-forwarders` **preview** (the service role already reads these
+  tables); the preview response gains each company's last-sent analyst set (e.g. `lastSelected` per
+  analyst). No new table, no new writes, no new SQL objects — every send already produces the audit
+  rows that become the next send's default. The loop closes itself (Diagram D).
+- **Edge behavior.** An analyst onboarded after the last send appears **unchecked but tagged** (the
+  sender consciously adds them once; memory then keeps them). Unchecking someone in a send means
+  they're unchecked next time — memory reflects what actually happened; tags remain the stable
+  fallback and are never mutated by sends.
+- **Scope.** Memory is per **service** and per **company**, shared by the whole internal team (it
+  derives from the team's sends, not per-user preferences). Ocean and drayage memories are fully
+  independent.
+
+## 8. Verification (once built)
+- Onboard a company as ocean-only / drayage-only / both → sidebar shows exactly the right panel(s):
+  both → two stacked groups, one service → exactly one group (§3a).
+- Internal sidebar: Dashboard on top, then OCEAN (current items incl. Apply Rates), then DRAYAGE.
+- Collapsed rail: group headers hidden but the divider still separates the groups; tooltips carry the
+  service prefix.
+- No ocean-specific shell branding for a drayage-only forwarder — tagline "Freight Rates", footer
+  "Rate Platform" (§3a).
 - Forwarder isolation holds per service (a company sees only its own ocean *and* drayage rates).
-- Internal Send on each service emails only that service's opted-in directory; `notifications.service`
-  recorded correctly.
+- Internal Send on each service emails exactly the analysts checked in that service's modal;
+  `notifications.service` recorded correctly.
 - Ocean behaves identically to today after the refactor (regression check).
 - **Fuel math (§6d):** upload `{rate 388, pct 0.34}` → amount 131.92, total 519.92; `{rate 800, no
   fuel}` → amount 0, total 800; `{rate, $ only}` → pct back-computed; both-given mismatch warns.
@@ -313,3 +513,13 @@ math** — one source of truth for both display and export.
   enforced; a new rate for the same `(forwarder, lane)` supersedes the old one (history kept).
 - **Request-less (§6c):** a forwarder uploads the blank drayage template with no prior request → rates
   appear as `current`. A `refresh` request re-confirms or supersedes the existing rate.
+- **Directory (§7b):** the Send modal lists a company's analysts for the chosen service with tag chips
+  (`OCEAN`/`DRAYAGE`/`ALL` derived from the two flags); checking/unchecking changes exactly who is
+  emailed.
+- **Memory (§7e):** first-ever drayage send pre-checks tag-covered analysts; send to a custom set →
+  reopen the modal → exactly that set is pre-checked (memory beats tags). Ocean and drayage memories
+  are independent — changing drayage recipients never alters the ocean prefill.
+- **Per-service routing (§7b):** send ocean to Analyst A and drayage to Analyst B in the same company →
+  each email reaches only the intended analyst; `notification_recipients.analyst_id` records who.
+- **Recipients ≠ access (§7c):** afterward, Analyst B can still open the ocean panel and Analyst A the
+  drayage panel — both services visible to both, no RLS block.
