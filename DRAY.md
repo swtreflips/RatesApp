@@ -264,7 +264,42 @@ internal on /internal/drayage/requests  → Send → preview: directory('drayage
    NOTE: A and B still BOTH see BOTH panels — recipients ≠ access (§7c).
 ```
 
+**E — One app, two pipelines (what's shared vs per-service)**
+```
+┌────────────────────────────── ONE APP · ONE DEPLOYMENT ──────────────────────────────┐
+│                                                                                      │
+│  SHARED (one of each)                                                                │
+│  ├─ Shell & UI ........... Shell / Sidebar / RoleRouter · grid primitives · Send     │
+│  │                         modal — service groups are just rendered sections (§3a)   │
+│  ├─ Identity & capability  forwarders · profiles (analyst directory, tags §7a)       │
+│  │                         · roles internal|forwarder · forwarder_services = the     │
+│  │                         ONLY thing that says who's in which pipeline              │
+│  ├─ Notifications ........ one notify-forwarders fn · notifications +                │
+│  │                         notification_recipients audit (= prefill memory §7e)      │
+│  ├─ Batches .............. rate_request_batches, tagged by `service`                 │
+│  └─ Access model ......... company-level RLS, same predicate both sides (§7c)        │
+│                                                                                      │
+│                     serviceConfig  ← THE single seam (§3): maps                      │
+│                     service → tables · columns · options · template                  │
+│                        │                              │                              │
+│         ┌──────────────┴────────────┐   ┌─────────────┴─────────────┐                │
+│         ▼  OCEAN pipeline           │   ▼  DRAYAGE pipeline         │                │
+│  ├─ rates                           │  ├─ drayage_rates             │                │
+│  ├─ rate_request_lanes              │  ├─ drayage_request_lanes     │                │
+│  ├─ rate_submissions                │  ├─ drayage_submissions       │                │
+│  ├─ ocean Excel template            │  ├─ drayage template (§6a)    │                │
+│  └─ rules: fixed TTL / valid_until  │  └─ rules: open-ended (§6b) · │                │
+│                                     │     fuel %/$ math (§6d) ·     │                │
+│                                     │     supersession + refresh    │                │
+│         └───────────────────────────┴───────────────────────────────┘                │
+│                                                                                      │
+│  Adding a 3rd service later = new tables + one serviceConfig entry + a               │
+│  forwarder_services value — shell, notifications, directory, UI already generic.     │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## 5. Migration sequence (all additive — ocean untouched)
+> §9b expands this into commit-sized implementation steps against the current codebase.
 1. **DB (additive only):** create `forwarder_services` (+ backfill every forwarder with `ocean`) ·
    add `profiles.receives_drayage_requests` (+ optional `profiles.full_name`) · add
    `rate_request_batches.service` · add `notifications.service` + `notification_recipients.analyst_id` ·
@@ -523,3 +558,49 @@ sender isn't reselecting every time. **Locked: no new storage** — the §7d aud
   each email reaches only the intended analyst; `notification_recipients.analyst_id` records who.
 - **Recipients ≠ access (§7c):** afterward, Analyst B can still open the ocean panel and Analyst A the
   drayage panel — both services visible to both, no RLS block.
+
+## 9. Next steps
+
+### 9a. Current implemented state (checked July 15, 2026)
+Nothing from this spec is in code yet — the app is **ocean-only end to end**:
+- **Routes are flat, no `:service` segment**: internal `/internal/{new,requests,rates,upload,apply}`,
+  forwarder `/forwarder/{lanes,submissions}` (`RoleRouter.jsx`, `InternalRoot.jsx`, `ForwarderRoot.jsx`).
+- **Sidebar** = flat per-role lists (`INTERNAL_NAV` / `FORWARDER_NAV`) with hardcoded "Ocean Freight" /
+  "Ocean Rate Platform" branding (`Sidebar.jsx`).
+- **AuthProvider** exposes `session/user/role/forwarderName` only — no `services` (`AuthProvider.jsx`).
+- **notify-forwarders** resolves recipients **per company** via `get_forwarder_recipients(uuid[])`
+  (no service arg, no analyst selection); `notifications` / `notification_recipients` lack
+  `service` / `analyst_id` (migration `20260621120000_notify_forwarders.sql`).
+- **No** `forwarder_services`, no `drayage_*` tables, no `serviceConfig.js`, no
+  `receives_drayage_requests`, no tags/memory/prefill.
+- `drayTemplate.csv` is committed and is the §6a source of truth. That's the only artifact built.
+
+### 9b. Implementation steps (each = one coherent commit; ocean regression-checked)
+Ordering rationale: DB first because every change is additive and invisible to the running app; the
+frontend service-parameterization is the riskiest step, so it lands alone with ocean behavior frozen.
+
+1. **DB migration 1 — capability + notification groundwork (additive, zero app impact).**
+   `forwarder_services` (+ backfill `ocean` for every forwarder) · `profiles.receives_drayage_requests`
+   (+ `profiles.full_name` if missing) · `rate_request_batches.service` · `notifications.service` ·
+   `notification_recipients.analyst_id` · `get_service_directory` + `get_recipients_by_analyst`
+   (SECURITY DEFINER, service_role-only, §2d) · RLS on `forwarder_services` (§2c). Deployable any time.
+2. **Frontend refactor — service-parameterized shell (ocean unchanged).**
+   `serviceConfig.js` (ocean tables = existing names, §3) · `AuthProvider.services` · `:service`
+   routes + redirects from the legacy flat paths · sidebar groups + neutral branding (§3a) ·
+   pages/data services read `serviceConfig[service]`. **Regression gate: ocean behaves identically.**
+3. **notify-forwarders v2 — service-aware, per-analyst, with memory.**
+   Payload `{service, kind, analystIds}` · `preview` returns directory + tags + last-send memory
+   (§7b/§7e) · send resolves via `get_recipients_by_analyst` · writes `service` + one recipient row
+   per analyst. SendModal gains analyst sub-rows + tag chips + memory→tags prefill. Ocean's default
+   prefill reproduces today's "all opted-in" behavior.
+4. **DB migration 2 — drayage pipeline.**
+   `drayage_request_lanes` / `drayage_submissions` / `drayage_rates` with §6a columns, §6d generated
+   columns, `kind/refresh_of`, nullable lane/submission ids, the `current` partial unique index, and
+   RLS copied from ocean (§2b/§2c).
+5. **Drayage app wiring.**
+   Add `drayage` to `serviceConfig` (columns/options/labels) · drayage Excel template bytes + fill
+   column map (from `drayTemplate.csv`) · Upload pipeline parameterized for request-less submission +
+   supersession (§6c) · staleness cues fresh/aging/stale (§6b) · refresh-request flow.
+6. **Onboard + verify.**
+   Insert a `forwarder_services` drayage row for a pilot company → run the full §8 checklist
+   (capability panels, isolation, fuel math, memory, recipients ≠ access).
