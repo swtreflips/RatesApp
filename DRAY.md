@@ -459,9 +459,19 @@ server-side only), and a **service tag** shown as a chip next to the person.
 
 **Tags are pure guidance.** They exist so the sender knows *who usually handles what* — they never
 pre-select recipients, never filter the list, and never affect access. Selection comes from memory
-(§7e) or a manual pick (§7b). Tags are set at **onboarding only** (data-only insert/update, same
-philosophy as `ONBOARDING.md`); an in-app tag editor is deliberately deferred (§6e-style). Chip
-styling follows the maritime system:
+(§7e) or a manual pick (§7b).
+
+**Display rule — intersect with company capability.** The chip is derived from the flags **∩ the
+company's `forwarder_services`**: an ocean-only company's analysts can only ever show `OCEAN` (or
+untagged) — never `ALL`/`DRAYAGE` — even though `receives_drayage_requests` defaults `true`. Without
+this, every analyst at a single-service company would read `ALL` and the chip would imply a service
+the company doesn't offer. (Client-side rule; no schema change.)
+
+**Tag hygiene.** Tags are set at **onboarding only** (data-only insert/update, same philosophy as
+`ONBOARDING.md`); an in-app tag editor is deliberately deferred (§6e-style). Because chips are the
+sender's only guidance on a first send, **updating flags belongs in the analyst on/offboarding
+script** — when someone leaves or coverage shifts, flip the flags then, or the guidance silently goes
+stale exactly when it's relied on. Chip styling follows the maritime system:
 `OCEAN` in sea/harbor tones, `DRAYAGE` in signal amber, `ALL` neutral fog ring — mono uppercase
 microcopy like the existing role badge.
 > If `profiles` has no display-name column, add `profiles.full_name text` — nice-to-have, not a blocker.
@@ -491,6 +501,11 @@ a selectable sub-row — checkbox + name + email + tag chip (§7a). Lane counts 
    sender picks manually, using the tag chips as on-screen guidance. Deliberate: an explicit first
    pick beats a guessed default (no accidental blast to a whole roster); memory takes over from then
    on, so the manual pick happens exactly once per (service, company).
+
+**Optional affordance — "check all tagged" (per company).** A small button on the company row that
+checks every analyst whose chip covers this service. User-initiated shortcut for first sends — one
+click instead of N, without violating the no-silent-prefill rule (it is never automatic). Nice-to-have,
+not required for v1.
 
 After prefill the sender can still check/uncheck **individual analysts for this specific send** —
 that's how one company routes ocean to A and drayage to B with no standing-config gymnastics: memory
@@ -560,6 +575,8 @@ sender isn't reselecting every time. **Locked: no new storage** — the §7d aud
 - **Directory (§7b):** the Send modal lists a company's analysts for the chosen service with tag chips
   (`OCEAN`/`DRAYAGE`/`ALL` derived from the two flags); checking/unchecking changes exactly who is
   emailed.
+- **Chip ∩ capability (§7a):** an analyst at an ocean-only company never shows `ALL`/`DRAYAGE` — the
+  chip is capped by the company's `forwarder_services`.
 - **Memory (§7e):** first-ever send of a service to a company opens with **nothing pre-checked**
   (tags visible as chips only); after sending to a chosen set, reopening pre-checks exactly that set.
   Ocean and drayage memories are independent — changing drayage recipients never alters the ocean
@@ -603,7 +620,9 @@ frontend service-parameterization is the riskiest step, so it lands alone with o
    (§7b/§7e) · send resolves via `get_recipients_by_analyst` · writes `service` + one recipient row
    per analyst. SendModal gains analyst sub-rows + tag chips + memory-only prefill (no memory →
    blank). NB: ocean's first send after the switch starts blank too — a one-time manual pick, since
-   no analyst-level audit rows exist yet; memory takes over from send #2.
+   no analyst-level audit rows exist yet; memory takes over from send #2. **Expect a cold-start
+   session:** that first send means picking analysts for *every* selected company in one sitting —
+   the per-company "check all tagged" affordance (§7b) softens it to one click per company.
 4. **DB migration 2 — drayage pipeline.**
    `drayage_request_lanes` / `drayage_submissions` / `drayage_rates` with §6a columns, §6d generated
    columns, `kind/refresh_of`, nullable lane/submission ids, the `current` partial unique index, and
