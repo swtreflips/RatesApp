@@ -8,9 +8,10 @@ add `drayage_*` alongside** · `forwarder_services` join table · two per-servic
 staleness, not a clock) · **request-less proactive submission** (blank template, no request needed) ·
 **fuel surcharge %/$ + total resolved by Postgres generated columns** · **per-analyst notification
 directory** (pick recipients per service; recipients ≠ access — no within-company RLS by service) ·
-**analyst tags** (`Ocean`/`Drayage`/`All` chips derived from the per-service flags; onboarding-set,
-no in-app editor yet) · **recipient prefill derived from the send audit** (each service's modal
-re-checks the last set actually emailed — no new state, §7e) · **stacked per-service sidebar panels**
+**analyst tags** (`Ocean`/`Drayage`/`All` chips derived from the per-service flags; **display-only
+guidance** — never pre-select recipients; onboarding-set, no in-app editor yet) · **recipient prefill
+from the send audit ONLY** (modal re-checks the last set actually emailed; no memory → blank, the
+sender picks manually the first time — no tag fallback, §7e) · **stacked per-service sidebar panels**
 (static sections, no in-panel service switcher; §3a) · **neutral shell branding** (tagline/footer no
 longer ocean-specific; §3a).
 
@@ -58,10 +59,10 @@ insert into forwarder_services (forwarder_id, service)
 -- per-service notification opt-in.
 -- KEEP the existing receives_rate_requests as the OCEAN flag (no rename); just add drayage.
 alter table profiles add column receives_drayage_requests boolean not null default true;
--- (receives_rate_requests = the ocean opt-in.) NOTE: these two flags are the analyst's TAG
--- (Ocean/Drayage/All chip, §7a) and the FALLBACK pre-selection in the Send modal (§7b) — never hard
--- filters. Once a service has been sent at least once, the prefill comes from the send audit instead
--- (§7e); the sender can always override per analyst on any given send.
+-- (receives_rate_requests = the ocean opt-in.) NOTE: these two flags exist ONLY to derive the
+-- analyst's TAG chip (Ocean/Drayage/All, §7a) — pure display/awareness. They never pre-select
+-- recipients and never filter. Prefill comes exclusively from the send audit (§7e); with no memory
+-- the modal starts BLANK and the sender picks manually (§7b).
 ```
 
 ### 2b. Per-service pipelines (keep ocean as-is, add drayage)
@@ -109,14 +110,14 @@ alter table notifications add column service text not null default 'ocean'
 alter table notification_recipients add column analyst_id uuid references profiles(id);
 
 -- DIRECTORY (for the Send modal): every analyst of each company that OFFERS the service,
--- with opted_in = that service's default flag. opted_in drives the default checkbox state — it is
--- NOT a filter; all analysts are listed so the sender can pick any of them (§7b).
+-- with both tag flags (→ the Ocean/Drayage/All chip, §7a). Tags are display-only guidance — they
+-- never drive check state; prefill comes from memory alone (§7e) and is BLANK on a first send (§7b).
 create or replace function get_service_directory(p_forwarder_ids uuid[], p_service text)
 returns table (forwarder_id uuid, forwarder_name text, analyst_id uuid, analyst_name text,
-               email text, opted_in boolean)
+               email text, tag_ocean boolean, tag_drayage boolean)
 language sql stable security definer set search_path = public, auth as $$
   select f.id, f.name, p.id, coalesce(p.full_name, split_part(u.email, '@', 1)), u.email,
-         case p_service when 'drayage' then p.receives_drayage_requests else p.receives_rate_requests end
+         p.receives_rate_requests, p.receives_drayage_requests
   from forwarders f
   join forwarder_services fs on fs.forwarder_id = f.id and fs.service = p_service and fs.active
   join profiles   p on p.forwarder_id = f.id
@@ -137,11 +138,11 @@ $$;
 -- both SECURITY DEFINER + granted to service_role only, exactly like the original resolver.
 ```
 > Replaces the single per-company `get_forwarder_recipients(ids, service)` with a **directory**
-> resolver + a **by-analyst** send resolver (§7b). Ocean adopts the same two step: its modal simply
-> defaults every opted-in analyst checked, reproducing today's "email all recipients" behavior.
-> The Edge Function's `preview` mode also reads `notifications` + `notification_recipients` (service
-> role; no new SQL objects) to return each company's **last-sent analyst set** for the service — the
-> memory that drives the modal's prefill (§7e).
+> resolver + a **by-analyst** send resolver (§7b). Ocean adopts the same two-step: its first send
+> after the switch starts blank (one-time manual pick — no analyst-level memory exists yet), then
+> memory takes over like drayage. The Edge Function's `preview` mode also reads `notifications` +
+> `notification_recipients` (service role; no new SQL objects) to return each company's **last-sent
+> analyst set** for the service — the only thing that drives the modal's prefill (§7e).
 
 ## 3. App changes
 
@@ -254,7 +255,8 @@ RoleRouter
 internal on /internal/ocean/requests    → Send → preview: directory('ocean') + last-send memory
 internal on /internal/drayage/requests  → Send → preview: directory('drayage') + last-send memory
    modal prefill per company:  memory (who got the LAST send of this service, §7e)
-                               └─ none ever? → tags (analysts whose flag covers this service, §7a)
+                               └─ none ever? → BLANK — sender picks manually; tag chips are
+                                               on-screen guidance only (§7a)
    user adjusts checkboxes → Send
         → invoke(notify-forwarders,{ service, kind, analystIds })
         → get_recipients_by_analyst(analystIds) → emails
@@ -453,15 +455,18 @@ server-side only), and a **service tag** shown as a chip next to the person.
 | ✓ | ✗ | `OCEAN` |
 | ✗ | ✓ | `DRAYAGE` |
 | ✓ | ✓ | `ALL` |
-| ✗ | ✗ | *(untagged — listed, never pre-checked)* |
+| ✗ | ✗ | *(untagged — listed, no chip)* |
 
-Tags are set at **onboarding only** (data-only insert/update, same philosophy as `ONBOARDING.md`); an
-in-app tag editor is deliberately deferred (§6e-style). Chip styling follows the maritime system:
+**Tags are pure guidance.** They exist so the sender knows *who usually handles what* — they never
+pre-select recipients, never filter the list, and never affect access. Selection comes from memory
+(§7e) or a manual pick (§7b). Tags are set at **onboarding only** (data-only insert/update, same
+philosophy as `ONBOARDING.md`); an in-app tag editor is deliberately deferred (§6e-style). Chip
+styling follows the maritime system:
 `OCEAN` in sea/harbor tones, `DRAYAGE` in signal amber, `ALL` neutral fog ring — mono uppercase
 microcopy like the existing role badge.
 > If `profiles` has no display-name column, add `profiles.full_name text` — nice-to-have, not a blocker.
 
-### 7b. Selection is per-send and per-analyst (memory → tags pre-check)
+### 7b. Selection is per-send and per-analyst (memory-only prefill; tags are guidance)
 The Send modal (service-scoped — each service's Open Requests page has its own Send button) **keeps
 today's layout** (company row + emails, per `SendModal.jsx`), extended one level: each analyst becomes
 a selectable sub-row — checkbox + name + email + tag chip (§7a). Lane counts stay per company.
@@ -475,26 +480,30 @@ a selectable sub-row — checkbox + name + email + tag chip (§7a). Lane counts 
 │ ☑ Harbor Bridge Freight                           2 lanes  │
 │     ☑ Tom Okafor      tom@hbfreight.com      [ALL]         │
 └────────────────────────────────────────────────────────────┘
+(checkmarks shown = memory from the previous drayage send, §7e — NOT the tags;
+ a first-ever send opens with every box blank)
 ```
 
-**Pre-check precedence, per company:**
+**Pre-check rule, per company:**
 1. **Memory** — the analysts emailed in the *most recent* send of **this service** to this company
    (§7e). The common case becomes zero-click: reopen → same people → Send.
-2. **Tags (fallback)** — if this service was never sent to this company, pre-check the analysts whose
-   tag covers the service (`OCEAN`/`ALL` for ocean; `DRAYAGE`/`ALL` for drayage).
+2. **No memory → blank.** A first-ever send of a service to a company pre-checks **nobody** — the
+   sender picks manually, using the tag chips as on-screen guidance. Deliberate: an explicit first
+   pick beats a guessed default (no accidental blast to a whole roster); memory takes over from then
+   on, so the manual pick happens exactly once per (service, company).
 
-Either way the sender can check/uncheck **individual analysts for this specific send** — that's how one
-company routes ocean to A and drayage to B with no standing-config gymnastics: memory gives the
-default, the modal gives the override.
+After prefill the sender can still check/uncheck **individual analysts for this specific send** —
+that's how one company routes ocean to A and drayage to B with no standing-config gymnastics: memory
+gives the default, the modal gives the override.
 
 - **Directory / preview** (for the modal): `get_service_directory(ids, service)` → one row per analyst
-  of each service-offering company (`opted_in` = the tag covers this service), **plus** the last-send
-  memory per company (§7e), both returned by the Edge Function's `preview` mode.
+  of each service-offering company (with both tag flags → the chip), **plus** the last-send memory per
+  company (§7e), both returned by the Edge Function's `preview` mode.
 - **Send** resolver: the modal posts the **explicit analyst ids** checked; the Edge Function resolves
   their emails via `get_recipients_by_analyst(analyst_ids)` and emails exactly those.
 
-The company gates *which services appear* (via `forwarder_services`); tags and memory only shape
-default selection, never visibility.
+The company gates *which services appear* (via `forwarder_services`); memory alone shapes default
+selection; tags are visual guidance; none of them affect visibility.
 
 ### 7c. Recipients ≠ access (no within-company RLS by service) — decision
 **Locked:** notification targeting does **not** restrict what an analyst sees. Every analyst at a company
@@ -524,8 +533,8 @@ sender isn't reselecting every time. **Locked: no new storage** — the §7d aud
   rows that become the next send's default. The loop closes itself (Diagram D).
 - **Edge behavior.** An analyst onboarded after the last send appears **unchecked but tagged** (the
   sender consciously adds them once; memory then keeps them). Unchecking someone in a send means
-  they're unchecked next time — memory reflects what actually happened; tags remain the stable
-  fallback and are never mutated by sends.
+  they're unchecked next time — memory reflects what actually happened. Tags are never mutated by
+  sends and never act as a fallback: **no memory = blank selection, manual pick** (§7b).
 - **Scope.** Memory is per **service** and per **company**, shared by the whole internal team (it
   derives from the team's sends, not per-user preferences). Ocean and drayage memories are fully
   independent.
@@ -551,9 +560,10 @@ sender isn't reselecting every time. **Locked: no new storage** — the §7d aud
 - **Directory (§7b):** the Send modal lists a company's analysts for the chosen service with tag chips
   (`OCEAN`/`DRAYAGE`/`ALL` derived from the two flags); checking/unchecking changes exactly who is
   emailed.
-- **Memory (§7e):** first-ever drayage send pre-checks tag-covered analysts; send to a custom set →
-  reopen the modal → exactly that set is pre-checked (memory beats tags). Ocean and drayage memories
-  are independent — changing drayage recipients never alters the ocean prefill.
+- **Memory (§7e):** first-ever send of a service to a company opens with **nothing pre-checked**
+  (tags visible as chips only); after sending to a chosen set, reopening pre-checks exactly that set.
+  Ocean and drayage memories are independent — changing drayage recipients never alters the ocean
+  prefill.
 - **Per-service routing (§7b):** send ocean to Analyst A and drayage to Analyst B in the same company →
   each email reaches only the intended analyst; `notification_recipients.analyst_id` records who.
 - **Recipients ≠ access (§7c):** afterward, Analyst B can still open the ocean panel and Analyst A the
@@ -591,8 +601,9 @@ frontend service-parameterization is the riskiest step, so it lands alone with o
 3. **notify-forwarders v2 — service-aware, per-analyst, with memory.**
    Payload `{service, kind, analystIds}` · `preview` returns directory + tags + last-send memory
    (§7b/§7e) · send resolves via `get_recipients_by_analyst` · writes `service` + one recipient row
-   per analyst. SendModal gains analyst sub-rows + tag chips + memory→tags prefill. Ocean's default
-   prefill reproduces today's "all opted-in" behavior.
+   per analyst. SendModal gains analyst sub-rows + tag chips + memory-only prefill (no memory →
+   blank). NB: ocean's first send after the switch starts blank too — a one-time manual pick, since
+   no analyst-level audit rows exist yet; memory takes over from send #2.
 4. **DB migration 2 — drayage pipeline.**
    `drayage_request_lanes` / `drayage_submissions` / `drayage_rates` with §6a columns, §6d generated
    columns, `kind/refresh_of`, nullable lane/submission ids, the `current` partial unique index, and
