@@ -1,16 +1,34 @@
 import React, { lazy, Suspense } from 'react'
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { FilePlus, ClipboardList, CheckSquare, Loader2 } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 import ServiceGuard from '../../../app/ServiceGuard'
 
 // The lane-entry grid pulls in MUI X DataGrid (the bulk of the bundle), so it
-// is loaded on demand only when the New Rate Request route is opened.
+// is loaded on demand only when a grid route is opened.
 const NewRateRequest = lazy(() => import('./NewRateRequest'))
 const OpenRequests = lazy(() => import('./OpenRequests'))
 const ReceivedRates = lazy(() => import('./ReceivedRates'))
 const UploadRates = lazy(() => import('./UploadRates'))
 const ApplyRates = lazy(() => import('./ApplyRates'))
+const DrayageNewRequest = lazy(() => import('../../drayage/pages/DrayageNewRequest'))
+const DrayageOpenRequests = lazy(() => import('../../drayage/pages/DrayageOpenRequests'))
+const DrayageReceivedRates = lazy(() => import('../../drayage/pages/DrayageReceivedRates'))
+const DrayageUploadRates = lazy(() => import('../../drayage/pages/DrayageUploadRates'))
+
+/* Per-service page components for each route slot (DRAY.md §3). Ocean and drayage
+   pages are separate implementations — their columns and validity models differ
+   materially — mounted under the same :service route shape. */
+const PAGES = {
+  ocean: { new: NewRateRequest, requests: OpenRequests, rates: ReceivedRates, upload: UploadRates },
+  drayage: { new: DrayageNewRequest, requests: DrayageOpenRequests, rates: DrayageReceivedRates, upload: DrayageUploadRates },
+}
+
+function ServicePage({ slot }) {
+  const { service } = useParams()
+  const Page = PAGES[service]?.[slot]
+  return Page ? <Page /> : <Navigate to="/internal" replace />
+}
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
@@ -70,12 +88,12 @@ export default function InternalRoot() {
       <Route index element={<InternalDashboard />} />
 
       {/* Service-parameterized pages (DRAY.md §3 / Diagram C). The guard rejects
-          unknown service slugs. Pages currently render their ocean implementation;
-          they read the :service param once drayage lands (§9b step 5). */}
-      <Route path=":service/new" element={<ServiceGuard fallbackTo="/internal"><Lazy><NewRateRequest /></Lazy></ServiceGuard>} />
-      <Route path=":service/requests" element={<ServiceGuard fallbackTo="/internal"><Lazy><OpenRequests /></Lazy></ServiceGuard>} />
-      <Route path=":service/rates" element={<ServiceGuard fallbackTo="/internal"><Lazy><ReceivedRates /></Lazy></ServiceGuard>} />
-      <Route path=":service/upload" element={<ServiceGuard fallbackTo="/internal"><Lazy><UploadRates /></Lazy></ServiceGuard>} />
+          unknown/inaccessible service slugs; ServicePage mounts that service's
+          implementation of the slot. */}
+      <Route path=":service/new" element={<ServiceGuard fallbackTo="/internal"><Lazy><ServicePage slot="new" /></Lazy></ServiceGuard>} />
+      <Route path=":service/requests" element={<ServiceGuard fallbackTo="/internal"><Lazy><ServicePage slot="requests" /></Lazy></ServiceGuard>} />
+      <Route path=":service/rates" element={<ServiceGuard fallbackTo="/internal"><Lazy><ServicePage slot="rates" /></Lazy></ServiceGuard>} />
+      <Route path=":service/upload" element={<ServiceGuard fallbackTo="/internal"><Lazy><ServicePage slot="upload" /></Lazy></ServiceGuard>} />
 
       {/* Apply Rates is an ocean-specific tool (DRAY.md §3a) — stays unparameterized */}
       <Route path="apply" element={<Lazy><ApplyRates /></Lazy>} />

@@ -1,0 +1,188 @@
+import React from 'react'
+import { AutocompleteEditCell } from '../rates/rateGrid'
+import { LAST_CY_OPTIONS } from '../rates/locationOptions'
+
+/*
+  Drayage grid building blocks — row factories, column defs, and the CSV header map for the
+  drayage template (drayTemplate.csv / DRAY.md §6a). Shared by the forwarder Submit page and
+  the internal Upload page (which adds a Forwarder picker column).
+
+  Row shape (client-side field names → DB columns via drayageService.buildRate):
+    origin (Last CY/CFS) · destination (Final Destination) · zip · rate · fuelPct · fuelAmount ·
+    tollFee · prePullFee · pierPassFee · cleanTruckFee · dropFee · chassisFee · minChassisDays ·
+    chassisDaysIncluded · storagePerDay · notes (+ laneId when answering a request).
+*/
+
+let tempId = 0
+const nextId = () => `dray-tmp-${++tempId}`
+
+export const makeDrayEmptyRow = () => ({
+  id: nextId(),
+  laneId: null,
+  origin: '', destination: '', zip: '',
+  rate: '', fuelPct: '', fuelAmount: '',
+  tollFee: '', prePullFee: '', pierPassFee: '', cleanTruckFee: '', dropFee: '',
+  chassisFee: '', minChassisDays: '', chassisDaysIncluded: '', storagePerDay: '',
+  notes: '',
+  forwarderId: null,
+})
+
+/** Seed a grid row from an open request lane — the lane's routing is the guide. */
+export const makeDrayRowFromLane = (lane) => ({
+  ...makeDrayEmptyRow(),
+  id: lane.id,          // primary lane row: id === laneId (same convention as ocean)
+  laneId: lane.id,
+  origin: lane.last_cy_cfs ?? '',
+  destination: lane.final_destination ?? '',
+  zip: lane.dest_zip ?? '',
+  kind: lane.kind,
+  requestNotes: lane.notes ?? '',
+})
+
+export const makeDrayCopyRow = (source) => ({
+  ...source,
+  id: nextId(),
+  laneId: source.laneId, // a copy still answers the same lane
+})
+
+export const isDrayBlankRow = (r) =>
+  !r.origin && !r.destination && (r.rate === '' || r.rate == null)
+
+/* ── CSV / XLSX header map (drayTemplate.csv §6a) ────────────────────── */
+
+const DRAY_CSV_ALIASES = {
+  origin: ['last cy/cfs', 'last cy', 'origin'],
+  destination: ['final destination', 'destination'],
+  zip: ['zip code', 'zip'],
+  rate: ['rate'],
+  fuelPct: ['fuel surcharge %', 'fuel %', 'fuel pct'],
+  fuelAmount: ['fuel surcharge'],
+  tollFee: ['toll fee', 'toll'],
+  prePullFee: ['pre-pull fee', 'pre pull fee', 'prepull fee'],
+  pierPassFee: ['pier pass fee', 'pierpass fee'],
+  cleanTruckFee: ['clean truck fee'],
+  dropFee: ['drop fee'],
+  chassisFee: ['chassis fee'],
+  minChassisDays: ['min chassis days'],
+  chassisDaysIncluded: ['chassis days included'],
+  storagePerDay: ['storage fee (/day)', 'storage fee/day', 'storage fee'],
+  notes: ['notes', 'remarks'],
+}
+
+/** Header row → {field: columnIndex}. Matching is normalized (trim/lowercase). */
+export const buildDrayHeaderIndex = (headerCells) => {
+  const norm = headerCells.map((h) => String(h ?? '').trim().toLowerCase())
+  const index = {}
+  for (const [field, aliases] of Object.entries(DRAY_CSV_ALIASES)) {
+    // exact alias match first (so 'fuel surcharge' never claims 'fuel surcharge %')
+    const i = norm.findIndex((h) => aliases.includes(h))
+    if (i !== -1) index[field] = i
+  }
+  return index
+}
+
+export const makeDrayRowFromCsv = (cells, headerIndex) => {
+  const val = (field) => {
+    const i = headerIndex[field]
+    return i == null ? '' : String(cells[i] ?? '').trim()
+  }
+  return {
+    ...makeDrayEmptyRow(),
+    origin: val('origin'),
+    destination: val('destination'),
+    zip: val('zip'),
+    rate: val('rate'),
+    fuelPct: val('fuelPct'),
+    fuelAmount: val('fuelAmount'),
+    tollFee: val('tollFee'),
+    prePullFee: val('prePullFee'),
+    pierPassFee: val('pierPassFee'),
+    cleanTruckFee: val('cleanTruckFee'),
+    dropFee: val('dropFee'),
+    chassisFee: val('chassisFee'),
+    minChassisDays: val('minChassisDays'),
+    chassisDaysIncluded: val('chassisDaysIncluded'),
+    storagePerDay: val('storagePerDay'),
+    notes: val('notes'),
+  }
+}
+
+/* ── display helpers ─────────────────────────────────────────────────── */
+
+/** Client-side preview of the DB's generated total (rate + resolved fuel). Display only. */
+export function previewTotal(row) {
+  const rate = Number(row.rate)
+  if (!Number.isFinite(rate)) return null
+  const amount = Number(row.fuelAmount)
+  if (Number.isFinite(amount) && row.fuelAmount !== '') return rate + amount
+  let pct = Number(row.fuelPct)
+  if (Number.isFinite(pct) && row.fuelPct !== '') {
+    if (pct > 1) pct = pct / 100 // forwarders type 34 for 34%
+    return rate + Math.round(rate * pct * 100) / 100
+  }
+  return rate
+}
+
+const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+
+const numCol = (field, headerName, width = 92) => ({
+  field, headerName, width, editable: true, type: 'number', cellClassName: 'font-mono',
+})
+
+/**
+ * Column defs for the drayage entry grid. `renderActions(params)` supplies the trailing
+ * action cell; `extraLeading` (e.g. the internal Forwarder picker) is prepended.
+ */
+export function drayColumns({ renderActions, extraLeading = [] }) {
+  return [
+    {
+      field: 'rowNum', headerName: '#', width: 38, sortable: false, filterable: false,
+      cellClassName: 'font-mono text-fog-400',
+      renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
+    },
+    ...extraLeading,
+    { field: 'origin', headerName: 'Last CY/CFS', flex: 1.1, minWidth: 120, editable: true,
+      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} /> },
+    { field: 'destination', headerName: 'Final Destination', flex: 1.1, minWidth: 120, editable: true },
+    { field: 'zip', headerName: 'Zip', width: 72, editable: true, cellClassName: 'font-mono' },
+    numCol('rate', 'Rate', 84),
+    numCol('fuelPct', 'Fuel %', 74),
+    numCol('fuelAmount', 'Fuel $', 78),
+    {
+      field: 'total', headerName: 'Total', width: 92, sortable: false, filterable: false,
+      cellClassName: 'font-mono font-semibold',
+      renderCell: (params) => money(previewTotal(params.row)),
+    },
+    numCol('tollFee', 'Toll', 70),
+    numCol('prePullFee', 'Pre-pull', 78),
+    numCol('pierPassFee', 'Pier Pass', 82),
+    numCol('cleanTruckFee', 'Clean Truck', 92),
+    numCol('dropFee', 'Drop', 68),
+    numCol('chassisFee', 'Chassis', 78),
+    numCol('minChassisDays', 'Min Ch. Days', 96),
+    numCol('chassisDaysIncluded', 'Ch. Days Incl', 96),
+    numCol('storagePerDay', 'Storage/Day', 94),
+    { field: 'notes', headerName: 'Notes', flex: 1, minWidth: 100, editable: true },
+    {
+      field: 'actions', headerName: '', width: 72, sortable: false, filterable: false,
+      renderCell: renderActions,
+    },
+  ]
+}
+
+/* ── staleness badge (§6b) ───────────────────────────────────────────── */
+
+const STALENESS_STYLES = {
+  fresh: 'bg-sea-50 text-sea-700 ring-sea-200',
+  aging: 'bg-signal-50 text-signal-700 ring-signal-200',
+  stale: 'bg-red-50 text-red-600 ring-red-200',
+}
+
+export function StalenessBadge({ level }) {
+  if (!level) return null
+  return (
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.14em] ring-1 ring-inset ${STALENESS_STYLES[level]}`}>
+      {level}
+    </span>
+  )
+}

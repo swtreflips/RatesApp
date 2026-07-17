@@ -1,5 +1,5 @@
 import React, { lazy, Suspense } from 'react'
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { Ship, FileText, Loader2 } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 import ServiceGuard from '../../../app/ServiceGuard'
@@ -7,6 +7,20 @@ import ServiceGuard from '../../../app/ServiceGuard'
 // Rate-entry grid pulls in MUI X DataGrid — load it only when the route opens.
 const SubmitRates = lazy(() => import('./SubmitRates'))
 const ActiveRates = lazy(() => import('./ActiveRates'))
+const DrayageSubmitRates = lazy(() => import('../../drayage/pages/DrayageSubmitRates'))
+const DrayageActiveRates = lazy(() => import('../../drayage/pages/DrayageActiveRates'))
+
+/* Per-service page components (DRAY.md §3) — same route shape, service-specific pages. */
+const PAGES = {
+  ocean: { lanes: SubmitRates, submissions: ActiveRates },
+  drayage: { lanes: DrayageSubmitRates, submissions: DrayageActiveRates },
+}
+
+function ServicePage({ slot }) {
+  const { service } = useParams()
+  const Page = PAGES[service]?.[slot]
+  return Page ? <Page /> : <Navigate to="/forwarder" replace />
+}
 
 /* ─── Dashboard ───────────────────────────────────────────────────────── */
 
@@ -67,8 +81,8 @@ export default function ForwarderRoot() {
 
       {/* Service-parameterized pages (DRAY.md §3 / Diagram C). The guard also
           enforces the company's forwarder_services capability. */}
-      <Route path=":service/lanes" element={<ServiceGuard fallbackTo="/forwarder"><Lazy><SubmitRates /></Lazy></ServiceGuard>} />
-      <Route path=":service/submissions" element={<ServiceGuard fallbackTo="/forwarder"><Lazy><ActiveRates /></Lazy></ServiceGuard>} />
+      <Route path=":service/lanes" element={<ServiceGuard fallbackTo="/forwarder"><Lazy><ServicePage slot="lanes" /></Lazy></ServiceGuard>} />
+      <Route path=":service/submissions" element={<ServiceGuard fallbackTo="/forwarder"><Lazy><ServicePage slot="submissions" /></Lazy></ServiceGuard>} />
 
       {/* Legacy flat paths → ocean (pre-service bookmarks keep working) */}
       <Route path="lanes" element={<Navigate to="/forwarder/ocean/lanes" replace />} />

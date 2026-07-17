@@ -31,10 +31,6 @@ export const serviceConfig = {
   drayage: {
     slug: 'drayage',
     label: 'Drayage',
-    // placeholder: routes + sidebar group render, pages show a "coming soon"
-    // placeholder until the drayage pipeline lands (DRAY.md §9b steps 4–5).
-    // Remove this flag when the drayage pages go live.
-    placeholder: true,
     nav: {
       openRequests: 'Open Drayage Requests',
     },
