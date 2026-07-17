@@ -610,18 +610,21 @@ sender isn't reselecting every time. **Locked: no new storage** — the §7d aud
   tag chips + memory-only prefill + "Check tagged". Ocean call sites hard-code `service:'ocean'`.
   Drayage send gated 400 until its template (step 5). `get_forwarder_recipients` kept (unused) as
   rollback; drop in a post-production cleanup.
-- ↩️ **Step 2 (frontend shell): attempted July 17, REVERTED** — the deploy broke asset loading on
-  Vercel (unstyled HTML); root cause not yet diagnosed (check the Vercel build log for commit
-  `7365981`). The work is preserved at that commit: serviceConfig.js, AuthProvider `services`,
+- ✅ **Step 2 (frontend shell): RE-LANDED July 17** — the original Vercel breakage matched the
+  stale-tab/purged-chunks pattern (old build's hashed assets 404 after a deploy → SPA fallback +
+  nosniff → unstyled HTML; hard refresh resolves), not a code defect. Verified on a local
+  production build (deep links + asset MIME types). serviceConfig, AuthProvider `services`,
   ServiceGuard, `:service` routes + legacy redirects, stacked sidebar (§3a), neutral branding.
-  Routes today are still flat ocean paths.
+- ✅ **Step 5 (drayage pages + template): BUILT July 17** — `features/drayage/`: data service
+  (supersession §6b, fuel-as-typed §6d, refresh flow, staleness cues), 6 pages (forwarder
+  Submit/Active with Confirm; internal New/Open/Rates/Upload with history + refresh-request),
+  per-service PAGES maps in both roots. Edge Function un-gated: drayage sends its own template
+  (`drayageTemplateBytes.ts` + `fillDrayageTemplate.ts` — routing prefilled, money blank).
+  **Redeploy `notify-forwarders` required for drayage sending.**
 - `drayTemplate.csv` (§6a source of truth) committed. Docs current: `SUPABASE.md`, `ONBOARDING.md §C`.
 
 ### 9b. Implementation steps (each = one coherent commit; ocean regression-checked)
-**Status: 1 ✅ · 2 ↩️ reverted (re-land with 5) · 3 ✅ · 4 ✅ · 5–6 remaining.**
-Ordering rationale (revised): DB + server-side first (additive, invisible); the frontend
-service-parameterization was reverted after a Vercel asset failure and now re-lands together with
-step 5, so the drayage panels appear only once there's a real pipeline behind them.
+**Status: 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ · 5 ✅ · 6 remaining (pilot onboarding + §8 checklist).**
 
 1. **DB migration 1 — capability + notification groundwork (additive, zero app impact).**
    `forwarder_services` (+ backfill `ocean` for every forwarder) · `profiles.receives_drayage_requests`

@@ -13,7 +13,8 @@
   Audit: notifications.service + ONE notification_recipients row PER ANALYST (analyst_id) — these
   rows ARE next time's prefill memory.
 
-  Drayage sending is gated until its template exists (§9b step 5): preview works, send returns 400.
+  Each service sends its own template: ocean = PTP OFQ Rates (fillTemplate), drayage = the
+  drayage template (fillDrayageTemplate — routing prefilled, money columns blank).
 
   Security (ALERTS.md §16): deploy WITH jwt verification. Caller must be an `internal` profile.
   Emails never reach the browser. Request shape: { kind, service?, forwarderIds?, analystIds?, period? }.
@@ -23,8 +24,10 @@
 */
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { fillTemplate, type FillLane } from '../_shared/fillTemplate.ts'
+import { fillTemplate } from '../_shared/fillTemplate.ts'
 import { TEMPLATE_BYTES } from '../_shared/templateBytes.ts'
+import { fillDrayageTemplate } from '../_shared/fillDrayageTemplate.ts'
+import { DRAYAGE_TEMPLATE_BYTES } from '../_shared/drayageTemplateBytes.ts'
 import { getAccessToken, invitationHtml, sendMail } from '../_shared/graph.ts'
 
 type Kind = 'request' | 'reminder' | 'preview'
@@ -34,35 +37,47 @@ type Lane = Record<string, unknown> & { id: string; period?: number | null }
 
 /* Per-service pipeline config — mirrors the app's serviceConfig (DRAY.md §3).
    Ocean keeps the original table names; drayage points at the drayage_* mirrors.
-   `templateBytes: null` gates sending until the service's template ships. */
+   `fill` builds the attachment from that service's template + column map. */
 const SERVICES: Record<Service, {
   lanesTable: string
   subsTable: string
   laneSelect: string
   hasPeriod: boolean
-  templateBytes: Uint8Array | null
-  toFillLanes: (lanes: Lane[]) => FillLane[]
+  attachmentPrefix: string
+  fill: (lanes: Lane[], forwarderName: string) => Uint8Array
 }> = {
   ocean: {
     lanesTable: 'rate_request_lanes',
     subsTable: 'rate_submissions',
     laneSelect: 'id, pol, pod, last_cy, fd, container_type, container_count, period',
     hasPeriod: true,
-    templateBytes: TEMPLATE_BYTES,
-    toFillLanes: (lanes) => lanes.map((l) => ({
-      pol: l.pol as string | null, fd: l.fd as string | null,
-      pod: l.pod as string | null, last_cy: l.last_cy as string | null,
-      container_type: l.container_type as string | null,
-      container_count: l.container_count as number | null,
-    })),
+    attachmentPrefix: 'PTP OFQ Rates',
+    fill: (lanes, forwarderName) => fillTemplate(
+      TEMPLATE_BYTES,
+      lanes.map((l) => ({
+        pol: l.pol as string | null, fd: l.fd as string | null,
+        pod: l.pod as string | null, last_cy: l.last_cy as string | null,
+        container_type: l.container_type as string | null,
+        container_count: l.container_count as number | null,
+      })),
+      forwarderName,
+    ),
   },
   drayage: {
     lanesTable: 'drayage_request_lanes',
     subsTable: 'drayage_submissions',
     laneSelect: 'id, last_cy_cfs, final_destination, dest_zip, notes',
     hasPeriod: false,
-    templateBytes: null, // §9b step 5: drayageTemplateBytes + its own fill column map
-    toFillLanes: () => { throw new Error('drayage template not wired yet') },
+    attachmentPrefix: 'PTP Drayage Rates',
+    fill: (lanes) => fillDrayageTemplate(
+      DRAYAGE_TEMPLATE_BYTES,
+      lanes.map((l) => ({
+        last_cy_cfs: l.last_cy_cfs as string | null,
+        final_destination: l.final_destination as string | null,
+        dest_zip: l.dest_zip as string | null,
+        notes: l.notes as string | null,
+      })),
+    ),
   },
 }
 
@@ -257,9 +272,6 @@ Deno.serve(async (req) => {
     }
 
     // ── REQUEST / REMINDER: resolve the CHECKED analysts, send per company, audit per analyst ──
-    if (!cfg.templateBytes) {
-      return json({ ok: false, error: `${svc} sending is not enabled yet (template pending)` }, 400)
-    }
     if (!Array.isArray(analystIds) || analystIds.length === 0) {
       return json({ ok: false, error: 'No recipients selected — pass analystIds' }, 400)
     }
@@ -306,14 +318,14 @@ Deno.serve(async (req) => {
       let errorMsg: string | null = null
       let sentAt: string | null = null
       try {
-        const xlsx = fillTemplate(cfg.templateBytes, cfg.toFillLanes(forwarderLanes), f.name)
+        const xlsx = cfg.fill(forwarderLanes, f.name)
         await sendMail(
           accessToken,
           emails,
           subject,
           invitationHtml({ senderName, appUrl, isReminder }),
           xlsx,
-          `PTP OFQ Rates - ${String(f.name).replace(/\//g, '-')} - ${today}.xlsx`,
+          `${cfg.attachmentPrefix} - ${String(f.name).replace(/\//g, '-')} - ${today}.xlsx`,
         )
         sentAt = new Date().toISOString()
         sent.push({ forwarderId: f.id, lanes: forwarderLanes.length, emails: emails.length })
