@@ -597,23 +597,31 @@ sender isn't reselecting every time. **Locked: no new storage** — the §7d aud
 
 ## 9. Next steps
 
-### 9a. Current implemented state (checked July 15, 2026)
-Nothing from this spec is in code yet — the app is **ocean-only end to end**:
-- **Routes are flat, no `:service` segment**: internal `/internal/{new,requests,rates,upload,apply}`,
-  forwarder `/forwarder/{lanes,submissions}` (`RoleRouter.jsx`, `InternalRoot.jsx`, `ForwarderRoot.jsx`).
-- **Sidebar** = flat per-role lists (`INTERNAL_NAV` / `FORWARDER_NAV`) with hardcoded "Ocean Freight" /
-  "Ocean Rate Platform" branding (`Sidebar.jsx`).
-- **AuthProvider** exposes `session/user/role/forwarderName` only — no `services` (`AuthProvider.jsx`).
-- **notify-forwarders** resolves recipients **per company** via `get_forwarder_recipients(uuid[])`
-  (no service arg, no analyst selection); `notifications` / `notification_recipients` lack
-  `service` / `analyst_id` (migration `20260621120000_notify_forwarders.sql`).
-- **No** `forwarder_services`, no `drayage_*` tables, no `serviceConfig.js`, no
-  `receives_drayage_requests`, no tags/memory/prefill.
-- `drayTemplate.csv` is committed and is the §6a source of truth. That's the only artifact built.
+### 9a. Current implemented state (updated July 17, 2026)
+**DB is fully service-ready; notifications are v2; only the frontend shell is still flat.**
+- ✅ **Step 1 (DB groundwork):** `forwarder_services` (+ocean backfill +RLS) · `profiles.receives_drayage_requests`
+  · `rate_request_batches.service` / `notifications.service` / `notification_recipients.analyst_id` ·
+  `get_service_directory` + `get_recipients_by_analyst` (service_role-only). See `SUPABASE.md`.
+- ✅ **Step 4 (drayage pipeline):** `drayage_request_lanes` (request TTL) / `drayage_submissions` /
+  `drayage_rates` with §6d generated fuel/total columns, `current` supersession index, RLS — all
+  verified (math + duplicate-current rejection).
+- ✅ **Step 3 (notify v2):** Edge Function deployed July 17 — `{kind, service, analystIds}` payload,
+  directory+memory preview, per-analyst audit rows. SendModal = analyst sub-rows + capability-capped
+  tag chips + memory-only prefill + "Check tagged". Ocean call sites hard-code `service:'ocean'`.
+  Drayage send gated 400 until its template (step 5). `get_forwarder_recipients` kept (unused) as
+  rollback; drop in a post-production cleanup.
+- ↩️ **Step 2 (frontend shell): attempted July 17, REVERTED** — the deploy broke asset loading on
+  Vercel (unstyled HTML); root cause not yet diagnosed (check the Vercel build log for commit
+  `7365981`). The work is preserved at that commit: serviceConfig.js, AuthProvider `services`,
+  ServiceGuard, `:service` routes + legacy redirects, stacked sidebar (§3a), neutral branding.
+  Routes today are still flat ocean paths.
+- `drayTemplate.csv` (§6a source of truth) committed. Docs current: `SUPABASE.md`, `ONBOARDING.md §C`.
 
 ### 9b. Implementation steps (each = one coherent commit; ocean regression-checked)
-Ordering rationale: DB first because every change is additive and invisible to the running app; the
-frontend service-parameterization is the riskiest step, so it lands alone with ocean behavior frozen.
+**Status: 1 ✅ · 2 ↩️ reverted (re-land with 5) · 3 ✅ · 4 ✅ · 5–6 remaining.**
+Ordering rationale (revised): DB + server-side first (additive, invisible); the frontend
+service-parameterization was reverted after a Vercel asset failure and now re-lands together with
+step 5, so the drayage panels appear only once there's a real pipeline behind them.
 
 1. **DB migration 1 — capability + notification groundwork (additive, zero app impact).**
    `forwarder_services` (+ backfill `ocean` for every forwarder) · `profiles.receives_drayage_requests`
