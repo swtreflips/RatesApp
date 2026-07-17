@@ -17,7 +17,7 @@ export default function LoadingScreen() {
               Rates<span className="text-signal-400">App</span>
             </span>
             <span className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-harbor-300">
-              Freight Rate Platform
+              Ocean Freight Platform
             </span>
           </span>
         </div>

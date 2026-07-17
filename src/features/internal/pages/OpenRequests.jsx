@@ -82,7 +82,7 @@ export default function OpenRequests() {
               Send Rate Request
             </button>
             <button
-              onClick={() => navigate('/internal/ocean/new')}
+              onClick={() => navigate('/internal/new')}
               className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
             >
               <FilePlus size={16} className="transition-transform group-hover:scale-110" />
