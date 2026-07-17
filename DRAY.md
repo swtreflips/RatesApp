@@ -78,7 +78,10 @@ alter table rate_request_batches add column service text not null default 'ocean
 create table drayage_request_lanes ( id uuid pk …, batch_id uuid → rate_request_batches,
   /* drayage demand columns, §6a */ posted_at,
   kind text not null default 'new' check (kind in ('new','refresh')),   -- refresh = re-quote a lane you already have
-  refresh_of uuid null → drayage_rates );                               -- the rate being refreshed, if any
+  refresh_of uuid null → drayage_rates,                                 -- the rate being refreshed, if any
+  expires_at timestamptz not null default (now() + interval '10 days') );
+-- REQUESTS keep a TTL (flow control: request → provide → receive, then the lane rolls off the
+-- forwarder dashboard). Only the RATES are open-ended (§6b) — two different things.
 create table drayage_submissions   ( … lane_id uuid null → drayage_request_lanes, forwarder_id, provider_id,
   status … );  -- mirror ocean_submissions; nullable lane_id for request-less fills
 create table drayage_rates         ( … submission_id uuid null → drayage_submissions,
@@ -356,8 +359,11 @@ columns are computed, never entered.
 Drayage prices move with fuel / the broader economy / each carrier's competitive strategy, not on a
 fixed clock — so a hard `valid_until` would be wrong. Instead:
 
-- **No `valid_until` / `expires_at`.** A rate stays the current known price **indefinitely** until it's
-  superseded or explicitly refreshed.
+- **No `valid_until` on rates.** A rate stays the current known price **indefinitely** until it's
+  superseded or explicitly refreshed. *(The request lane keeps a TTL — §2b — but that clock bounds
+  the ask-and-answer loop, not the rate: forwarders see only recent requests in "lanes to fill",
+  while their submitted rates sit in the rates view forever, with `provided_at`/`confirmed_at`
+  showing their age.)*
 - Each rate carries **`provided_at`** (Date Received) and **`confirmed_at`** (last re-validation; =
   `provided_at` initially). The app derives **age** and shows soft staleness cues — e.g. fresh < 6 mo,
   aging 6–12 mo, stale > 12 mo. Thresholds are display-only, configurable, **never enforced**.
@@ -434,6 +440,9 @@ math** — one source of truth for both display and export.
 - Rename `forwarders` → `providers` for semantics — bigger migration, not needed for drayage.
 - Whether accessorials ever roll into an optional "all-in" total view (today they're reference-only,
   excluded from `total_rate`).
+- **Bidding on top of active rates:** forwarders editing/improving their own live rates directly in
+  the rates view (not via a request). Needs no schema — an edit is just a supersession (§6b) — only
+  a UI affordance on the Active Rates page.
 
 ## 7. Notification directories & per-analyst recipients
 

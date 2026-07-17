@@ -61,6 +61,83 @@ Roles: **`internal`** (your team) · **`forwarder`** (freight forwarder analyst)
 
 Placeholders: `<auth-uid>` = from Authentication → Users · `<forwarder-id>` = the company row's id.
 
+4. **Set the analyst's service tags** (see §C below). New analysts default to both flags `true`
+   (= `ALL`); if they only handle one service, set the other flag `false` in the same sitting:
+   ```sql
+   update profiles set full_name = 'Their Name',
+                       receives_rate_requests   = true,    -- handles ocean
+                       receives_drayage_requests = false   -- does NOT handle drayage
+   where id = '<auth-uid>';
+   ```
+
+---
+
+## C. Service capability & analyst tags (ocean · drayage · both)
+
+Two independent dials, both data-only (DRAY.md §2a/§7a):
+
+| Dial | Where | Controls |
+|---|---|---|
+| **Company capability** | `forwarder_services` rows | which service **panels** the company's analysts see, and which directories the company appears in |
+| **Analyst tags** | `profiles.receives_rate_requests` (ocean) + `profiles.receives_drayage_requests` (drayage) | the `OCEAN` / `DRAYAGE` / `ALL` **chip** next to the analyst in the Send modal — guidance for the sender |
+
+### C1. Onboard a company into a service (or remove one)
+```sql
+-- company starts offering drayage (panel + directory appear on their next load)
+insert into forwarder_services (forwarder_id, service)
+values ('<forwarder-id>', 'drayage')
+on conflict do nothing;
+
+-- pause soliciting a service without losing the row
+update forwarder_services set active = false
+where forwarder_id = '<forwarder-id>' and service = 'drayage';
+
+-- remove it entirely
+delete from forwarder_services
+where forwarder_id = '<forwarder-id>' and service = 'drayage';
+```
+**When adding a company's first drayage row, set its analysts' drayage flags in the same script**
+(otherwise everyone defaults to `true` → every chip reads `ALL`):
+```sql
+-- C and D handle drayage; A and B don't
+update profiles set receives_drayage_requests = (id in ('<C-uid>','<D-uid>'))
+where forwarder_id = '<forwarder-id>';
+```
+
+### C2. Change an analyst's coverage (ocean ⇄ drayage ⇄ both)
+```sql
+-- make an analyst drayage-only
+update profiles set receives_rate_requests = false, receives_drayage_requests = true
+where id = '<auth-uid>';
+-- make an analyst handle both  → chip shows ALL
+update profiles set receives_rate_requests = true, receives_drayage_requests = true
+where id = '<auth-uid>';
+```
+Flag combos → chip: ocean only → `OCEAN` · drayage only → `DRAYAGE` · both → `ALL` · neither →
+untagged (listed in the modal, never suggested). The chip is always **capped by company capability**
+— an ocean-only company's analysts show at most `OCEAN` regardless of flags.
+
+### C3. What the flags actually DO (read this)
+- **Today (notify v1, ocean):** `receives_rate_requests` is still a hard **filter** — opted-out
+  analysts are not emailed (see the Notifications section below).
+- **After notify v2 (DRAY.md §9b step 3):** both flags become **display-only tags**. They never
+  pre-select or filter recipients; the Send modal pre-checks the *last set actually emailed* for
+  that service (memory), and a first-ever send starts blank for a manual pick. Update the flags on
+  analyst on/offboarding anyway — stale chips mislead exactly when the sender relies on them.
+
+### C4. Verify
+```sql
+select f.name company, coalesce(p.full_name, split_part(u.email,'@',1)) analyst,
+       p.receives_rate_requests tag_ocean, p.receives_drayage_requests tag_drayage,
+       array_agg(fs.service) filter (where fs.active) services
+from forwarders f
+join profiles p on p.forwarder_id = f.id
+join auth.users u on u.id = p.id
+left join forwarder_services fs on fs.forwarder_id = f.id
+group by 1,2,3,4;
+```
+Expect: `services` lists exactly what the company offers; tags match who handles what.
+
 ---
 
 ## Why you NEVER re-run RLS as you onboard
