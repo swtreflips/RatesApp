@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { ROLES, normalizeRole } from '../../lib/roles'
+import { SERVICE_SLUGS, isService } from '../../features/rates/serviceConfig'
 
 const AuthContext = createContext(null)
 
@@ -21,6 +22,11 @@ export function AuthProvider({ children }) {
 
   // The signed-in user's forwarder company name (providers only; null for requesters)
   const [forwarderName, setForwarderName] = useState(null)
+
+  // Services the signed-in forwarder's company offers (forwarder_services rows,
+  // scoped by RLS to their own company). Internal users always see every service
+  // the app ships. Null while loading → callers can distinguish "not yet known".
+  const [forwarderServices, setForwarderServices] = useState(null)
 
   useEffect(() => {
     supabase.auth.getSession()
@@ -63,9 +69,40 @@ export function AuthProvider({ children }) {
     return () => { active = false }
   }, [session?.user?.id])
 
+  // Load the forwarder company's service capabilities (DRAY.md §2a). RLS on
+  // forwarder_services returns only the caller's company rows for forwarders.
+  useEffect(() => {
+    const uid = session?.user?.id
+    if (!uid) {
+      setForwarderServices(null)
+      return
+    }
+    let active = true
+    supabase
+      .from('forwarder_services')
+      .select('service')
+      .eq('active', true)
+      .then(({ data }) => {
+        if (!active) return
+        // keep only services the app actually ships (serviceConfig keys)
+        setForwarderServices((data ?? []).map((r) => r.service).filter(isService))
+      })
+      .catch(() => {
+        // table unreachable (e.g. dev without Supabase) — fall back to all services
+        if (active) setForwarderServices(null)
+      })
+    return () => { active = false }
+  }, [session?.user?.id])
+
   const user = session?.user ?? null
   // normalizeRole keeps pre-rename codes (requester/provider) working from cached metadata.
   const role = normalizeRole(user?.user_metadata?.role ?? devRole)
+
+  // Internal always sees every shipped service; forwarders see their company's
+  // capabilities (falling back to all shipped services while loading / in dev-mock).
+  const services = role === ROLES.FORWARDER && forwarderServices !== null
+    ? forwarderServices
+    : SERVICE_SLUGS
 
   function toggleDevRole() {
     const next = devRole === ROLES.INTERNAL ? ROLES.FORWARDER : ROLES.INTERNAL
@@ -74,7 +111,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, user, role, loading, devRole, toggleDevRole, forwarderName }}>
+    <AuthContext.Provider value={{ session, user, role, loading, devRole, toggleDevRole, forwarderName, services }}>
       {children}
     </AuthContext.Provider>
   )

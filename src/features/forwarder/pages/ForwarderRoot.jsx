@@ -1,7 +1,8 @@
 import React, { lazy, Suspense } from 'react'
-import { Routes, Route, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { Ship, FileText, Loader2 } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
+import ServiceGuard from '../../../app/ServiceGuard'
 
 // Rate-entry grid pulls in MUI X DataGrid — load it only when the route opens.
 const SubmitRates = lazy(() => import('./SubmitRates'))
@@ -25,7 +26,7 @@ function ForwarderDashboard() {
         subtitle="Demand that needs your attention and the rates you currently have live."
         actions={
           <button
-            onClick={() => navigate('/forwarder/lanes')}
+            onClick={() => navigate('/forwarder/ocean/lanes')}
             className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
           >
             <Ship size={16} className="transition-transform group-hover:scale-110" />
@@ -46,34 +47,32 @@ function ForwarderDashboard() {
 
 /* ─── Route mount ─────────────────────────────────────────────────────── */
 
+/** Suspense wrapper for the lazy page chunks. */
+function Lazy({ children }) {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-[55vh] items-center justify-center">
+        <Loader2 size={26} className="animate-spin text-fog-400" />
+      </div>
+    }>
+      {children}
+    </Suspense>
+  )
+}
+
 export default function ForwarderRoot() {
   return (
     <Routes>
       <Route index element={<ForwarderDashboard />} />
-      <Route
-        path="lanes"
-        element={
-          <Suspense fallback={
-            <div className="flex min-h-[55vh] items-center justify-center">
-              <Loader2 size={26} className="animate-spin text-fog-400" />
-            </div>
-          }>
-            <SubmitRates />
-          </Suspense>
-        }
-      />
-      <Route
-        path="submissions"
-        element={
-          <Suspense fallback={
-            <div className="flex min-h-[55vh] items-center justify-center">
-              <Loader2 size={26} className="animate-spin text-fog-400" />
-            </div>
-          }>
-            <ActiveRates />
-          </Suspense>
-        }
-      />
+
+      {/* Service-parameterized pages (DRAY.md §3 / Diagram C). The guard also
+          enforces the company's forwarder_services capability. */}
+      <Route path=":service/lanes" element={<ServiceGuard fallbackTo="/forwarder"><Lazy><SubmitRates /></Lazy></ServiceGuard>} />
+      <Route path=":service/submissions" element={<ServiceGuard fallbackTo="/forwarder"><Lazy><ActiveRates /></Lazy></ServiceGuard>} />
+
+      {/* Legacy flat paths → ocean (pre-service bookmarks keep working) */}
+      <Route path="lanes" element={<Navigate to="/forwarder/ocean/lanes" replace />} />
+      <Route path="submissions" element={<Navigate to="/forwarder/ocean/submissions" replace />} />
     </Routes>
   )
 }
