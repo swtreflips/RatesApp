@@ -1,15 +1,22 @@
 /*
-  notify-forwarders — the real outbound send (ALERTS.md §3–§7, §14).
+  notify-forwarders v2 — service-aware, per-analyst outbound send (ALERTS.md §3–§7, §14 + DRAY.md §7).
 
-  Computes lanes-per-forwarder from open requests and emails each forwarder a filled copy of the
-  template. One engine, three modes (`kind`):
-    • request  — all open lanes → the selected (default: all active) forwarders
-    • reminder — only each forwarder's OUTSTANDING lanes (no ack yet); answered forwarders drop out
-    • preview  — compute the response roster + recipient counts and SEND NOTHING (drives the UI modal)
+  One engine, three modes (`kind`), now parameterized by `service` (ocean | drayage):
+    • preview  — the DIRECTORY: companies offering the service, their analysts (with tag flags),
+                 per-company lane counts, and the last-send MEMORY (who was emailed last time for
+                 THIS service — drives the modal's prefill, DRAY.md §7e). Sends nothing.
+    • request  — all open lanes of the service → the analysts the sender CHECKED (`analystIds`)
+    • reminder — only each company's OUTSTANDING lanes → the checked analysts
+
+  Recipients are the explicit `analystIds` from the modal (DRAY.md §7b) — resolved server-side via
+  get_recipients_by_analyst. Tags are guidance only and are NEVER used to filter recipients here.
+  Audit: notifications.service + ONE notification_recipients row PER ANALYST (analyst_id) — these
+  rows ARE next time's prefill memory.
+
+  Drayage sending is gated until its template exists (§9b step 5): preview works, send returns 400.
 
   Security (ALERTS.md §16): deploy WITH jwt verification. Caller must be an `internal` profile.
-  The client sends `forwarderIds` only — emails are resolved server-side via get_forwarder_recipients
-  (auth.users never reaches the browser). Request shape: { kind, forwarderIds?, period? }.
+  Emails never reach the browser. Request shape: { kind, service?, forwarderIds?, analystIds?, period? }.
 
   Secrets: MS_TENANT_ID, MS_CLIENT_ID. Optional: SENDER_NAME, APP_URL.
   Auto-injected: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY.
@@ -21,16 +28,42 @@ import { TEMPLATE_BYTES } from '../_shared/templateBytes.ts'
 import { getAccessToken, invitationHtml, sendMail } from '../_shared/graph.ts'
 
 type Kind = 'request' | 'reminder' | 'preview'
+type Service = 'ocean' | 'drayage'
 
-type Lane = {
-  id: string
-  pol: string | null
-  pod: string | null
-  last_cy: string | null
-  fd: string | null
-  container_type: string | null
-  container_count: number | null
-  period: number | null
+type Lane = Record<string, unknown> & { id: string; period?: number | null }
+
+/* Per-service pipeline config — mirrors the app's serviceConfig (DRAY.md §3).
+   Ocean keeps the original table names; drayage points at the drayage_* mirrors.
+   `templateBytes: null` gates sending until the service's template ships. */
+const SERVICES: Record<Service, {
+  lanesTable: string
+  subsTable: string
+  laneSelect: string
+  hasPeriod: boolean
+  templateBytes: Uint8Array | null
+  toFillLanes: (lanes: Lane[]) => FillLane[]
+}> = {
+  ocean: {
+    lanesTable: 'rate_request_lanes',
+    subsTable: 'rate_submissions',
+    laneSelect: 'id, pol, pod, last_cy, fd, container_type, container_count, period',
+    hasPeriod: true,
+    templateBytes: TEMPLATE_BYTES,
+    toFillLanes: (lanes) => lanes.map((l) => ({
+      pol: l.pol as string | null, fd: l.fd as string | null,
+      pod: l.pod as string | null, last_cy: l.last_cy as string | null,
+      container_type: l.container_type as string | null,
+      container_count: l.container_count as number | null,
+    })),
+  },
+  drayage: {
+    lanesTable: 'drayage_request_lanes',
+    subsTable: 'drayage_submissions',
+    laneSelect: 'id, last_cy_cfs, final_destination, dest_zip, notes',
+    hasPeriod: false,
+    templateBytes: null, // §9b step 5: drayageTemplateBytes + its own fill column map
+    toFillLanes: () => { throw new Error('drayage template not wired yet') },
+  },
 }
 
 function env(name: string, fallback?: string): string {
@@ -52,21 +85,25 @@ const json = (body: unknown, status = 200) =>
     headers: { 'Content-Type': 'application/json', ...corsHeaders },
   })
 
-const ackKey = (forwarderId: string, laneId: string, period: number | null) =>
-  `${forwarderId}|${laneId}|${period ?? ''}`
-
 Deno.serve(async (req) => {
   // CORS preflight — must return before any auth/work.
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
     // ── parse ──
-    const { kind, forwarderIds, period } = await req.json().catch(() => ({})) as {
-      kind?: Kind; forwarderIds?: string[]; period?: number | null
-    }
+    const { kind, service: svcParam, forwarderIds, analystIds, period } =
+      await req.json().catch(() => ({})) as {
+        kind?: Kind; service?: string; forwarderIds?: string[]
+        analystIds?: string[]; period?: number | null
+      }
     if (kind !== 'request' && kind !== 'reminder' && kind !== 'preview') {
       return json({ ok: false, error: "kind must be 'request' | 'reminder' | 'preview'" }, 400)
     }
+    const svc: Service = svcParam === 'drayage' ? 'drayage' : 'ocean' // default ocean (back-compat)
+    if (svcParam && svcParam !== 'ocean' && svcParam !== 'drayage') {
+      return json({ ok: false, error: "service must be 'ocean' | 'drayage'" }, 400)
+    }
+    const cfg = SERVICES[svc]
 
     const service = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'))
 
@@ -80,65 +117,113 @@ Deno.serve(async (req) => {
     const { data: prof } = await service.from('profiles').select('role').eq('id', user.id).single()
     if (prof?.role !== 'internal') return json({ ok: false, error: 'Forbidden — internal only' }, 403)
 
-    // ── the forwarder set: explicit list, else all active ──
-    let forwarderQuery = service.from('forwarders').select('id, name').eq('active', true)
+    // ── companies offering THIS service (capability gate, DRAY.md §2a) ──
+    // Kept even for companies with zero analysts so the modal can show "no active recipients".
+    let capQuery = service
+      .from('forwarder_services')
+      .select('forwarder_id, forwarders!inner(id, name, active)')
+      .eq('service', svc)
+      .eq('active', true)
     if (Array.isArray(forwarderIds) && forwarderIds.length > 0) {
-      forwarderQuery = forwarderQuery.in('id', forwarderIds)
+      capQuery = capQuery.in('forwarder_id', forwarderIds)
     }
-    const { data: forwarders, error: fErr } = await forwarderQuery
-    if (fErr) throw new Error(`forwarders read failed: ${fErr.message}`)
-    const ids = (forwarders ?? []).map((f) => f.id)
-    if (ids.length === 0) return json({ ok: true, kind, roster: [], sent: [], failed: [] })
+    const { data: capRows, error: fErr } = await capQuery
+    if (fErr) throw new Error(`capability read failed: ${fErr.message}`)
+    const companies = (capRows ?? [])
+      .map((r) => r.forwarders as unknown as { id: string; name: string; active: boolean })
+      .filter((f) => f.active)
+    const ids = companies.map((f) => f.id)
+    if (ids.length === 0) return json({ ok: true, kind, service: svc, roster: [], sent: [], failed: [] })
 
-    // ── recipient emails (server-side resolve; grouped per forwarder) ──
-    const { data: recRows, error: rErr } = await service
-      .rpc('get_forwarder_recipients', { p_forwarder_ids: ids })
-    if (rErr) throw new Error(`recipient resolve failed: ${rErr.message}`)
-    const emailsByForwarder = new Map<string, string[]>()
-    for (const r of recRows ?? []) {
-      const list = emailsByForwarder.get(r.forwarder_id) ?? []
-      list.push(r.email)
-      emailsByForwarder.set(r.forwarder_id, list)
+    // ── full service list per company (modal caps tag chips by capability, DRAY.md §7a) ──
+    const { data: allSvcRows } = await service
+      .from('forwarder_services')
+      .select('forwarder_id, service')
+      .in('forwarder_id', ids)
+      .eq('active', true)
+    const servicesByForwarder = new Map<string, string[]>()
+    for (const r of allSvcRows ?? []) {
+      const list = servicesByForwarder.get(r.forwarder_id) ?? []
+      list.push(r.service)
+      servicesByForwarder.set(r.forwarder_id, list)
     }
 
-    // ── open lanes (re-validated at send time, ALERTS.md §11) + acks for the outstanding anti-join ──
+    // ── DIRECTORY: every analyst of each company, with tag flags (DRAY.md §7b) ──
+    const { data: dirRows, error: dErr } = await service
+      .rpc('get_service_directory', { p_forwarder_ids: ids, p_service: svc })
+    if (dErr) throw new Error(`directory resolve failed: ${dErr.message}`)
+    type DirRow = {
+      forwarder_id: string; forwarder_name: string; analyst_id: string
+      analyst_name: string; email: string; tag_ocean: boolean; tag_drayage: boolean
+    }
+    const analystsByForwarder = new Map<string, DirRow[]>()
+    for (const r of (dirRows ?? []) as DirRow[]) {
+      const list = analystsByForwarder.get(r.forwarder_id) ?? []
+      list.push(r)
+      analystsByForwarder.set(r.forwarder_id, list)
+    }
+
+    // ── MEMORY (DRAY.md §7e): latest send of THIS service per company → its analyst set.
+    // Derived from the audit rows; rows from pre-v2 sends have analyst_id null → empty memory
+    // → the modal starts blank for that company (cold start, by design).
+    const { data: memRows, error: mErr } = await service
+      .from('notification_recipients')
+      .select('forwarder_id, analyst_id, status, sent_at, notification:notifications!inner(id, service, created_at)')
+      .eq('notification.service', svc)
+    if (mErr) throw new Error(`memory read failed: ${mErr.message}`)
+    type MemRow = {
+      forwarder_id: string; analyst_id: string | null; status: string; sent_at: string | null
+      notification: { id: string; service: string; created_at: string }
+    }
+    const sortedMem = ((memRows ?? []) as unknown as MemRow[])
+      .sort((a, b) => b.notification.created_at.localeCompare(a.notification.created_at))
+    const latestNotifByForwarder = new Map<string, string>() // company → latest notification id
+    const memoryByForwarder = new Map<string, Set<string>>() // company → analyst ids of that send
+    const lastNotifiedAt = new Map<string, string>()         // company → last successful sent_at
+    for (const r of sortedMem) {
+      if (!latestNotifByForwarder.has(r.forwarder_id)) {
+        latestNotifByForwarder.set(r.forwarder_id, r.notification.id)
+      }
+      if (latestNotifByForwarder.get(r.forwarder_id) === r.notification.id && r.analyst_id) {
+        const set = memoryByForwarder.get(r.forwarder_id) ?? new Set<string>()
+        set.add(r.analyst_id)
+        memoryByForwarder.set(r.forwarder_id, set)
+      }
+      if (r.status === 'sent' && r.sent_at && !lastNotifiedAt.has(r.forwarder_id)) {
+        lastNotifiedAt.set(r.forwarder_id, r.sent_at)
+      }
+    }
+
+    // ── open lanes of THIS service (re-validated at send time) + acks for the outstanding anti-join ──
     let laneQuery = service
-      .from('rate_request_lanes')
-      .select('id, pol, pod, last_cy, fd, container_type, container_count, period')
+      .from(cfg.lanesTable)
+      .select(cfg.laneSelect)
       .gt('expires_at', new Date().toISOString())
-    if (period != null) laneQuery = laneQuery.eq('period', period)
+    if (cfg.hasPeriod && period != null) laneQuery = laneQuery.eq('period', period)
     const { data: lanes, error: lErr } = await laneQuery
     if (lErr) throw new Error(`lanes read failed: ${lErr.message}`)
-    const openLanes = (lanes ?? []) as Lane[]
+    const openLanes = (lanes ?? []) as unknown as Lane[]
+
+    const ackKey = (forwarderId: string, laneId: string, period?: number | null) =>
+      cfg.hasPeriod ? `${forwarderId}|${laneId}|${period ?? ''}` : `${forwarderId}|${laneId}`
 
     const { data: acks, error: aErr } = await service
-      .from('rate_submissions')
-      .select('lane_id, forwarder_id, period, status')
+      .from(cfg.subsTable)
+      .select(cfg.hasPeriod ? 'lane_id, forwarder_id, period, status' : 'lane_id, forwarder_id, status')
     if (aErr) throw new Error(`submissions read failed: ${aErr.message}`)
-    const ackStatus = new Map<string, string>() // forwarder|lane|period → 'submitted'|'skipped'
-    for (const a of acks ?? []) ackStatus.set(ackKey(a.forwarder_id, a.lane_id, a.period), a.status)
-
-    // last-notified per forwarder (ALERTS.md §9), for the roster
-    const { data: lastNotif } = await service
-      .from('notification_recipients')
-      .select('forwarder_id, sent_at')
-      .eq('status', 'sent')
-      .not('sent_at', 'is', null)
-      .order('sent_at', { ascending: false })
-    const lastNotifiedAt = new Map<string, string>()
-    for (const n of lastNotif ?? []) {
-      if (!lastNotifiedAt.has(n.forwarder_id)) lastNotifiedAt.set(n.forwarder_id, n.sent_at)
+    const ackStatus = new Map<string, string>()
+    for (const a of acks ?? []) {
+      ackStatus.set(ackKey(a.forwarder_id, a.lane_id, (a as { period?: number | null }).period), a.status)
     }
 
-    // lanes for a forwarder under the current kind
     const lanesFor = (forwarderId: string): Lane[] =>
       kind === 'reminder'
         ? openLanes.filter((l) => !ackStatus.has(ackKey(forwarderId, l.id, l.period)))
-        : openLanes // request / preview-base = all open lanes
+        : openLanes
 
-    // ── PREVIEW: roster only, no send ──
+    // ── PREVIEW: directory + memory + counts, no send ──
     if (kind === 'preview') {
-      const roster = (forwarders ?? []).map((f) => {
+      const roster = companies.map((f) => {
         let responded = 0, skipped = 0, outstanding = 0
         for (const l of openLanes) {
           const s = ackStatus.get(ackKey(f.id, l.id, l.period))
@@ -146,23 +231,50 @@ Deno.serve(async (req) => {
           else if (s === 'skipped') skipped++
           else outstanding++
         }
-        const emails = emailsByForwarder.get(f.id) ?? []
+        const memory = memoryByForwarder.get(f.id) ?? new Set<string>()
+        const analysts = (analystsByForwarder.get(f.id) ?? []).map((a) => ({
+          analystId: a.analyst_id,
+          name: a.analyst_name,
+          email: a.email,
+          tagOcean: a.tag_ocean,
+          tagDrayage: a.tag_drayage,
+          lastSelected: memory.has(a.analyst_id), // §7e prefill; false everywhere = blank first send
+        }))
         return {
           forwarderId: f.id,
           name: f.name,
+          services: servicesByForwarder.get(f.id) ?? [svc], // for chip capping (§7a)
           openCount: openLanes.length,
           outstandingCount: outstanding,
           respondedCount: responded,
           skippedCount: skipped,
-          emails,                       // shown to the internal user in the modal (trusted view)
-          recipientCount: emails.length,
+          analysts,
+          recipientCount: analysts.length,
           lastNotifiedAt: lastNotifiedAt.get(f.id) ?? null,
         }
       })
-      return json({ ok: true, kind, roster })
+      return json({ ok: true, kind, service: svc, roster })
     }
 
-    // ── REQUEST / REMINDER: send + audit ──
+    // ── REQUEST / REMINDER: resolve the CHECKED analysts, send per company, audit per analyst ──
+    if (!cfg.templateBytes) {
+      return json({ ok: false, error: `${svc} sending is not enabled yet (template pending)` }, 400)
+    }
+    if (!Array.isArray(analystIds) || analystIds.length === 0) {
+      return json({ ok: false, error: 'No recipients selected — pass analystIds' }, 400)
+    }
+
+    const { data: recRows, error: rErr } = await service
+      .rpc('get_recipients_by_analyst', { p_analyst_ids: analystIds })
+    if (rErr) throw new Error(`recipient resolve failed: ${rErr.message}`)
+    type RecRow = { forwarder_id: string; forwarder_name: string; analyst_id: string; email: string }
+    const recipientsByForwarder = new Map<string, RecRow[]>()
+    for (const r of (recRows ?? []) as RecRow[]) {
+      const list = recipientsByForwarder.get(r.forwarder_id) ?? []
+      list.push(r)
+      recipientsByForwarder.set(r.forwarder_id, list)
+    }
+
     const senderName = env('SENDER_NAME', 'Luis')
     const appUrl = env('APP_URL', 'https://rates.ptpbags.com')
     const isReminder = kind === 'reminder'
@@ -171,7 +283,7 @@ Deno.serve(async (req) => {
 
     const { data: notif, error: nErr } = await service
       .from('notifications')
-      .insert({ kind, triggered_by: user.id, period: period ?? null })
+      .insert({ kind, service: svc, triggered_by: user.id, period: period ?? null })
       .select('id')
       .single()
     if (nErr) throw new Error(`notifications insert failed: ${nErr.message}`)
@@ -181,54 +293,51 @@ Deno.serve(async (req) => {
     const sent: Array<{ forwarderId: string; lanes: number; emails: number }> = []
     const failed: Array<{ forwarderId: string; error: string }> = []
 
-    for (const f of forwarders ?? []) {
+    // Send one email per COMPANY (to all its checked analysts), audit one row PER ANALYST —
+    // the per-analyst rows are what the §7e memory reads back next time.
+    for (const f of companies) {
+      const recipients = recipientsByForwarder.get(f.id) ?? []
+      if (recipients.length === 0) continue // no analyst of this company was checked
       const forwarderLanes = lanesFor(f.id)
-      const emails = emailsByForwarder.get(f.id) ?? []
       if (forwarderLanes.length === 0) continue // nothing outstanding → don't email (ALERTS.md §9)
 
-      const recip = {
-        notification_id: notif.id,
-        forwarder_id: f.id,
-        email: emails.join(', ') || null,
-        lane_count: forwarderLanes.length,
-        status: 'queued' as 'queued' | 'sent' | 'failed',
-        error: null as string | null,
-        sent_at: null as string | null,
+      const emails = recipients.map((r) => r.email)
+      let status: 'sent' | 'failed' = 'sent'
+      let errorMsg: string | null = null
+      let sentAt: string | null = null
+      try {
+        const xlsx = fillTemplate(cfg.templateBytes, cfg.toFillLanes(forwarderLanes), f.name)
+        await sendMail(
+          accessToken,
+          emails,
+          subject,
+          invitationHtml({ senderName, appUrl, isReminder }),
+          xlsx,
+          `PTP OFQ Rates - ${String(f.name).replace(/\//g, '-')} - ${today}.xlsx`,
+        )
+        sentAt = new Date().toISOString()
+        sent.push({ forwarderId: f.id, lanes: forwarderLanes.length, emails: emails.length })
+      } catch (err) {
+        status = 'failed'
+        errorMsg = err instanceof Error ? err.message : String(err)
+        failed.push({ forwarderId: f.id, error: errorMsg })
       }
 
-      if (emails.length === 0) {
-        recip.status = 'failed'
-        recip.error = 'no active recipients (missing email / opted out / forwarder inactive)'
-        failed.push({ forwarderId: f.id, error: recip.error })
-      } else {
-        try {
-          const fillLanes: FillLane[] = forwarderLanes.map((l) => ({
-            pol: l.pol, fd: l.fd, pod: l.pod, last_cy: l.last_cy,
-            container_type: l.container_type, container_count: l.container_count,
-          }))
-          const xlsx = fillTemplate(TEMPLATE_BYTES, fillLanes, f.name)
-          await sendMail(
-            accessToken,
-            emails,
-            subject,
-            invitationHtml({ senderName, appUrl, isReminder }),
-            xlsx,
-            `PTP OFQ Rates - ${String(f.name).replace(/\//g, '-')} - ${today}.xlsx`,
-          )
-          recip.status = 'sent'
-          recip.sent_at = new Date().toISOString()
-          sent.push({ forwarderId: f.id, lanes: forwarderLanes.length, emails: emails.length })
-        } catch (err) {
-          recip.status = 'failed'
-          recip.error = err instanceof Error ? err.message : String(err)
-          failed.push({ forwarderId: f.id, error: recip.error })
-        }
-      }
-
-      await service.from('notification_recipients').insert(recip)
+      await service.from('notification_recipients').insert(
+        recipients.map((r) => ({
+          notification_id: notif.id,
+          forwarder_id: f.id,
+          analyst_id: r.analyst_id,
+          email: r.email,
+          lane_count: forwarderLanes.length,
+          status,
+          error: errorMsg,
+          sent_at: sentAt,
+        })),
+      )
     }
 
-    return json({ ok: true, kind, notificationId: notif.id, sent, failed })
+    return json({ ok: true, kind, service: svc, notificationId: notif.id, sent, failed })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('notify-forwarders error:', message) // never log the token
