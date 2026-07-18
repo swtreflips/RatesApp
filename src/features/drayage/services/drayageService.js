@@ -231,7 +231,10 @@ export async function postDrayageRequestBatch(lanes, requesterId) {
 export async function fetchDrayageOpenRequests() {
   const { data, error } = await supabase
     .from('drayage_request_lanes')
-    .select('id, last_cy_cfs, final_destination, dest_zip, notes, kind, posted_at, expires_at, drayage_rates(count)')
+    // Disambiguate the embed: there are TWO FKs between these tables (drayage_rates.lane_id →
+    // lanes, and lanes.refresh_of → drayage_rates). `!lane_id` picks the "rates received on this
+    // lane" relationship (SUPABASE.md §4).
+    .select('id, last_cy_cfs, final_destination, dest_zip, notes, kind, posted_at, expires_at, drayage_rates!lane_id(count)')
     .gt('expires_at', new Date().toISOString())
     .order('expires_at', { ascending: true })
   return { lanes: data ?? [], error }
