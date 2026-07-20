@@ -1,14 +1,16 @@
 # DRAYAGE_ANALYTICS.md — Drayage Rate Benchmarking & Negotiation Insight (Internal-Only)
 
 **Status:** Design doc. **Not implemented, not scheduled.**
-**Purpose:** benchmark every drayage rate on file (current *and* historical) against its real
-HERE-routed distance/time, producing `$/mile` / `$/hour` figures per forwarder and per lane — for
-internal market-rate awareness and negotiation, not for a single in-the-moment decision.
+**Purpose:** benchmark drayage rates against their real HERE-routed distance/time, producing
+`$/mile` / `$/hour` figures — primarily so an internal user can compare **every forwarder currently
+quoting a lane, today**, and negotiate from real numbers instead of a hunch. Trend-over-time is a
+genuine second layer built **on top** of this, not a prerequisite for it (§2).
 **Created:** July 2026. **Split out of `BOOKINGS.md` §7** (July 2026) — see §7 there for the sibling
 feature: a thin, live, per-selection distance/cost *hint* shown during OFQ decision-making. This doc
 is the deep version: batch, persisted, historical, cross-forwarder.
-**Relates to:** `DRAY.md` §6b (`current`/`superseded` rate history — this feature is a primary
-consumer of superseded rows, not just current ones), `BIDDING.md` (negotiation groundwork — this
+**Relates to:** `DRAY.md` §6b (`current`/`superseded` rate history — Layer 1 reads only `current`
+rows; superseded rows accumulate in `drayage_rate_benchmarks` as Layer 2's future input, §5),
+`BIDDING.md` (negotiation groundwork — this
 feature is the market-awareness input a future bid decision would draw on), `BRAIN.md` §6 /
 `src/lib/geo.js` (the geo client), `features/internal/applyRates/geoBatch.js` (the batch-routing
 adapter this reuses), `BOOKINGS.md` §7 (sibling — the live inline hint).
@@ -30,42 +32,52 @@ from that surface, not just visually hidden.
 
 ---
 
-## 2. The core idea
+## 2. The core idea — two layers, built in order
 
-Every `drayage_rates` row — **current or superseded** — implies a real physical route the moment you
-know its `(last_cy_cfs, final_destination)` pair. Benchmarked against a real HERE truck route
-(distance + time), a rate stops being just "a number a forwarder sent us" and becomes "$3.37/mile on
-a lane where two other forwarders charge $2.80–$2.95" — a fact you can bring to a negotiation, not a
-hunch. Because history matters here (a forwarder's price *trend* on a lane is the interesting
-signal, not just today's snapshot), this feature deliberately reads `superseded` rows too — the
-opposite of Bookings, which only ever cares about `status='current'`.
+**Layer 1 (primary, buildable now): cross-sectional — how do today's quotes compare?** Every
+`drayage_rates` row implies a real physical route the moment you know its `(last_cy_cfs,
+final_destination)` pair. Benchmarked against a real HERE truck route (distance + time), a rate
+stops being just "a number a forwarder sent us" and becomes "$3.37/mile — the other two forwarders
+quoting this lane today are at $2.80–$2.95." That comparison needs only `status='current'` rates
+across forwarders sharing a lane — **no history, no waiting.** It's useful the moment two forwarders
+quote overlapping lanes, which may already be closer than it looks as the drayage rate base grows.
+
+**Layer 2 (later, additive): trend — how has a price moved over time?** "Is this forwarder's price
+climbing faster than the lane average" is a genuinely different, valuable question — but it's a
+layer **on top of** Layer 1, not a rival design. It needs superseded-row history, which only exists
+once Layer 1 has been running (and persisting, §5) for a while. **Layer 2 is not designed here in
+detail** — it's named so Layer 1 is built in a way that doesn't foreclose it (§5), not built.
+
+Everything below (§3–§6) describes Layer 1. Layer 2 gets one short mention (§4) and nothing else —
+building it is a separate, later effort once Layer 1's own persistence has quietly accumulated
+enough history to make it worthwhile.
 
 ---
 
-## 3. Scope: a batch problem, not a one-off lookup
+## 3. Scope: a batch problem, not a one-off lookup (Layer 1)
 
 This is the load-bearing difference from `BOOKINGS.md` §7's inline hint. Bookings looks at one
 ocean-selection's worth of drayage rates at a time (all sharing one lane) — one `getRoute()` call is
-enough. This feature looks at the **whole `drayage_rates` table** — potentially hundreds of rows
-across many forwarders, many lanes, many historical supersessions — so its geo need looks like Apply
-Rates' batch job, not Bookings' single call:
+enough. Layer 1 looks at **every `status='current'` drayage rate at once** — every forwarder, every
+lane, all live simultaneously — so its geo need looks like Apply Rates' batch job, not Bookings'
+single call, even though it's scoped to current rates only (no superseded rows — that's Layer 2):
 
-- **Dedupe to unique `(last_cy_cfs, final_destination)` pairs** across every row in scope (many
-  historical rates share one lane — three forwarders' prices on `Louisville, KY → Seymour, IN`, plus
-  two years of that lane's supersession history, all resolve to the **same one** route lookup).
+- **Dedupe to unique `(last_cy_cfs, final_destination)` pairs** across every current rate (several
+  forwarders quoting `Louisville, KY → Seymour, IN` all resolve to the **same one** route lookup).
 - **Reuse `applyRates/geoBatch.js`'s `createBatchGeo`/`routeBatch` pattern** (or a near-identical
   adapter scoped to this feature) rather than one-at-a-time `getRoute()` calls — the same
   chunking/cache-hit/error-tally discipline already proven there, not reinvented.
 - The brain already caches per-lane server-side, so a full recompute after the first pass is cheap —
-  only genuinely new lanes cost real HERE quota.
+  only genuinely new lanes cost real HERE quota. And because this is current-rates-only, the batch
+  stays bounded to "however many lanes are actively quoted right now," not the whole history of the
+  table — meaningfully smaller than benchmarking everything ever written.
 
 ---
 
-## 4. Data model
+## 4. Data model (Layer 1)
 
-**Input:** `drayage_rates`, **both** `status='current'` and `status='superseded'` — `(forwarder_id,
-last_cy_cfs, final_destination, rate, fuel_surcharge_amount, total_rate, provided_at, confirmed_at,
-status)`.
+**Input:** `drayage_rates` where `status='current'` — `(forwarder_id, last_cy_cfs,
+final_destination, rate, fuel_surcharge_amount, total_rate, provided_at, confirmed_at)`.
 
 **Derived per rate** (via the batch geo call, joined by normalized lane key):
 ```
@@ -74,20 +86,28 @@ cost_per_mile = total_rate / (distance_m / 1609.344)
 cost_per_hour = total_rate / (duration_s / 3600)
 ```
 
-**Aggregation views worth surfacing** (not all required for a first cut):
-- **Per-lane spread** — every forwarder's `$/mile` on one lane, side by side, cheapest/most-expensive
-  called out.
-- **Per-forwarder trend** — one forwarder's `$/mile` on a lane across its supersession history (did
-  their price move with fuel, or ahead of it?).
-- **Lane-wide market average** — a rough "what does this lane typically cost" figure, useful context
-  before a `DRAY.md` §6b refresh request or (later) a `BIDDING.md`-style negotiation opens.
+**The Layer 1 view:** **per-lane spread** — every forwarder currently quoting one lane, `$/mile`
+side by side, cheapest/most-expensive called out, maybe a rough lane-wide average. That's the whole
+MVP: today's competitive picture for a lane, nothing more.
+
+**Layer 2 (named, not designed):** once superseded rows have accumulated real history (via §5's
+persistence), a *per-forwarder trend* view — one forwarder's `$/mile` on a lane over its
+supersession history — becomes possible on the same table, as a separate later effort.
 
 ---
 
-## 5. Persistence — this feature needs it (unlike Bookings)
+## 5. Persistence — Layer 1 doesn't need it to ship; write it anyway, as Layer 2's groundwork
 
-Unlike `BOOKINGS.md` §7's ephemeral hint, trending requires history to be retained, so this feature
-needs a real table (not created yet):
+**Layer 1's own value doesn't require a table at all.** "Compare today's forwarders on this lane" can
+be answered by computing live each time the view loads (same pattern as Bookings' hint, just batched
+across many lanes instead of one) — a page view is not blocked on history existing.
+
+**But write the computation through to a table anyway**, purely as a byproduct, because that's what
+makes Layer 2 possible later **for free**. If Layer 1 only ever computes-and-discards, there is no
+history to trend over once you eventually want it — you'd have to start accumulating from that day
+forward. If Layer 1 quietly persists every benchmark it computes from day one, Layer 2 is mostly
+already-collected data by the time anyone gets around to building it. This is the concrete
+"groundwork so implementing it's easy" the whole feature was asked for.
 
 ```sql
 create table drayage_rate_benchmarks (
@@ -100,30 +120,32 @@ create table drayage_rate_benchmarks (
 );
 ```
 
-- **One row per rate, including superseded ones** — history is the entire point.
-- **Superseded rows never need recomputation** — they're immutable once superseded (`DRAY.md` §6b),
-  so their benchmark is written once and never touched again.
-- **Current rows** could in principle be recomputed if the geo data source improves, but the common
-  case is compute-once-on-first-sight, same as superseded rows.
-- Written by a batch job (§3), not by the request/response cycle of any page view — the Analytics
-  surface should always be reading `drayage_rate_benchmarks`, never blocking on a live brain call.
+- **Written whenever Layer 1 benchmarks a rate** — current rows get written (and read back) for
+  Layer 1's own display; **when a rate is later superseded, its row simply stays in the table
+  unchanged** — no separate step, no re-compute, no extra work. It's already sitting there as history
+  the moment Layer 2 wants it.
+- **Immutable once written** — a rate's benchmark doesn't change after the fact (`DRAY.md` §6b: rates
+  are append-only via supersession, never edited in place), so `computed_at` is set once and never
+  revisited.
+- Layer 1's UI reads this table as a **cache it happens to also be building history in** — not as a
+  historical ledger it depends on. That framing is what keeps Layer 1 shippable without waiting for
+  Layer 2 to make sense.
 
 ---
 
-## 6. UI placement — open, not decided
+## 6. UI placement — Layer 1 (open, not decided)
 
-Two candidate homes:
+Two candidate homes for the cross-sectional "today" view — no trend/chart requirement, since that's
+explicitly Layer 2:
 
 - **(a) Extend the existing internal Drayage Rates page** (`DrayageReceivedRates.jsx`) with a
   `$/mile`/`$/hour` column and a per-lane spread indicator, reusing its existing current/history
-  toggle. Cheaper — no new menu item, and the page already has the right current/history framing.
-- **(b) A dedicated "Drayage Analytics" internal page/menu item** — lane-level and forwarder-level
-  views, sortable/filterable, room for an actual trend chart per lane. More build, but doesn't cram
-  reporting into a page whose primary job today is just listing rates.
-
-Recommend deciding once real benchmark data exists and it's clear what questions people actually ask
-of it — a column addition (a) can always graduate into (b) later if the reporting need grows past
-what a table column can express.
+  toggle. Cheaper — no new menu item, no new dependency, and a spread indicator is just a sortable
+  column, not a chart. **Likely the right first move** given Layer 1 is fundamentally "add a
+  computed comparison to a page that already lists the same rows."
+- **(b) A dedicated "Drayage Analytics" page/menu item** — worth revisiting once Layer 2 (trend) is
+  actually being built, since that's the point where a chart/trend-line component would first earn
+  its place; not a reason to hold off on Layer 1's much smaller (a).
 
 ---
 
@@ -150,6 +172,8 @@ or any OFQ file at all. Independent build order, independent priority.
   the price or creating a new row. Does that event deserve a fresh `computed_at` (re-affirming the
   benchmark is still relevant) even though nothing about the geo math changed, or is the original
   `computed_at` still correct since the rate row itself never changed?
-- **Historical backfill** — when this ships, does it benchmark the *entire* existing
-  `drayage_rates` history in one pass (immediately useful trend data) or only rates from that point
-  forward (cheaper first cut, no trend value until enough time passes)?
+- **Optional Layer-2 jumpstart** — Layer 1 only needs to benchmark `current` rates, so there's no
+  backfill *requirement* at launch. But since any already-`superseded` rows at that point are free
+  history sitting right there, is it worth a one-time pass benchmarking them too, so Layer 2 (if/when
+  built) starts with whatever history already existed rather than only what accumulates from launch
+  day forward? Purely an optional head start, not something Layer 1 needs to ship.
