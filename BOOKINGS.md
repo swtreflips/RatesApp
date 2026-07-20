@@ -6,7 +6,9 @@ applied to it, let an internal user explore which **real drayage rate** complete
 for each ocean option, and compare the combined landed cost across combinations.
 **Created:** July 2026. **Relates to:** `DRAY.md` §6b (supersession/current rates) and §6d (fuel
 math / `total_rate`), `BIDDING.md` §1 (ocean vs. drayage rate identity — reused verbatim here),
-`features/internal/applyRates/*` (the sibling tool this one deliberately does *less* than).
+`BRAIN.md` §6 (`src/lib/geo.js`, the geo/routing brain client — reused directly by §7 Analytics),
+`features/internal/applyRates/*` (the sibling tool this one deliberately does *less* than, and whose
+`geoBatch.js` adapter already threads the `duration_s` value §7 needs).
 
 ---
 
@@ -205,10 +207,93 @@ second navigation — because the entire value of the feature is *fast compariso
   No new `bookings` table, no "saved scenario" concept yet.
 - **No CSV export** (a natural follow-on mirroring `outputCsv.js`'s pattern, but not required to
   ship v1).
-- **No geo-qualification reuse.** Bookings never calls the brain / distance engine.
+- **No geo-QUALIFICATION reuse.** Bookings never calls `matcher.js`/`config.js`/`geoBatch.js`'s
+  batch within/route engine — that stays Apply Rates' alone. (§7 below adds a *direct*, single-pair
+  brain call for Analytics — a different, much smaller use of the same underlying service.)
 - **No forwarder-facing view.** Internal-only, exactly like Apply Rates.
 
-## 6. Open questions
+---
+
+## 7. Analytics — real distance/time benchmarking (internal-only; groundwork now, build later)
+
+**Status inside this doc: later, not v1.** Documented now so the eventual build is a small addition,
+not a redesign — the plumbing it needs already exists.
+
+### 7a. What already exists (nothing new to build at the API layer)
+
+`src/lib/geo.js`'s `getRoute(a, b)` already returns everything this needs from **one call**:
+`distance_m`, `duration_s`, `base_duration_s`, `typical_duration_s` (traffic-free vs. typical) — a
+real HERE truck route, not a straight-line estimate. Apply Rates' batch adapter
+(`applyRates/geoBatch.js`) already threads `duration_s` through its mapped result today; `matcher.js`
+just never reads it (only `distance_m`, for the mile threshold). That's a live, unused asset — no
+brain-side or client-library change is needed to start using time.
+
+### 7b. The one-call-per-lane simplification
+
+Every drayage option listed under a single ocean selection prices the **identical**
+`(last_cy_cfs, final_destination)` pair (§2b's filter guarantees this) — they're competing quotes on
+the same physical route. So Analytics needs **exactly one** `getRoute()` call per ocean selection,
+never one per drayage row: fetch the route once when an ocean card is selected, then derive a
+benchmark for every drayage option in that panel from the same `distance_m`/`duration_s`. Switching
+ocean options (a new Last CY) fires one new call; switching between drayage rows under the same
+ocean option fires none. This is far lighter than Apply Rates' batch job — no chunking, no dedup
+map, just a single request, optionally memoized client-side per normalized `lastCy|fd` key for the
+session (the brain already caches server-side too, so even a cache miss here is cheap and shared
+across future sessions/users hitting the same lane).
+
+### 7c. The benchmark, per drayage row
+
+```
+costPerMile = drayageOption.total_rate / (distance_m / 1609.344)
+costPerHour = drayageOption.total_rate / (duration_s / 3600)
+```
+
+Displayed as a quiet annotation on each drayage row already listed in §4's ranked panel — e.g.
+`≈ 245 mi · 4h10m · $3.37/mi · $80/hr` beneath the rate — not a separate page or a second lookup.
+That placement is what makes it useful for negotiation: seeing three forwarders' `$/mile` on the
+*same real route* side by side is the whole point ("Forwarder A is 40% above the other two on an
+identical lane" is a sentence you can only say once the benchmark sits next to each option).
+
+### 7d. Locked constraint: internal-only, never forwarder-facing
+
+**This benchmark must never reach a forwarder**, under any future forwarder-facing view of Bookings
+or drayage rates. It is the buyer's should-cost model — the exact yardstick a forwarder's rate is
+judged against. Exposing `$/mile`/`$/hour` would let forwarders price *to* the benchmark rather than
+to their real cost, collapsing the price dispersion that makes comparison valuable in the first
+place, and handing away negotiating leverage for a marginal UX gain. (This mirrors the decision
+already made when the drayage route service was first scoped for internal use — restated here so
+this doc is self-contained.) The only forwarder-safe slice, if ever needed, is neutral lane
+confirmation (distance only, no cost framing) — never the $/mile/$/hour figures themselves. Since
+Bookings is already internal-only end to end (§5), this constraint costs nothing extra *today* — it
+only becomes a real design decision the moment anyone proposes a forwarder-facing Bookings/rates
+view, at which point Analytics must be explicitly stripped from that surface, not just "hidden."
+
+### 7e. Persistence — deliberately deferred, but the hook point is named now
+
+v1 Analytics is **live-computed and ephemeral**, matching the rest of Bookings (§5) — fetched on
+selection, shown, discarded on navigation away. Nothing is stored.
+
+But the user's stated goal is longer-range: *"this will also help for negotiation later once we
+gather enough insights"* — i.e., trending `$/mile` for a forwarder/lane over months, not just a
+point-in-time comparison. That needs history, which needs persistence eventually. The groundwork
+decision now is architectural, not code: **build the Analytics display as a small, swappable unit**
+(one component taking `{ distanceMeters, durationSeconds, drayageOption }` and rendering the
+annotation) so that later, its data source can change from "call `getRoute()` live" to "read a
+stored snapshot" **without touching §4's panel or any other Bookings code**. When that day comes,
+the natural shape is a lightweight append-only table (e.g. `drayage_rate_benchmarks`: `rate_id →
+drayage_rates(id)`, `distance_m`, `duration_s`, `cost_per_mile`, `cost_per_hour`, `computed_at`) —
+written once per rate the first time it's benchmarked, read thereafter instead of re-calling the
+brain. Not built now; named now so it's an additive migration later, not a refactor.
+
+### 7f. Reuse the existing "geo not configured" pattern
+
+`ApplyRates.jsx` already gates on `VITE_GEO_API_URL` (`geoConfigured`) and shows a plain "checks
+unavailable" banner rather than failing silently. Analytics should reuse that exact check and
+messaging rather than inventing a second way of saying the same thing.
+
+---
+
+## 8. Open questions
 
 - Should an OFQ's ocean options be limited to ones that have **at least one** matching drayage rate
   on file, or should options with zero drayage coverage still show (to make coverage gaps visible)?
@@ -222,3 +307,6 @@ second navigation — because the entire value of the feature is *fast compariso
   actually shows up, not preemptively.
 - Should `containerType`/`containerCount` (already parsed from the file, unused by Apply Rates)
   factor into the grand total or stay purely informational in the OFQ picker?
+- When Analytics persistence (§7e) eventually lands, does a benchmark get recomputed every time a
+  rate is superseded (§6b), or only on first sight of a given rate row? Superseded rows are
+  immutable history, so their benchmark should probably freeze with them.
