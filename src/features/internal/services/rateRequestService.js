@@ -76,7 +76,7 @@ export async function fetchReceivedRates({ scope = 'active' } = {}) {
   let query = supabase
     .from('rates')
     .select(
-      'id, lane_id, pol, pod, last_cy, fd, carrier, rate_amount, free_days, currency, valid_until, notes, created_at, forwarder:forwarders(name)'
+      'id, lane_id, pol, pod, last_cy, fd, carrier, container_type, rate_amount, free_days, currency, valid_until, notes, created_at, forwarder:forwarders(name)'
     )
 
   if (scope === 'active') {

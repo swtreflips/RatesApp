@@ -50,6 +50,9 @@ const BASE_FILTER_COLS = [
   { id: 'last_cy',   label: 'Last CY',           get: (r) => r.last_cy },
   { id: 'fd',        label: 'Final Destination', get: (r) => r.fd },
   { id: 'carrier',   label: 'Carrier',           get: (r) => r.carrier },
+  // Part of the ocean rate's identity (BIDDING.md §6) — two rows can differ ONLY by box size,
+  // so it has to be visible (and filterable) or they read as duplicates.
+  { id: 'container_type', label: 'Cont. Type',   get: (r) => r.container_type },
 ]
 // Status is a derived facet, only meaningful (and only shown) in Historic scope.
 const STATUS_COL = { id: 'status', label: 'Status', get: (r) => (isExpired(r) ? 'Expired' : 'Active') }
@@ -166,7 +169,7 @@ export default function ReceivedRates() {
           </p>
         </div>
       ) : (
-        <ScrollTable minWidth={historic ? '900px' : '820px'}>
+        <ScrollTable minWidth={historic ? '980px' : '900px'}>
             <thead>
               <tr className="border-b border-fog-200 font-mono text-[10px] uppercase tracking-[0.06em] text-fog-500">
                 {filterCols.map((col) => (
@@ -207,6 +210,7 @@ export default function ReceivedRates() {
                     <td className="px-3 py-2.5 text-harbor-700">{r.last_cy ?? '—'}</td>
                     <td className="px-3 py-2.5 text-harbor-700">{r.fd ?? '—'}</td>
                     <td className="px-3 py-2.5 font-mono text-harbor-700">{r.carrier ?? '—'}</td>
+                    <td className="px-3 py-2.5 font-mono text-harbor-700">{r.container_type ?? '—'}</td>
                     {historic && <td className="px-3 py-2.5"><StatusBadge expired={isExpired(r)} /></td>}
                     <td className="px-3 py-2.5 text-right font-mono font-semibold text-harbor-900">{fmtMoney(r.rate_amount, r.currency)}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-harbor-700">{r.free_days ?? '—'}</td>
