@@ -215,5 +215,10 @@ second navigation — because the entire value of the feature is *fast compariso
 - Is a **multi-pin comparison** worth it — letting the user hold two or three (ocean option, drayage
   option) pairs side by side, rather than one ocean selection at a time? The single-selection model
   above may already be sufficient given drayage re-ranks instantly per ocean choice.
+  **Decision: ship single-selection for v1 regardless.** Cognitive load on a Seymour-style 3-way
+  split is a known risk (§4), but it's cheap to observe and expensive to design blind — real usage
+  will show within days whether clicking through ocean options feels fine or feels like busywork.
+  Revisit multi-pin / an auto-computed "best overall combination" banner only if that friction
+  actually shows up, not preemptively.
 - Should `containerType`/`containerCount` (already parsed from the file, unused by Apply Rates)
   factor into the grand total or stay purely informational in the OFQ picker?
