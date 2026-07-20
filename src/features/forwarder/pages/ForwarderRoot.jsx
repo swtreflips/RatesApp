@@ -31,16 +31,15 @@ function ForwarderDashboard() {
   const { services } = useAuth()
 
   /* The dashboard sits ABOVE the :service route segment, so it has no service
-     param to read — it must derive one. Targeting the company's first capability
-     (serviceConfig order) instead of assuming ocean: a drayage-only forwarder
-     would otherwise be sent to /forwarder/ocean/lanes and silently bounced back
-     here by ServiceGuard. */
-  const primary = services.find((slug) => serviceConfig[slug])
-  const primaryCfg = primary ? serviceConfig[primary] : null
-  const PrimaryIcon = primaryCfg?.icon ?? Ship
+     param to read. One CTA per capability the company holds: a single-service
+     forwarder gets exactly one button (and never one pointing at a service they
+     can't access — ServiceGuard would bounce it straight back here), while a
+     both-services forwarder gets one per service instead of an ambiguous button
+     that silently meant ocean. */
+  const capabilities = services.filter((slug) => serviceConfig[slug])
 
   const stats = [
-    { label: 'Open Requests', value: '—', icon: PrimaryIcon, accent: 'harbor', hint: 'Active demand you haven’t acted on' },
+    { label: 'Open Requests', value: '—', icon: capabilities[0] ? serviceConfig[capabilities[0]].icon : Ship, accent: 'harbor', hint: 'Active demand you haven’t acted on' },
     { label: 'Active Rates',  value: '—', icon: FileText, accent: 'sea',    hint: 'Your rates still within their validity' },
   ]
 
@@ -51,15 +50,24 @@ function ForwarderDashboard() {
         title="Dashboard"
         subtitle="Demand that needs your attention and the rates you currently have live."
         actions={
-          primaryCfg && (
-            <button
-              onClick={() => navigate(`/forwarder/${primary}/lanes`)}
-              className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
-            >
-              <PrimaryIcon size={16} className="transition-transform group-hover:scale-110" />
-              Go to {primaryCfg.nav?.openRequests ?? 'Open Requests'}
-            </button>
-          )
+          <div className="flex flex-wrap items-center gap-2">
+            {capabilities.map((slug) => {
+              const cfg = serviceConfig[slug]
+              const Icon = cfg.icon
+              return (
+                <button
+                  key={slug}
+                  onClick={() => navigate(`/forwarder/${slug}/lanes`)}
+                  className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
+                >
+                  <Icon size={16} className="transition-transform group-hover:scale-110" />
+                  {/* Always name the service — `nav.openRequests` is per-service and
+                      ocean's reads just "Open Requests", which is ambiguous here. */}
+                  Open {cfg.label} Requests
+                </button>
+              )
+            })}
+          </div>
         }
       />
 
