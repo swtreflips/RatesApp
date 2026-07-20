@@ -1,4 +1,5 @@
 import { supabase } from '../../../lib/supabase'
+import { normalizeContainerType } from '../../rates/rateGrid'
 
 /*
   Provider supply-side writes/reads (STEP 0 / S0.5 — the minimal loop).
@@ -139,6 +140,9 @@ export async function submitRates(rows) {
     pod: r.pod || null,
     last_cy: r.lastCy || null,
     fd: r.fd || null,
+    // Part of the ocean rate's identity — blank resolves to the 40' HC standard on write so the
+    // stored value is never null (BIDDING.md §6).
+    container_type: normalizeContainerType(r.containerType),
     carrier: carrier || null,
     rate_amount: toNumber(r.rate),
     free_days: toNumber(r.freeDays),

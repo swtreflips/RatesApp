@@ -1,4 +1,5 @@
 import { supabase } from '../../../lib/supabase'
+import { normalizeContainerType } from '../../rates/rateGrid'
 
 /*
   Internal "Upload Rates" — record rates on behalf of a forwarder.
@@ -71,6 +72,8 @@ export async function submitRatesOnBehalf(rows) {
     pod: r.pod || null,
     last_cy: r.lastCy || null,
     fd: r.fd || null,
+    // Part of the ocean rate's identity — blank resolves to the 40' HC standard on write (BIDDING.md §6).
+    container_type: normalizeContainerType(r.containerType),
     contract: r.contract || null,
     contractname: r.contractName || null,  // DB column is lowercase (unquoted DDL)
     carrier: carrier || null,

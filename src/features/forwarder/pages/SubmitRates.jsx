@@ -6,6 +6,7 @@ import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services
 import {
   makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, AutocompleteEditCell,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
+  CONTAINER_TYPE_OPTIONS,
 } from '../../rates/rateGrid'
 import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS } from '../../rates/locationOptions'
 
@@ -68,7 +69,10 @@ export default function SubmitRates() {
       renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} /> },
     // template guides (request-side only; blank for free rows)
     { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86 },
-    { field: 'containerType', headerName: 'Cont. Type', width: 88, cellClassName: 'font-mono' },
+    // Editable: container type is part of the ocean rate's identity (BIDDING.md §6), so a
+    // forwarder can copy a row and quote a different box size. Blank = the 40' HC standard.
+    { field: 'containerType', headerName: 'Cont. Type', width: 96, cellClassName: 'font-mono',
+      editable: true, type: 'singleSelect', valueOptions: CONTAINER_TYPE_OPTIONS },
     { field: 'containerCount', headerName: '# Cont.', width: 70, type: 'number', cellClassName: 'font-mono' },
     // rate fields
     { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true,

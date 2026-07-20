@@ -39,6 +39,32 @@ export function parseRateFile(file, { complete, error }) {
   }
 }
 
+/* ── container types (OCEAN identity) ─────────────────────────────────────
+   Part of an OCEAN rate's identity (BIDDING.md §6): ocean pricing differs by box size, so
+   latest-per-routing dedup and bid targeting key on it. Drayage deliberately does NOT — a drayage
+   move is priced per lane regardless of size (size only shifts accessorials), so drayage keeps its
+   lane-only key.
+   40' HC is the ~95% standard, so a blank cell is an INPUT convenience —
+   `normalizeContainerType` resolves it to the default ON WRITE so the stored value is always
+   total. (Never store null: Postgres treats nulls as distinct in unique indexes, which would let
+   the same box size exist twice under different keys.) */
+export const CONTAINER_TYPES = ["20' GP", "40' GP", "40' HC", "45' HC"]
+export const DEFAULT_CONTAINER_TYPE = "40' HC"
+
+/** Blank/unknown → the 40' HC standard; known values pass through trimmed. */
+export const normalizeContainerType = (v) => {
+  const s = String(v ?? '').trim()
+  if (s === '') return DEFAULT_CONTAINER_TYPE
+  const match = CONTAINER_TYPES.find((t) => t.toLowerCase() === s.toLowerCase())
+  return match ?? s
+}
+
+/** Grid dropdown options — the blank entry is explicit so the default is reversible/visible. */
+export const CONTAINER_TYPE_OPTIONS = [
+  { value: '', label: `— ${DEFAULT_CONTAINER_TYPE} (default)` },
+  ...CONTAINER_TYPES.map((t) => ({ value: t, label: t })),
+]
+
 /* ── carriers ─────────────────────────────────────────────────────────────
    SCAC-style codes. Trailing CSV cells matching one are read as carriers; anything else
    folds into Remarks. A row's `carrier` is an array of codes (one rate is written per code). */

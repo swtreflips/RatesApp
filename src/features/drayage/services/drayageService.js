@@ -19,14 +19,25 @@ import { supabase } from '../../../lib/supabase'
 
 const MONTH_MS = 30.44 * 86_400_000
 
-/** 'fresh' < 6 mo · 'aging' 6–12 mo · 'stale' > 12 mo (from confirmed_at). */
+/** Months after which a rate stops counting as fresh — drayage prices move with fuel/market
+    roughly quarterly, so the question "does this still stand?" becomes fair at 3 months. */
+export const FRESH_MONTHS = 3
+const STALE_MONTHS = 12
+
+/** 'fresh' < 3 mo · 'aging' 3–12 mo · 'stale' > 12 mo (from confirmed_at). */
 export function stalenessOf(confirmedAt) {
   if (!confirmedAt) return null
   const months = (Date.now() - new Date(confirmedAt).getTime()) / MONTH_MS
-  if (months < 6) return 'fresh'
-  if (months < 12) return 'aging'
+  if (months < FRESH_MONTHS) return 'fresh'
+  if (months < STALE_MONTHS) return 'aging'
   return 'stale'
 }
+
+/** A rate is "in question" — and therefore shows Confirm / Update — when it has aged past fresh
+    or internal explicitly asked for a re-quote. Fresh + unasked rows stay quiet (no redundant
+    Confirm on a rate provided yesterday). */
+export const isInQuestion = (rate) =>
+  Boolean(rate?.refreshRequested) || ['aging', 'stale'].includes(stalenessOf(rate?.confirmed_at))
 
 /* ── shared helpers ──────────────────────────────────────────────────── */
 
@@ -181,13 +192,30 @@ export async function unskipDrayageLane(laneId) {
 
 /* ── forwarder: my current rates (open-ended) ────────────────────────── */
 
+/**
+ * The company's current rates, each flagged with `refreshRequested` when internal has an open
+ * re-quote request pointing at it (kind='refresh', refresh_of = the rate). Selects every STORED
+ * column so "Update price" can carry the untouched fields (accessorials, chassis days…) forward
+ * onto the superseding row instead of silently dropping them.
+ */
 export async function fetchMyDrayageRates() {
   const { data, error } = await supabase
     .from('drayage_rates')
-    .select('id, drayage_lane, last_cy_cfs, final_destination, dest_zip, rate, fuel_surcharge_amount, fuel_surcharge_pct_eff, total_rate, storage_fee_per_day, provided_at, confirmed_at, notes')
+    .select('id, drayage_lane, last_cy_cfs, final_destination, dest_zip, rate, fuel_surcharge_pct, fuel_surcharge, fuel_surcharge_amount, fuel_surcharge_pct_eff, total_rate, toll_fee, pre_pull_fee, pier_pass_fee, clean_truck_fee, drop_fee, chassis_fee, min_chassis_days, chassis_days_included, storage_fee_per_day, provided_at, confirmed_at, notes')
     .eq('status', 'current')
     .order('provided_at', { ascending: false })
-  return { rates: data ?? [], error }
+  if (error) return { rates: [], error }
+
+  // Open re-quote asks → the explicit "this rate is in question" signal (overrides age).
+  const { data: refreshLanes } = await supabase
+    .from('drayage_request_lanes')
+    .select('refresh_of')
+    .eq('kind', 'refresh')
+    .not('refresh_of', 'is', null)
+    .gt('expires_at', new Date().toISOString())
+  const asked = new Set((refreshLanes ?? []).map((l) => l.refresh_of))
+
+  return { rates: (data ?? []).map((r) => ({ ...r, refreshRequested: asked.has(r.id) })), error: null }
 }
 
 /** Re-confirm (§6b): "this price still stands" — bumps confirmed_at, resets the age cue. */
@@ -196,6 +224,41 @@ export async function confirmDrayageRate(rateId) {
     .from('drayage_rates')
     .update({ confirmed_at: new Date().toISOString().slice(0, 10) })
     .eq('id', rateId)
+  return { error }
+}
+
+/**
+ * "My price changed" (§6b): supersede this rate with an edited copy. Every stored field is carried
+ * forward from the existing row and only `changes` are applied, so accessorials aren't lost. Uses
+ * the same supersede-then-insert path as a normal submission — never an in-place edit, so the old
+ * price stays as history and the new row gets a fresh provided_at.
+ */
+export async function updateDrayageRate(rate, changes) {
+  const ident = await getIdentity()
+  if (ident.error) return { error: ident.error }
+  const { providerId, forwarderId } = ident
+
+  const next = {
+    submission_id: null,
+    lane_id: null,
+    forwarder_id: forwarderId,
+    provider_id: providerId,
+    last_cy_cfs: rate.last_cy_cfs,
+    final_destination: rate.final_destination,
+    dest_zip: rate.dest_zip ?? null,
+    // carried forward untouched
+    toll_fee: rate.toll_fee, pre_pull_fee: rate.pre_pull_fee, pier_pass_fee: rate.pier_pass_fee,
+    clean_truck_fee: rate.clean_truck_fee, drop_fee: rate.drop_fee, chassis_fee: rate.chassis_fee,
+    min_chassis_days: rate.min_chassis_days, chassis_days_included: rate.chassis_days_included,
+    // editable in the modal
+    rate: toNumber(changes.rate),
+    fuel_surcharge_pct: toPctFraction(changes.fuelPct),
+    fuel_surcharge: toNumber(changes.fuelAmount),
+    storage_fee_per_day: toNumber(changes.storagePerDay),
+    notes: changes.notes || null,
+  }
+
+  const { error } = await insertWithSupersession([next])
   return { error }
 }
 

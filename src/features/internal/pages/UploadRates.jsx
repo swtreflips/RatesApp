@@ -7,6 +7,7 @@ import { fetchForwarders, submitRatesOnBehalf } from '../services/recordRatesSer
 import {
   makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, AutocompleteEditCell,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
+  CONTAINER_TYPE_OPTIONS,
 } from '../../rates/rateGrid'
 import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS, FINAL_DESTINATIONS } from '../../rates/locationOptions'
 
@@ -164,7 +165,9 @@ export default function UploadRates() {
     // template guides (request-side; preloaded from the lane)
     { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true,
       renderEditCell: (p) => <AutocompleteEditCell {...p} options={FINAL_DESTINATIONS} /> },
-    { field: 'containerType', headerName: 'Cont. Type', width: 88, cellClassName: 'font-mono' },
+    // Editable: part of the ocean rate's identity (BIDDING.md §6). Blank = the 40' HC standard.
+    { field: 'containerType', headerName: 'Cont. Type', width: 96, cellClassName: 'font-mono',
+      editable: true, type: 'singleSelect', valueOptions: CONTAINER_TYPE_OPTIONS },
     { field: 'containerCount', headerName: '# Cont.', width: 70, type: 'number', cellClassName: 'font-mono' },
     // rate fields
     { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true,
