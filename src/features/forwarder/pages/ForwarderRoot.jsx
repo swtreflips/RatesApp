@@ -3,6 +3,8 @@ import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-do
 import { Ship, FileText, Loader2 } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 import ServiceGuard from '../../../app/ServiceGuard'
+import { useAuth } from '../../../app/providers/AuthProvider'
+import { serviceConfig } from '../../rates/serviceConfig'
 
 // Rate-entry grid pulls in MUI X DataGrid — load it only when the route opens.
 const SubmitRates = lazy(() => import('./SubmitRates'))
@@ -26,9 +28,19 @@ function ServicePage({ slot }) {
 
 function ForwarderDashboard() {
   const navigate = useNavigate()
+  const { services } = useAuth()
+
+  /* The dashboard sits ABOVE the :service route segment, so it has no service
+     param to read — it must derive one. Targeting the company's first capability
+     (serviceConfig order) instead of assuming ocean: a drayage-only forwarder
+     would otherwise be sent to /forwarder/ocean/lanes and silently bounced back
+     here by ServiceGuard. */
+  const primary = services.find((slug) => serviceConfig[slug])
+  const primaryCfg = primary ? serviceConfig[primary] : null
+  const PrimaryIcon = primaryCfg?.icon ?? Ship
 
   const stats = [
-    { label: 'Open Requests', value: '—', icon: Ship,     accent: 'harbor', hint: 'Active demand you haven’t acted on' },
+    { label: 'Open Requests', value: '—', icon: PrimaryIcon, accent: 'harbor', hint: 'Active demand you haven’t acted on' },
     { label: 'Active Rates',  value: '—', icon: FileText, accent: 'sea',    hint: 'Your rates still within their validity' },
   ]
 
@@ -39,13 +51,15 @@ function ForwarderDashboard() {
         title="Dashboard"
         subtitle="Demand that needs your attention and the rates you currently have live."
         actions={
-          <button
-            onClick={() => navigate('/forwarder/ocean/lanes')}
-            className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
-          >
-            <Ship size={16} className="transition-transform group-hover:scale-110" />
-            Go to Open Requests
-          </button>
+          primaryCfg && (
+            <button
+              onClick={() => navigate(`/forwarder/${primary}/lanes`)}
+              className="group inline-flex items-center gap-2 rounded-lg bg-signal-500 px-4 py-2 text-sm font-semibold text-harbor-950 shadow-signal transition-all hover:bg-signal-400 hover:shadow-card-hover"
+            >
+              <PrimaryIcon size={16} className="transition-transform group-hover:scale-110" />
+              Go to {primaryCfg.nav?.openRequests ?? 'Open Requests'}
+            </button>
+          )
         }
       />
 

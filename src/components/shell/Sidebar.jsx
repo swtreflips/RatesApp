@@ -8,7 +8,6 @@ import {
   LineChart,
   ChevronLeft,
   ChevronRight,
-  Ship,
   FileText,
   Upload,
   Route,
@@ -32,8 +31,9 @@ const internalServiceNav = (slug, cfg) => [
   ...(slug === 'ocean' ? [{ label: 'Apply Rates', icon: Route, to: '/internal/apply' }] : []),
 ]
 
-const forwarderServiceNav = (slug) => [
-  { label: 'Open Requests', icon: Ship,     to: `/forwarder/${slug}/lanes` },
+const forwarderServiceNav = (slug, cfg) => [
+  // The service's own mark (Ship / Truck) — otherwise both groups read identically.
+  { label: 'Open Requests', icon: cfg.icon, to: `/forwarder/${slug}/lanes` },
   { label: 'Active Rates',  icon: FileText, to: `/forwarder/${slug}/submissions` },
 ]
 
@@ -116,7 +116,7 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
       slug,
       label: serviceConfig[slug].label,
       items: isForwarder
-        ? forwarderServiceNav(slug)
+        ? forwarderServiceNav(slug, serviceConfig[slug])
         : internalServiceNav(slug, serviceConfig[slug]),
     }))
 

@@ -12,10 +12,16 @@
   its entry lands here (and a forwarder company holds the capability row).
 */
 
+import { Ship, Truck } from 'lucide-react'
+
 export const serviceConfig = {
   ocean: {
     slug: 'ocean',
     label: 'Ocean',
+    // The service's mark — used wherever a service is shown as itself (sidebar
+    // nav, dashboard CTA). Action-specific icons (upload, new, …) stay at their
+    // call site; this one is the SERVICE's identity, so it lives here.
+    icon: Ship,
     // Sidebar item labels that differ per service live here; anything not listed
     // falls back to the shared defaults in the Sidebar.
     nav: {
@@ -31,6 +37,7 @@ export const serviceConfig = {
   drayage: {
     slug: 'drayage',
     label: 'Drayage',
+    icon: Truck,
     nav: {
       openRequests: 'Open Drayage Requests',
     },
