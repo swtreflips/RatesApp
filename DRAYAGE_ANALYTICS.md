@@ -39,8 +39,13 @@ from that surface, not just visually hidden.
 final_destination)` pair. Benchmarked against a real HERE truck route (distance + time), a rate
 stops being just "a number a forwarder sent us" and becomes "$3.37/mile — the other two forwarders
 quoting this lane today are at $2.80–$2.95." That comparison needs only `status='current'` rates
-across forwarders sharing a lane — **no history, no waiting.** It's useful the moment two forwarders
-quote overlapping lanes, which may already be closer than it looks as the drayage rate base grows.
+across forwarders sharing a lane — **no history, no waiting.**
+
+**Value is immediate, not something to wait on.** There's a real, multi-forwarder rate set ready
+today: an ERP export covering ~4 forwarders, with several lanes already carrying 2–3 overlapping
+quotes. The moment that's uploaded through the existing on-behalf pipeline
+(`features/drayage/pages/DrayageUploadRates.jsx` → `submitDrayageRatesOnBehalf`), Layer 1 has real
+comparisons to show — this isn't gated on slow organic onboarding growth.
 
 **Layer 2 (later, additive): trend — how has a price moved over time?** "Is this forwarder's price
 climbing faster than the lane average" is a genuinely different, valuable question — but it's a
@@ -71,6 +76,23 @@ single call, even though it's scoped to current rates only (no superseded rows �
   only genuinely new lanes cost real HERE quota. And because this is current-rates-only, the batch
   stays bounded to "however many lanes are actively quoted right now," not the whole history of the
   table — meaningfully smaller than benchmarking everything ever written.
+
+### 3a. Data-quality risk: this is now urgent, not theoretical
+
+Layer 1's entire premise — "these forwarders are competing on the *same* lane" — depends on
+`last_cy_cfs`/`final_destination` matching exactly (normalized) across rows. That risk stops being
+abstract the moment real multi-source data lands: an ERP export covering 4 forwarders almost
+certainly wasn't typed against one shared vocabulary — different capitalization, spacing, or even
+different conventions for the same real place across forwarders. If two forwarders' rows for the
+identical physical lane don't normalize to the same key, they silently split into two separate
+one-forwarder "lanes" — the exact case Layer 1 exists to surface (real competition on a lane) becomes
+invisible, with no error or warning to say so.
+
+**Before trusting any Layer 1 output on the ERP import:** pull the distinct `last_cy_cfs` /
+`final_destination` values the export actually contains and manually check whether the same real
+places are spelled consistently across the 4 forwarders' rows. A 10-minute pass on the real file, not
+a hypothetical concern to defer — do this check *before* building Layer 1's comparison logic, since
+it determines whether that logic's grouping can be trusted at all once shipped.
 
 ---
 
