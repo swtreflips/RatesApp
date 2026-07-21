@@ -273,3 +273,34 @@ or any OFQ file at all. Independent build order, independent priority.
   history sitting right there, is it worth a one-time pass benchmarking them too, so Layer 2 (if/when
   built) starts with whatever history already existed rather than only what accumulates from launch
   day forward? Purely an optional head start, not something Layer 1 needs to ship.
+
+---
+
+## 9. Simple next additions (closing insight → action)
+
+Layer 1 today is descriptive and relative — it shows *who is cheapest per lane, by what %*. It stops
+one step short of an **ask** ("drop $75") or an **action** ("this lane has no second quote"). These
+four are deliberately small, additive, and use **only data already on the page** — no new
+tables, no new dependencies, no external index. Ranked by value-per-effort; start at the top.
+
+1. **Dollar-to-best, not just percent** *(negotiation — highest payoff, do first)*. Each
+   above-cheapest row already knows its own `total_rate` and the lane's cheapest `total_rate` —
+   show the **dollar gap** (`+$75 vs best`) beside the existing `+9%`. Turns a stat into a sentence
+   you say on a call. Trivial (subtraction on data in hand).
+2. **Single-source lanes as a "get a second quote" list** *(awareness + future leverage)*. The page
+   already splits `single` vs `multi` forwarder lanes; reframe the single group as what it *is* —
+   lanes where you have **zero negotiating leverage** — with a count StatCard ("6 lanes
+   single-sourced") and treat it as a standing sourcing to-do. Nearly free (the grouping exists).
+3. **One portfolio glance** *(market awareness)*. A single headline the page lacks:
+   **network-wide average `$/mile`**, plus cheapest / priciest lane. One StatCard or a one-line
+   summary — answers "are we broadly competitive?" and gives the per-lane numbers a reference point.
+   Cheap (per-lane averages already computed).
+4. **Copy a lane's spread for the negotiation email** *(negotiation)*. A small "copy" on each lane
+   that puts the spread as plain text on the clipboard (forwarders · `$/mile` · gap), ready to paste
+   into an email. Makes the screen *sendable* — the natural bridge before any real export/persistence.
+
+**Deliberately NOT yet** (keep it simple, grow later): an **external market index** (DAT/FreightWaves —
+real value someday, but an integration + cost + normalization headache; the internal relative
+baseline is enough to negotiate with now); **Layer 2 trend** (needs the history only now
+accumulating — let it fill); **charts** (the tables already carry the signal; polish, not value, at
+this stage).
