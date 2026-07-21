@@ -96,11 +96,14 @@ function buildRate(r, { forwarderId, providerId, submissionId = null, laneId = n
     toll_fee: toNumber(r.tollFee),
     pre_pull_fee: toNumber(r.prePullFee),
     pier_pass_fee: toNumber(r.pierPassFee),
+    port_congestion_fee: toNumber(r.portCongestionFee),
     clean_truck_fee: toNumber(r.cleanTruckFee),
     drop_fee: toNumber(r.dropFee),
     chassis_fee: toNumber(r.chassisFee),
+    chassis_split_fee: toNumber(r.chassisSplitFee),
     min_chassis_days: toNumber(r.minChassisDays),
     chassis_days_included: toNumber(r.chassisDaysIncluded),
+    demurrage_fee: toNumber(r.demurrageFee),
     storage_fee_per_day: toNumber(r.storagePerDay),
     notes: r.notes || null,
     // omitted (not null) when blank — DB default fills in today (§6a Date Received)
@@ -214,7 +217,7 @@ export async function unskipDrayageLane(laneId) {
 export async function fetchMyDrayageRates() {
   const { data, error } = await supabase
     .from('drayage_rates')
-    .select('id, drayage_lane, last_cy_cfs, final_destination, dest_zip, rate, fuel_surcharge_pct, fuel_surcharge, fuel_surcharge_amount, fuel_surcharge_pct_eff, total_rate, toll_fee, pre_pull_fee, pier_pass_fee, clean_truck_fee, drop_fee, chassis_fee, min_chassis_days, chassis_days_included, storage_fee_per_day, provided_at, confirmed_at, notes')
+    .select('id, drayage_lane, last_cy_cfs, final_destination, dest_zip, rate, fuel_surcharge_pct, fuel_surcharge, fuel_surcharge_amount, fuel_surcharge_pct_eff, total_rate, toll_fee, pre_pull_fee, pier_pass_fee, port_congestion_fee, clean_truck_fee, drop_fee, chassis_fee, chassis_split_fee, min_chassis_days, chassis_days_included, demurrage_fee, storage_fee_per_day, provided_at, confirmed_at, notes')
     .eq('status', 'current')
     .order('provided_at', { ascending: false })
   if (error) return { rates: [], error }
@@ -261,8 +264,11 @@ export async function updateDrayageRate(rate, changes) {
     dest_zip: rate.dest_zip ?? null,
     // carried forward untouched
     toll_fee: rate.toll_fee, pre_pull_fee: rate.pre_pull_fee, pier_pass_fee: rate.pier_pass_fee,
+    port_congestion_fee: rate.port_congestion_fee,
     clean_truck_fee: rate.clean_truck_fee, drop_fee: rate.drop_fee, chassis_fee: rate.chassis_fee,
+    chassis_split_fee: rate.chassis_split_fee,
     min_chassis_days: rate.min_chassis_days, chassis_days_included: rate.chassis_days_included,
+    demurrage_fee: rate.demurrage_fee,
     // editable in the modal
     rate: toNumber(changes.rate),
     fuel_surcharge_pct: toPctFraction(changes.fuelPct),

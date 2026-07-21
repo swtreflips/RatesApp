@@ -9,8 +9,9 @@ import { LAST_CY_OPTIONS } from '../rates/locationOptions'
 
   Row shape (client-side field names → DB columns via drayageService.buildRate):
     origin (Last CY/CFS) · destination (Final Destination) · zip · rate · fuelPct · fuelAmount ·
-    tollFee · prePullFee · pierPassFee · cleanTruckFee · dropFee · chassisFee · minChassisDays ·
-    chassisDaysIncluded · storagePerDay · notes (+ laneId when answering a request).
+    tollFee · prePullFee · pierPassFee · cleanTruckFee · dropFee · chassisFee · chassisSplitFee ·
+    minChassisDays · chassisDaysIncluded · portCongestionFee · demurrageFee · storagePerDay ·
+    notes (+ laneId when answering a request).
 */
 
 let tempId = 0
@@ -22,7 +23,8 @@ export const makeDrayEmptyRow = () => ({
   origin: '', destination: '', zip: '',
   rate: '', fuelPct: '', fuelAmount: '',
   tollFee: '', prePullFee: '', pierPassFee: '', cleanTruckFee: '', dropFee: '',
-  chassisFee: '', minChassisDays: '', chassisDaysIncluded: '', storagePerDay: '',
+  chassisFee: '', chassisSplitFee: '', minChassisDays: '', chassisDaysIncluded: '',
+  portCongestionFee: '', demurrageFee: '', storagePerDay: '',
   providedAt: null,  // Date Received — blank means "let the DB default to today" (drayageService)
   notes: '',
   forwarderId: null,
@@ -64,8 +66,11 @@ const DRAY_CSV_ALIASES = {
   cleanTruckFee: ['clean truck fee'],
   dropFee: ['drop fee'],
   chassisFee: ['chassis fee'],
+  chassisSplitFee: ['chassis split fee', 'chassis split'],
   minChassisDays: ['min chassis days'],
   chassisDaysIncluded: ['chassis days included'],
+  portCongestionFee: ['port congestion fee', 'port congestion'],
+  demurrageFee: ['demurrage fee', 'demurrage'],
   storagePerDay: ['storage fee (/day)', 'storage fee/day', 'storage fee'],
   providedAt: ['date received', 'date recieved'],
   notes: ['notes', 'remarks'],
@@ -106,8 +111,11 @@ export const makeDrayRowFromCsv = (cells, headerIndex) => {
     cleanTruckFee: val('cleanTruckFee'),
     dropFee: val('dropFee'),
     chassisFee: val('chassisFee'),
+    chassisSplitFee: val('chassisSplitFee'),
     minChassisDays: val('minChassisDays'),
     chassisDaysIncluded: val('chassisDaysIncluded'),
+    portCongestionFee: val('portCongestionFee'),
+    demurrageFee: val('demurrageFee'),
     storagePerDay: val('storagePerDay'),
     providedAt: received && !isNaN(received.getTime()) ? received : null,
     notes: val('notes'),
@@ -163,11 +171,14 @@ export function drayColumns({ renderActions, extraLeading = [] }) {
     numCol('tollFee', 'Toll', 70),
     numCol('prePullFee', 'Pre-pull', 78),
     numCol('pierPassFee', 'Pier Pass', 82),
+    numCol('portCongestionFee', 'Port Congestion', 108),
     numCol('cleanTruckFee', 'Clean Truck', 92),
     numCol('dropFee', 'Drop', 68),
     numCol('chassisFee', 'Chassis', 78),
+    numCol('chassisSplitFee', 'Chassis Split', 96),
     numCol('minChassisDays', 'Min Ch. Days', 96),
     numCol('chassisDaysIncluded', 'Ch. Days Incl', 96),
+    numCol('demurrageFee', 'Demurrage', 88),
     numCol('storagePerDay', 'Storage/Day', 94),
     {
       field: 'providedAt', headerName: 'Date Received', width: 108, editable: true, type: 'date',

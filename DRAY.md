@@ -341,11 +341,14 @@ request-less proactive submission, **(d)** dynamic fuel-surcharge / total math d
 | Toll Fee | `toll_fee` | numeric null | accessorial — **not** in total |
 | Pre-pull Fee | `pre_pull_fee` | numeric null | accessorial |
 | Pier Pass Fee | `pier_pass_fee` | numeric null | accessorial |
+| Port Congestion Fee | `port_congestion_fee` | numeric(12,2) null | accessorial |
 | Clean Truck Fee | `clean_truck_fee` | numeric null | accessorial |
 | Drop Fee | `drop_fee` | numeric null | accessorial |
 | Chassis Fee | `chassis_fee` | numeric null | accessorial |
+| Chassis Split Fee | `chassis_split_fee` | numeric(12,2) null | accessorial — extra cost when the chassis must be picked up separately from the container |
 | Min Chassis Days | `min_chassis_days` | int null | |
 | Chassis Days Included | `chassis_days_included` | int null | |
+| Demurrage | `demurrage_fee` | numeric(12,2) null | accessorial — flat fee (not per-day) |
 | Storage Fee (/Day) | `storage_fee_per_day` | numeric(12,2) null | per-day storage rate (the `"/Day"` lives in the label, value is a plain amount) |
 | Date Received | `provided_at` | date | staleness anchor (§6b); default `current_date` |
 | Notes | `notes` | text null | free-form context the forwarder may add about the rate |

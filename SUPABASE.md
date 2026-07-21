@@ -176,7 +176,7 @@ No `period`: a refresh request is a **new lane row**, so uniqueness stays per-la
 | **fuel_surcharge_amount** | numeric(12,2) *generated* | nominal wins, else rate×pct, else 0 |
 | **fuel_surcharge_pct_eff** | numeric(6,4) *generated* | pct wins, else $/rate (guard rate>0), else 0 |
 | **total_rate** | numeric(12,2) *generated* | rate + resolved surcharge (accessorials excluded) |
-| toll_fee · pre_pull_fee · pier_pass_fee · clean_truck_fee · drop_fee · chassis_fee | numeric(12,2) | accessorials — reference only, not in total |
+| toll_fee · pre_pull_fee · pier_pass_fee · port_congestion_fee · clean_truck_fee · drop_fee · chassis_fee · chassis_split_fee · demurrage_fee | numeric(12,2) | accessorials — reference only, not in total (step: added port_congestion_fee/chassis_split_fee/demurrage_fee, Jul 2026) |
 | min_chassis_days · chassis_days_included | integer | |
 | storage_fee_per_day | numeric(12,2) | per-day storage (label "Storage Fee (/Day)") |
 | provided_at | date default current_date | Date Received — staleness anchor (§6b) |
@@ -260,3 +260,4 @@ service-agnostic (DRAY.md §7c: notification targeting never restricts access).
 | Jul 10, 2026 | rates.contract (migration `20260710120000`) |
 | Jul 17, 2026 | **Step 1:** forwarder_services (+ocean backfill, RLS) · profiles.receives_drayage_requests · batches/notifications.service · notification_recipients.analyst_id · get_service_directory + get_recipients_by_analyst |
 | Jul 17, 2026 | **Step 4:** drayage_request_lanes / drayage_submissions / drayage_rates (+ generated columns, current-rate unique index, RLS) — SQL in DRAY.md §9b step 4 walkthrough |
+| Jul 21, 2026 | drayage_rates: + port_congestion_fee, chassis_split_fee, demurrage_fee (accessorials, reference-only) |
