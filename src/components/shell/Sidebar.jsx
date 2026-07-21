@@ -12,6 +12,7 @@ import {
   Upload,
   Route,
   Container,
+  TrendingUp,
 } from 'lucide-react'
 import { useAuth } from '../../app/providers/AuthProvider'
 import { ROLES, ROLE_LABELS } from '../../lib/roles'
@@ -114,7 +115,10 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
   // they sit ungrouped, right under Dashboard (DRAY.md §3a "shared, ungrouped" slot).
   const topLevel = isForwarder
     ? []
-    : [{ label: 'Bookings', icon: Container, to: '/internal/bookings' }]
+    : [
+        { label: 'Bookings', icon: Container, to: '/internal/bookings' },
+        { label: 'Analytics', icon: TrendingUp, to: '/internal/analytics' },
+      ]
 
   // One stacked section per accessible service (order = serviceConfig order)
   const groups = services

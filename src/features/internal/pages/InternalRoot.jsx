@@ -12,6 +12,8 @@ const ReceivedRates = lazy(() => import('./ReceivedRates'))
 const UploadRates = lazy(() => import('./UploadRates'))
 const ApplyRates = lazy(() => import('./ApplyRates'))
 const Bookings = lazy(() => import('./Bookings'))
+const AnalyticsHub = lazy(() => import('./AnalyticsHub'))
+const DrayageAnalytics = lazy(() => import('./DrayageAnalytics'))
 const DrayageNewRequest = lazy(() => import('../../drayage/pages/DrayageNewRequest'))
 const DrayageOpenRequests = lazy(() => import('../../drayage/pages/DrayageOpenRequests'))
 const DrayageReceivedRates = lazy(() => import('../../drayage/pages/DrayageReceivedRates'))
@@ -101,6 +103,10 @@ export default function InternalRoot() {
 
       {/* Bookings is cross-service (ocean + drayage), so it sits outside both service groups */}
       <Route path="bookings" element={<Lazy><Bookings /></Lazy>} />
+
+      {/* Analytics hub (cross-service) → per-service pages. Ocean deferred (DRAYAGE_ANALYTICS.md) */}
+      <Route path="analytics" element={<Lazy><AnalyticsHub /></Lazy>} />
+      <Route path="analytics/drayage" element={<Lazy><DrayageAnalytics /></Lazy>} />
 
       {/* Legacy flat paths → ocean (pre-service bookmarks keep working) */}
       <Route path="new" element={<Navigate to="/internal/ocean/new" replace />} />

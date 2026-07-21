@@ -194,6 +194,13 @@ rates.{submission_id → subs, lane_id → lanes} · lanes.refresh_of → rates 
 rates, so the FK is added after both tables exist) · both forwarder_id → forwarders,
 provider_id → auth.users.
 
+### `drayage_rate_benchmarks` — analytics (DRAYAGE_ANALYTICS.md Layer 1)
+One immutable row per `drayage_rates.id`: `rate_id` (PK → drayage_rates.id) · distance_m · duration_s
+· cost_per_mile · cost_per_hour · computed_at. Written by the Drayage Analytics page (compute-once,
+write-through) as a `$/mile`/`$/hour` **cache** and as Layer 2's accruing **history**. RLS: internal
+read + insert only; **no update/delete** (immutable); forwarders no access (should-cost, never
+forwarder-facing). Join: rate_id → drayage_rates.id.
+
 ---
 
 ## 5. Notifications (audit = prefill memory)
@@ -261,3 +268,4 @@ service-agnostic (DRAY.md §7c: notification targeting never restricts access).
 | Jul 17, 2026 | **Step 1:** forwarder_services (+ocean backfill, RLS) · profiles.receives_drayage_requests · batches/notifications.service · notification_recipients.analyst_id · get_service_directory + get_recipients_by_analyst |
 | Jul 17, 2026 | **Step 4:** drayage_request_lanes / drayage_submissions / drayage_rates (+ generated columns, current-rate unique index, RLS) — SQL in DRAY.md §9b step 4 walkthrough |
 | Jul 21, 2026 | drayage_rates: + port_congestion_fee, chassis_split_fee, demurrage_fee (accessorials, reference-only) |
+| Jul 21, 2026 | drayage_rate_benchmarks (analytics Layer 1; internal read/insert RLS, immutable) |

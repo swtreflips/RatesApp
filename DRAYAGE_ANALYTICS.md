@@ -1,6 +1,12 @@
 # DRAYAGE_ANALYTICS.md — Drayage Rate Benchmarking & Negotiation Insight (Internal-Only)
 
-**Status:** Design doc. **Not implemented, not scheduled.**
+**Status:** **Layer 1 implemented** (July 2026) — `features/internal/pages/DrayageAnalytics.jsx` +
+`analytics/{compute,routeLanes}.js` + `services/benchmarksService.js`, under an **Analytics hub**
+(`/internal/analytics` → Drayage/Ocean cards; Ocean deferred). On page load: current rates + existing
+benchmarks are read, un-benchmarked rates are routed in **one batched `routeBatch` call** and their
+`$/mile`/`$/hour` **written through** to `drayage_rate_benchmarks` (§5), then shown as the per-lane
+spread (§4). **Layer 2 (trend) not built** — the write-through is its groundwork. Batch cadence (§8)
+resolved for L1: **on-demand at page load, persisted cache** (only new/superseding rates hit geo).
 **Purpose:** benchmark drayage rates against their real HERE-routed distance/time, producing
 `$/mile` / `$/hour` figures — primarily so an internal user can compare **every forwarder currently
 quoting a lane, today**, and negotiate from real numbers instead of a hunch. Trend-over-time is a
@@ -132,6 +138,7 @@ already-collected data by the time anyone gets around to building it. This is th
 "groundwork so implementing it's easy" the whole feature was asked for.
 
 ```sql
+-- AS DEPLOYED (Layer 1): + RLS (internal read/insert; no update/delete = immutable; forwarders none)
 create table drayage_rate_benchmarks (
   rate_id        uuid primary key references drayage_rates(id),
   distance_m     numeric not null,
@@ -155,19 +162,17 @@ create table drayage_rate_benchmarks (
 
 ---
 
-## 6. UI placement — Layer 1 (open, not decided)
+## 6. UI placement — DECIDED: dedicated page under an Analytics hub
 
-Two candidate homes for the cross-sectional "today" view — no trend/chart requirement, since that's
-explicitly Layer 2:
-
-- **(a) Extend the existing internal Drayage Rates page** (`DrayageReceivedRates.jsx`) with a
-  `$/mile`/`$/hour` column and a per-lane spread indicator, reusing its existing current/history
-  toggle. Cheaper — no new menu item, no new dependency, and a spread indicator is just a sortable
-  column, not a chart. **Likely the right first move** given Layer 1 is fundamentally "add a
-  computed comparison to a page that already lists the same rows."
-- **(b) A dedicated "Drayage Analytics" page/menu item** — worth revisiting once Layer 2 (trend) is
-  actually being built, since that's the point where a chart/trend-line component would first earn
-  its place; not a reason to hold off on Layer 1's much smaller (a).
+**Chosen (user, July 2026):** a single cross-service **Analytics** sidebar item (ungrouped, like
+Bookings/Dashboard — belongs to neither service group) landing on a **hub** (`/internal/analytics`)
+with a card per service — **Drayage** (live) and **Ocean** (coming-soon). Drayage opens
+`/internal/analytics/drayage`, the Layer 1 per-lane spread. This **supersedes the doc's earlier lean
+toward option (a)** (extend `DrayageReceivedRates`): the app already established the "ungrouped
+cross-service page" pattern with Bookings, one Analytics menu that fans out per service scales to
+Ocean cleanly, and a dedicated page gives Layer 2's eventual trend chart a home without recrowding
+the rates list. The rejected alternative (a) — a `$/mile` column bolted onto the Drayage Rates page —
+would have mixed a benchmarking surface into an operational list and had nowhere to grow.
 
 ---
 
