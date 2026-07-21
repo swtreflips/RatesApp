@@ -59,16 +59,18 @@ is currently selected** — that's the dynamic behavior the feature is built aro
 
 ## 2. Data model
 
-### 2a. Ocean side — read from the OFQ file, no DB query
+### 2a. Ocean side — read from the uploaded file, never the DB
 
-Reuses the exact AIS "rates input" file shape Apply Rates already parses (`ratesInput.csv` — headers
-confirmed identical across the working scratch files in the repo). One row per OFQ (`OFQID`); rows
-carrying an **`OFRID`** mark a rate *already applied* to that OFQ.
+**Locked: ocean data comes ONLY from the uploaded file** — the AIS **"OFR universe" export**
+(`OFRUniverseExample.csv`, the committed structural reference: the universe of OFQs and of the OFRs
+applied to them). The `rates` table is never queried here; drayage (§2b) is the only DB side.
+
+One row per **OFR**, grouped by `OFQID`; rows carrying an **`OFRID`** are the applied ocean rates.
 
 ```js
 Ofq = {
-  ofqId, pol, fd,                    // from the OFQ's own columns
-  containerType, containerCount,     // present in the file, unused by Apply Rates — surfaced here
+  ofqId, pol, fd, cargoReadyDate,    // from the OFQ's own columns
+  containerType, containerCount,     // informational (not in the total)
   oceanOptions: OceanOption[],       // one per OFRID row
 }
 
@@ -78,16 +80,15 @@ OceanOption = {
 }
 ```
 
-Apply Rates' `groupByOfq()` only keeps a **hashed dedup key** per OFRID row (`appliedKeys`, a
-`Set<string>`) — enough to skip re-applying duplicates, not enough to *display* the option. Bookings
-needs the full row. Rather than change `applyRates/inputCsv.js` (used by a shipping tool, keep it
-alone), Bookings gets its **own** grouping function that keeps every field, reusing only the header
-detection:
-
-```js
-import { buildApplyHeaderIndex } from '../applyRates/inputCsv'   // reused, unchanged
-// new: groupByOfqWithOptions(dataRows, index) → Ofq[]           // keeps full OceanOption objects
-```
+**Parsing quirk that shaped the code** (`bookings/inputCsv.js`): the universe export's header has
+**two column blocks** — an OFQ-side block that *also* contains `Rate/Unit` / `Port of Discharge` /
+`Last CY/CFS` / `Carrier` (all blank in the export), then the OFR block with the real values. A
+first-occurrence `headers.indexOf(...)` (Apply Rates' approach — fine for its simpler input shape)
+binds to the empty first block, which surfaced in v1.1 as "OFRs with no rate." Bookings therefore
+has its **own block-aware header index**: every OFR-block column is resolved **at/after the OFRID
+column's position** (`idxFrom(headers, name, ofrIdIdx)`); OFQ-side columns stay first-occurrence.
+The simpler `ratesInput.csv` shape parses identically under the same rule (its OFRID precedes those
+columns anyway). Verified against both real files (22-check parse test on the committed examples).
 
 ### 2b. Drayage side — a direct, real lookup
 
