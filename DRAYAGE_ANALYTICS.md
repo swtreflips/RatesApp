@@ -59,9 +59,78 @@ layer **on top of** Layer 1, not a rival design. It needs superseded-row history
 once Layer 1 has been running (and persisting, §5) for a while. **Layer 2 is not designed here in
 detail** — it's named so Layer 1 is built in a way that doesn't foreclose it (§5), not built.
 
-Everything below (§3–§6) describes Layer 1. Layer 2 gets one short mention (§4) and nothing else —
+Everything below (§2a–§6) describes Layer 1. Layer 2 gets one short mention (§4) and nothing else —
 building it is a separate, later effort once Layer 1's own persistence has quietly accumulated
 enough history to make it worthwhile.
+
+### 2a. Flow — data → processing → insight (as built)
+
+```
+ DATA SOURCES                    PROCESSING (on page load)                     INSIGHT
+════════════                    ══════════════════════════                    ═══════
+
+┌───────────────────┐
+│ Supabase          │  read current rates ─────┐
+│ drayage_rates     │  fetchDrayageRates        │
+│ (status='current')│  {scope:'current'}        │
+│  forwarder,       │                           ▼
+│  last_cy_cfs,     │                    ┌──────────────┐
+│  final_destination│                    │  DIFF        │  which current rates
+│  total_rate       │                    │  rates that  │  don't have a
+└───────────────────┘                    │  lack a      │  benchmark yet?
+                                          │  benchmark   │
+┌───────────────────┐  read cache ──────▶│              │
+│ Supabase          │  fetchBenchmarks    └──────┬───────┘
+│ drayage_rate_     │                            │ gaps only
+│ benchmarks (cache)│                            ▼
+│  rate_id →        │                    ┌──────────────┐
+│  distance_m,      │                    │ dedupeLanes  │  N rates → M unique
+│  duration_s,      │                    │ norm(lastCy, │  (lastCy → fd) lanes
+│  $/mile, $/hour   │◀─── write-through ─┐│  fd) key     │
+└───────────────────┘   insertBenchmarks ││└──────┬───────┘
+        ▲               (immutable,      ││       │ M unique lanes
+        │                compute-once)   ││       ▼
+        │                                ││┌──────────────┐   ONE batched POST
+        │                                │││ routeLanes   │──────────────┐
+        │                                │││ routeBatch   │              ▼
+        │                                │││              │      ┌─────────────────┐
+        │                                │││              │◀─────│  THE BRAIN      │
+        │                                ││└──────┬───────┘ dist,│  geoapi-next    │
+        │                                ││       │ route │ time │  /api/route-    │
+        │                                ││       ▼       └──────│   batch         │
+        │                                ││┌──────────────┐      │   ↓ HERE truck  │
+        └── benchmarks now in memory ────┘││ benchmarkOf  │      │     routing     │
+                                          ││ total_rate ÷ │      │   ↓ lane cache  │
+                                          ││   miles →$/mi│      │     (server)    │
+                                          ││ total_rate ÷ │      └─────────────────┘
+                                          ││   hours →$/hr│
+                                          │└──────┬───────┘
+                                          │       │ per-rate benchmark
+                                          │       ▼
+                                          │┌──────────────┐        ┌────────────────────────┐
+                                          └│ groupByLane  │───────▶│  PER-LANE SPREAD        │
+                                           │ merge rates  │        │                         │
+                                           │ + benchmarks │        │ Louisville → Seymour    │
+                                           │ min/max/avg  │        │  ≈ 62 mi · 1h05m        │
+                                           │ sort $/mi ↑  │        │  Fwd C $826  $13.29/mi ★│
+                                           └──────────────┘        │  Fwd A $901  $14.50 +9%│
+                                                                   │  Fwd B $910  $14.65 +10%│
+                                                                   │  spread $13.29–14.65/mi │
+                                                                   └────────────────────────┘
+                                                                   multi-forwarder lanes first
+                                                                   (spread = the signal);
+                                                                   single-quote lanes muted
+```
+
+What the shape encodes:
+- **Two caches in series** — the app's `drayage_rate_benchmarks` (only *new* rates reach processing)
+  and the brain's server-side lane cache (only *never-routed* lanes reach HERE). A lane realistically
+  hits HERE **once, ever**, across Apply Rates + Analytics combined.
+- **The write-through loop** (the arrow back into the benchmarks table) does double duty: Layer 1's
+  cache *and* silently banking immutable history Layer 2 will read for free (§5).
+- **The join key is `norm(lastCy, fd)` everywhere** — the single point where a spelling drift between
+  a DB rate and what HERE can geocode splits one real lane in two or drops it into the error box.
+  The whole pipeline's honesty hinges on that one normalization (§3a).
 
 ---
 
