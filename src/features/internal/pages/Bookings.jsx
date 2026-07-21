@@ -30,6 +30,17 @@ const ACCEPTED_EXTS = ['csv', 'xlsx', 'xls']
 
 /* ── small pieces ────────────────────────────────────────────────────────── */
 
+/** The ocean carrier behind a rate (HPL / CMA / ONE…) — THE differentiator between a
+    forwarder's multiple rates on one routing, so it gets a chip, not buried meta text. */
+function CarrierChip({ code }) {
+  if (!code) return null
+  return (
+    <span className="inline-flex shrink-0 items-center rounded bg-harbor-50 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-harbor-700 ring-1 ring-inset ring-harbor-100">
+      {code}
+    </span>
+  )
+}
+
 function CoverageChip({ count }) {
   if (count > 0) {
     return (
@@ -98,8 +109,9 @@ function ItineraryPanel({ ofq, ofr, ranked, selectedDrayageId, onSelectDrayage }
               <span className="inline-flex min-w-0 items-center gap-1.5">
                 <Ship size={14} className="shrink-0 text-sea-600" />
                 <span className="truncate text-xs font-semibold text-harbor-900">
-                  {ofr.forwarder || 'Ocean'}{ofr.carrier ? ` · ${ofr.carrier}` : ''}
+                  {ofr.forwarder || 'Ocean'}
                 </span>
+                <CarrierChip code={ofr.carrier} />
               </span>
               <span className="shrink-0 font-mono text-sm font-bold text-harbor-900">
                 {oceanRate == null ? '—' : money(oceanRate)}
@@ -490,9 +502,10 @@ export default function Bookings() {
                                         <span className="truncate text-sea-700">{ofr.lastCy || '—'}</span>
                                       </span>
                                       <span className="mt-0.5 truncate font-mono text-[10px] text-fog-500">
-                                        {ofr.forwarder || '—'}{ofr.carrier ? ` · ${ofr.carrier}` : ''}{ofr.validUntil ? ` · until ${ofr.validUntil}` : ''}
+                                        {ofr.forwarder || '—'}{ofr.validUntil ? ` · until ${ofr.validUntil}` : ''}
                                       </span>
                                     </span>
+                                    <CarrierChip code={ofr.carrier} />
                                     <CoverageChip count={drayCount} />
                                     <span className="w-20 shrink-0 text-right font-mono text-sm font-bold text-harbor-900">
                                       {toNum(ofr.rate) == null ? '—' : money(toNum(ofr.rate))}
