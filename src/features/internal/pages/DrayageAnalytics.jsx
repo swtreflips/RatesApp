@@ -25,12 +25,14 @@ import { routeLanes } from '../analytics/routeLanes'
 */
 
 const dollars = (v) => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-const miDrive = (m, s) => {
-  if (!(m > 0)) return '—'
-  const mi = Math.round(m / 1609.344)
+
+// Route totals for a lane (shared by every forwarder quoting it).
+const routeMiles = (m) => (m / 1609.344).toLocaleString(undefined, { maximumFractionDigits: 1 })
+const routeHours = (s) => (s / 3600).toLocaleString(undefined, { maximumFractionDigits: 1 })
+const routeHM = (s) => {
   const h = Math.floor(s / 3600)
   const min = Math.round((s % 3600) / 60)
-  return `≈ ${mi.toLocaleString()} mi · ${h ? `${h}h ` : ''}${min}m drive`
+  return h ? `${h}h ${String(min).padStart(2, '0')}m` : `${min}m`
 }
 
 /** Per-forwarder row within a lane. `pctOverMin` drives the "priciest" flag. */
@@ -253,10 +255,26 @@ function LaneCard({ lane, single }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-fog-100 bg-fog-50/50 px-4 py-2.5">
-        <div className="flex items-center gap-2">
-          <RouteIcon size={14} className="text-harbor-500" />
-          <span className="text-sm font-semibold text-harbor-900">{lane.label}</span>
-          <span className="font-mono text-[11px] text-fog-500">{miDrive(lane.distance_m, lane.duration_s)}</span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="flex items-center gap-2">
+            <RouteIcon size={14} className="text-harbor-500" />
+            <span className="text-sm font-semibold text-harbor-900">{lane.label}</span>
+          </span>
+          {lane.distance_m != null ? (
+            <span className="inline-flex items-center gap-3 font-mono text-[11px] text-fog-500">
+              <span>
+                <span className="uppercase tracking-[0.1em] text-fog-400">dist</span>{' '}
+                <span className="font-semibold text-harbor-700">{routeMiles(lane.distance_m)} mi</span>
+              </span>
+              <span>
+                <span className="uppercase tracking-[0.1em] text-fog-400">drive</span>{' '}
+                <span className="font-semibold text-harbor-700">{routeHours(lane.duration_s)} h</span>
+                <span className="text-fog-400"> · {routeHM(lane.duration_s)}</span>
+              </span>
+            </span>
+          ) : (
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-fog-400">route pending</span>
+          )}
         </div>
         {!single && lane.min != null && lane.max != null && (
           <span className="font-mono text-[11px] text-fog-500">
