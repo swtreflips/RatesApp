@@ -28,6 +28,21 @@ import { laneKey, toNum, indexDrayageByLane, grandTotal } from '../bookings/matc
 
 const ACCEPTED_EXTS = ['csv', 'xlsx', 'xls']
 
+/** 'M/D/YYYY' or 'YYYY-MM-DD' → sortable number; blank/unparseable sorts LAST.
+    Explicit formats only (string `Date.parse` on non-ISO dates is engine-defined). */
+const dateVal = (s) => {
+  const str = String(s ?? '').trim()
+  if (!str) return Infinity
+  let m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+  if (m) {
+    const year = m[3].length === 2 ? `20${m[3]}` : m[3]
+    return new Date(Number(year), Number(m[1]) - 1, Number(m[2])).getTime()
+  }
+  m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime()
+  return Infinity
+}
+
 /* ── small pieces ────────────────────────────────────────────────────────── */
 
 /** The ocean carrier behind a rate (HPL / CMA / ONE…) — THE differentiator between a
@@ -288,11 +303,13 @@ export default function Bookings() {
 
   /* ── derived ───────────────────────────────────────────────────────────── */
 
+  // Filtered by the search box, then Cargo Ready ASCENDING (soonest first; blanks last) —
+  // the working order: quotes that ship soonest need their delivery plan first.
   const filteredOfqs = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return ofqs
-    return ofqs.filter((o) =>
+    const base = !q ? ofqs : ofqs.filter((o) =>
       [o.ofqId, o.pol, o.fd].some((v) => String(v ?? '').toLowerCase().includes(q)))
+    return [...base].sort((a, b) => dateVal(a.cargoReadyDate) - dateVal(b.cargoReadyDate))
   }, [ofqs, query])
 
   const expandedOfq = useMemo(
@@ -309,10 +326,11 @@ export default function Bookings() {
     [drayByLane],
   )
 
-  /** Drayage options for (ofq, ofr), cheapest grand total first. */
+  /** Drayage options for (ofq, ofr), cheapest first by total_rate (base + fuel — the §6d
+      "price"; for a fixed ocean selection this is the same ordering as grand total). */
   const rankFor = useCallback((ofq, ofr) => {
     const rows = drayageFor(ofq, ofr)
-    const keyOf = (d) => grandTotal(ofr.rate, d) ?? toNum(d.total_rate) ?? Infinity
+    const keyOf = (d) => toNum(d.total_rate) ?? Infinity
     return [...rows].sort((a, b) => keyOf(a) - keyOf(b))
   }, [drayageFor])
 
@@ -450,6 +468,10 @@ export default function Bookings() {
                   {filteredOfqs.map((ofq) => {
                     const isOpen = ofq.ofqId === expandedOfqId
                     const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
+                    // ocean rates cheapest-first (rate ascending; rate-less options last)
+                    const sortedOfrs = isOpen
+                      ? [...ofq.oceanOptions].sort((a, b) => (toNum(a.rate) ?? Infinity) - (toNum(b.rate) ?? Infinity))
+                      : ofq.oceanOptions
                     return (
                       <div key={ofq.ofqId} className="border-b border-fog-100 last:border-0">
                         {/* OFQ row */}
@@ -478,7 +500,7 @@ export default function Bookings() {
                                 No ocean rate applied to this OFQ yet — apply one first, then plan the delivery here.
                               </p>
                             ) : (
-                              ofq.oceanOptions.map((ofr) => {
+                              sortedOfrs.map((ofr) => {
                                 const active = ofr.ofrId === selectedOfrId
                                 const drayCount = drayageFor(ofq, ofr).length
                                 return (
