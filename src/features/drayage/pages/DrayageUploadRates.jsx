@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
 import { Trash2, Copy, Plus, Upload, Send, Loader2 } from 'lucide-react'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast } from '../../rates/rateGrid'
+import { parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast, ForwarderGhostInput } from '../../rates/rateGrid'
 import {
   makeDrayEmptyRow, makeDrayCopyRow, isDrayBlankRow,
   buildDrayHeaderIndex, makeDrayRowFromCsv, drayColumns,
@@ -10,12 +10,16 @@ import {
 import { submitDrayageRatesOnBehalf } from '../services/drayageService'
 import { fetchForwarders } from '../../internal/services/recordRatesService'
 
+const norm = (s) => String(s ?? '').trim().toLowerCase()
+
 /*
   Internal "Upload Drayage Rates" — record rates ON BEHALF of a forwarder (the returned
-  template lands with us, we key it in). Same columns as the forwarder grid plus the
-  Forwarder picker; every row must name its forwarder. Supersession applies exactly as if
-  the forwarder submitted it themselves (§6b): the company's live rate on that lane is
-  replaced by the uploaded one.
+  template lands with us, we key it in). Same columns as the forwarder grid plus a Forwarder
+  column: free-text with ghost-completion (mirrors ocean's Upload Rates), so a CSV/ERP export
+  that already names the forwarder per row pre-fills it — no forced per-row manual re-pick.
+  The typed name is resolved to a forwarder id at submit; unknown names are rejected there.
+  Supersession applies exactly as if the forwarder submitted it themselves (§6b): the company's
+  live rate on that lane is replaced by the uploaded one.
 */
 
 export default function DrayageUploadRates() {
@@ -24,9 +28,13 @@ export default function DrayageUploadRates() {
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast] = useState(null)
   const fileInputRef = useRef(null)
+  const nameToIdRef = useRef(new Map()) // forwarder name (lower) → id
 
   useEffect(() => {
-    fetchForwarders().then(({ forwarders }) => setForwarders(forwarders))
+    fetchForwarders().then(({ forwarders }) => {
+      setForwarders(forwarders)
+      nameToIdRef.current = new Map(forwarders.map((f) => [norm(f.name), f.id]))
+    })
   }, [])
 
   useEffect(() => {
@@ -55,16 +63,13 @@ export default function DrayageUploadRates() {
   })
 
   const forwarderCol = {
-    field: 'forwarderId',
+    field: 'forwarderName',
     headerName: 'Forwarder',
-    width: 170,
+    width: 180,
     editable: true,
-    type: 'singleSelect',
-    valueOptions: forwarders.map((f) => ({ value: f.id, label: f.name })),
-    renderCell: (params) => {
-      const f = forwarders.find((x) => x.id === params.value)
-      return f ? f.name : <span className="text-red-400">pick…</span>
-    },
+    // free-text with inline ghost completion; resolved to an id at submit
+    renderCell: (params) => params.value ?? '',
+    renderEditCell: (params) => <ForwarderGhostInput {...params} forwarders={forwarders} />,
   }
 
   const columns = drayColumns({
@@ -112,7 +117,8 @@ export default function DrayageUploadRates() {
           return
         }
         setRows((prev) => [...prev.filter((r) => !isDrayBlankRow(r)), ...parsed])
-        showToast('success', `Loaded ${parsed.length} rate(s) — assign the forwarder per row`)
+        const named = parsed.filter((r) => r.forwarderName).length
+        showToast('success', `Loaded ${parsed.length} rate(s) — ${named} with a forwarder from the file`)
       },
       error() {
         showToast('error', 'Failed to read file')
@@ -124,19 +130,24 @@ export default function DrayageUploadRates() {
   /* ── submit ──────────────────────────────────────────────────────────── */
 
   const filledRows = rows.filter((r) => r.rate !== '' && r.rate != null)
-  const missingForwarder = filledRows.some((r) => !r.forwarderId)
 
   const handleSubmit = async () => {
     if (filledRows.length === 0) {
       showToast('warning', 'Fill in at least one Rate before submitting')
       return
     }
-    if (missingForwarder) {
-      showToast('warning', 'Pick a forwarder for every filled row')
+    // resolve each row's typed forwarder name → id; only known forwarders are accepted
+    const resolved = filledRows.map((r) => ({
+      ...r,
+      forwarderId: r.forwarderName ? (nameToIdRef.current.get(norm(r.forwarderName)) ?? null) : null,
+    }))
+    const unknown = [...new Set(resolved.filter((r) => !r.forwarderId).map((r) => r.forwarderName || '(blank)'))]
+    if (unknown.length > 0) {
+      showToast('warning', `Unknown forwarder(s): ${unknown.join(', ')}`)
       return
     }
     setSubmitting(true)
-    const { error, count } = await submitDrayageRatesOnBehalf(filledRows)
+    const { error, count } = await submitDrayageRatesOnBehalf(resolved)
     setSubmitting(false)
     if (error) {
       showToast('error', `Submit failed: ${error.message}`)
@@ -151,7 +162,7 @@ export default function DrayageUploadRates() {
       <PageHeader
         kicker="Internal · Drayage"
         title="Upload Drayage Rates"
-        subtitle="Record drayage rates a forwarder sent back outside the app. Pick the forwarder per row — their live rate on the same lane is superseded by what you record."
+        subtitle="Record drayage rates a forwarder sent back outside the app. The forwarder can come from the file (Forwarder/Carrier column) or be typed per row — their live rate on the same lane is superseded by what you record."
         actions={
           <span className="inline-flex items-center gap-2 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
             <span className="font-mono text-lg font-semibold leading-none text-harbor-900">{filledRows.length}</span>

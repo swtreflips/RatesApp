@@ -133,6 +133,55 @@ export function CarrierGhostInput({ id, field, value }) {
   )
 }
 
+/* ── forwarder ghost-completion edit cell ──────────────────────────────────
+   Shared by both internal "Upload Rates" pages (ocean + drayage): a plain text input (accepts
+   ANY value) that, once ≥ minChars are typed, shows the best prefix match over `forwarders` as
+   faint inline "ghost" text; Tab / → accepts it. The cell stores the typed NAME — resolved to a
+   forwarder id at submit time by the page (unknown names are rejected there, not here). No
+   dropdown, no arrow — this is what lets a CSV's own Forwarder/Carrier column pre-fill the row
+   instead of forcing a per-row manual re-pick. */
+const FORWARDER_MIN_CHARS = 3
+
+export function ForwarderGhostInput({ id, field, value, forwarders }) {
+  const apiRef = useGridApiContext()
+  const inputRef = useRef(null)
+  const text = value ?? ''
+
+  const suggestion = text.trim().length >= FORWARDER_MIN_CHARS
+    ? (forwarders.find((f) => f.name.toLowerCase().startsWith(text.toLowerCase()))?.name ?? '')
+    : ''
+  const ghost = suggestion.length > text.length ? suggestion.slice(text.length) : ''
+
+  const setValue = (v) => apiRef.current.setEditCellValue({ id, field, value: v })
+
+  const onKeyDown = (e) => {
+    if (!ghost) return
+    const atEnd = inputRef.current && inputRef.current.selectionStart === text.length
+    if (e.key === 'Tab' || (e.key === 'ArrowRight' && atEnd)) {
+      e.preventDefault()
+      setValue(suggestion)
+    }
+  }
+
+  return (
+    <div className="relative flex h-full w-full items-center px-2">
+      {/* ghost overlay: invisible typed text reserves width, then the faint completion */}
+      <div className="pointer-events-none absolute inset-0 flex items-center px-2 font-sans text-[0.8rem]">
+        <span className="invisible whitespace-pre">{text}</span>
+        <span className="whitespace-pre text-fog-400">{ghost}</span>
+      </div>
+      <input
+        ref={inputRef}
+        autoFocus
+        className="relative z-10 h-full w-full border-0 bg-transparent p-0 font-sans text-[0.8rem] text-harbor-900 outline-none"
+        value={text}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={onKeyDown}
+      />
+    </div>
+  )
+}
+
 /* ── predictive (Google-style) edit cell ───────────────────────────────────
    A DataGrid edit cell that shows a dropdown of matching suggestions once `minChars` are typed
    (default 3), prefix matches first then substring, capped at 8. `freeSolo` keeps typed values

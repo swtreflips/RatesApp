@@ -1,5 +1,5 @@
 import React from 'react'
-import { AutocompleteEditCell } from '../rates/rateGrid'
+import { AutocompleteEditCell, ForwarderGhostInput } from '../rates/rateGrid'
 import { LAST_CY_OPTIONS } from '../rates/locationOptions'
 
 /*
@@ -8,9 +8,10 @@ import { LAST_CY_OPTIONS } from '../rates/locationOptions'
   the internal Upload page (which adds a Forwarder picker column).
 
   Row shape (client-side field names → DB columns via drayageService.buildRate):
-    origin (Last CY/CFS) · destination (Final Destination) · zip · rate · fuelPct · fuelAmount ·
-    tollFee · prePullFee · pierPassFee · cleanTruckFee · dropFee · chassisFee · chassisSplitFee ·
-    minChassisDays · chassisDaysIncluded · portCongestionFee · demurrageFee · storagePerDay ·
+    forwarderName (internal Upload only; resolved to an id at submit) · origin (Last CY/CFS) ·
+    destination (Final Destination) · zip · rate · fuelPct · fuelAmount · tollFee · prePullFee ·
+    pierPassFee · cleanTruckFee · dropFee · chassisFee · chassisSplitFee · minChassisDays ·
+    chassisDaysIncluded · portCongestionFee · demurrageFee · storagePerDay ·
     notes (+ laneId when answering a request).
 */
 
@@ -27,7 +28,7 @@ export const makeDrayEmptyRow = () => ({
   portCongestionFee: '', demurrageFee: '', storagePerDay: '',
   providedAt: null,  // Date Received — blank means "let the DB default to today" (drayageService)
   notes: '',
-  forwarderId: null,
+  forwarderName: '', // internal "Upload Drayage Rates" only; resolved to an id at submit
 })
 
 /** Seed a grid row from an open request lane — the lane's routing is the guide. */
@@ -54,6 +55,7 @@ export const isDrayBlankRow = (r) =>
 /* ── CSV / XLSX header map (drayTemplate.csv §6a) ────────────────────── */
 
 const DRAY_CSV_ALIASES = {
+  forwarderName: ['forwarder', 'forwarder/carrier', 'forwarder name', 'carrier'],
   origin: ['last cy/cfs', 'last cy', 'origin'],
   destination: ['final destination', 'destination'],
   zip: ['zip code', 'zip'],
@@ -99,6 +101,7 @@ export const makeDrayRowFromCsv = (cells, headerIndex) => {
   const received = receivedRaw ? new Date(receivedRaw) : null
   return {
     ...makeDrayEmptyRow(),
+    forwarderName: val('forwarderName'),
     origin: val('origin'),
     destination: val('destination'),
     zip: val('zip'),

@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { DataGrid, useGridApiContext } from '@mui/x-data-grid'
+import { DataGrid } from '@mui/x-data-grid'
 import { Trash2, Copy, Plus, Upload, Send, Loader2 } from 'lucide-react'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchOpenRequests } from '../services/rateRequestService'
 import { fetchForwarders, submitRatesOnBehalf } from '../services/recordRatesService'
 import {
-  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, AutocompleteEditCell,
+  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, ForwarderGhostInput, AutocompleteEditCell,
   buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
   CONTAINER_TYPE_OPTIONS,
 } from '../../rates/rateGrid'
@@ -29,53 +29,6 @@ import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS, FINAL_DESTINATIO
 */
 
 const norm = (s) => String(s ?? '').trim().toLowerCase()
-
-// Inline ghost completion appears only after this many typed characters.
-const FORWARDER_MIN_CHARS = 3
-
-/* DataGrid edit cell for the Forwarder column. A plain text input (accepts ANY value) that, once
-   ≥ FORWARDER_MIN_CHARS are typed, shows the best prefix match as faint inline "ghost" text;
-   Tab / → accepts it. The cell stores the typed NAME; it's resolved to a forwarder id at submit
-   (unknown names are rejected there). No dropdown, no arrow. */
-function ForwarderGhostInput({ id, field, value, forwarders }) {
-  const apiRef = useGridApiContext()
-  const inputRef = useRef(null)
-  const text = value ?? ''
-
-  const suggestion = text.trim().length >= FORWARDER_MIN_CHARS
-    ? (forwarders.find((f) => f.name.toLowerCase().startsWith(text.toLowerCase()))?.name ?? '')
-    : ''
-  const ghost = suggestion.length > text.length ? suggestion.slice(text.length) : ''
-
-  const setValue = (v) => apiRef.current.setEditCellValue({ id, field, value: v })
-
-  const onKeyDown = (e) => {
-    if (!ghost) return
-    const atEnd = inputRef.current && inputRef.current.selectionStart === text.length
-    if (e.key === 'Tab' || (e.key === 'ArrowRight' && atEnd)) {
-      e.preventDefault()
-      setValue(suggestion)
-    }
-  }
-
-  return (
-    <div className="relative flex h-full w-full items-center px-2">
-      {/* ghost overlay: invisible typed text reserves width, then the faint completion */}
-      <div className="pointer-events-none absolute inset-0 flex items-center px-2 font-sans text-[0.8rem]">
-        <span className="invisible whitespace-pre">{text}</span>
-        <span className="whitespace-pre text-fog-400">{ghost}</span>
-      </div>
-      <input
-        ref={inputRef}
-        autoFocus
-        className="relative z-10 h-full w-full border-0 bg-transparent p-0 font-sans text-[0.8rem] text-harbor-900 outline-none"
-        value={text}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={onKeyDown}
-      />
-    </div>
-  )
-}
 
 export default function UploadRates() {
   const [rows, setRows] = useState([])
