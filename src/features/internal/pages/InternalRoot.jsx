@@ -11,6 +11,7 @@ const OpenRequests = lazy(() => import('./OpenRequests'))
 const ReceivedRates = lazy(() => import('./ReceivedRates'))
 const UploadRates = lazy(() => import('./UploadRates'))
 const ApplyRates = lazy(() => import('./ApplyRates'))
+const Bookings = lazy(() => import('./Bookings'))
 const DrayageNewRequest = lazy(() => import('../../drayage/pages/DrayageNewRequest'))
 const DrayageOpenRequests = lazy(() => import('../../drayage/pages/DrayageOpenRequests'))
 const DrayageReceivedRates = lazy(() => import('../../drayage/pages/DrayageReceivedRates'))
@@ -97,6 +98,9 @@ export default function InternalRoot() {
 
       {/* Apply Rates is an ocean-specific tool (DRAY.md §3a) — stays unparameterized */}
       <Route path="apply" element={<Lazy><ApplyRates /></Lazy>} />
+
+      {/* Bookings is cross-service (ocean + drayage), so it sits outside both service groups */}
+      <Route path="bookings" element={<Lazy><Bookings /></Lazy>} />
 
       {/* Legacy flat paths → ocean (pre-service bookmarks keep working) */}
       <Route path="new" element={<Navigate to="/internal/ocean/new" replace />} />

@@ -5,7 +5,7 @@ import { Toast } from '../../rates/rateGrid'
 import {
   fetchMyDrayageRates, confirmDrayageRate, updateDrayageRate, stalenessOf, isInQuestion,
 } from '../services/drayageService'
-import { StalenessBadge } from '../drayageGrid'
+import { StalenessBadge, money, pct, fmtDate } from '../drayageGrid'
 
 /*
   Forwarder "Active Drayage Rates" — the company's CURRENT rates (§6b: open-ended, no
@@ -20,10 +20,6 @@ import { StalenessBadge } from '../drayageGrid'
     Confirm      → price still stands  → bumps confirmed_at (asks for the amount first)
     Update price → price changed       → supersedes with an edited copy (never an in-place edit)
 */
-
-const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-const pct = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(2)}%`)
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—')
 
 export default function DrayageActiveRates() {
   const [rates, setRates] = useState([])

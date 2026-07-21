@@ -3,7 +3,7 @@ import { Loader2, LineChart, RefreshCw, History, RotateCcw } from 'lucide-react'
 import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
 import { Toast } from '../../rates/rateGrid'
 import { fetchDrayageRates, requestDrayageRefresh, stalenessOf } from '../services/drayageService'
-import { StalenessBadge } from '../drayageGrid'
+import { StalenessBadge, money, pct, fmtDate } from '../drayageGrid'
 import { useAuth } from '../../../app/providers/AuthProvider'
 
 /*
@@ -12,10 +12,6 @@ import { useAuth } from '../../../app/providers/AuthProvider'
   "Refresh" posts a kind='refresh' request lane pointing at the rate (§6b) — the forwarder
   answers by re-confirming or submitting a replacement.
 */
-
-const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-const pct = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(2)}%`)
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—')
 
 export default function DrayageReceivedRates() {
   const { user } = useAuth()

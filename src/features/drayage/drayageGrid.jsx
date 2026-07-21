@@ -141,7 +141,11 @@ export function previewTotal(row) {
   return rate
 }
 
-const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+/* Shared display formatters — used by the drayage grid, both drayage rate pages, and Bookings.
+   Hoisted here (next to StalenessBadge) so there's one definition, not a copy per page. */
+export const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+export const pct = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(2)}%`)
+export const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—')
 
 const numCol = (field, headerName, width = 92) => ({
   field, headerName, width, editable: true, type: 'number', cellClassName: 'font-mono',

@@ -1,6 +1,12 @@
 # BOOKINGS.md — Landed-Cost Scenario Planner (Ocean + Drayage)
 
-**Status:** Design doc. **Not implemented, not scheduled.**
+**Status:** **v1 implemented** (July 2026) — `features/internal/pages/Bookings.jsx` +
+`features/internal/bookings/{inputCsv,matching}.js`, flat route `/internal/bookings`, ungrouped
+sidebar item below Dashboard. Shipped scope vs. this doc: **geo hint (§7) deferred**; ocean options
+with no drayage coverage are **shown + badged** "no drayage on file"; drayage coverage is fetched
+**once** and indexed client-side by normalized lane key (refinement over §2b's per-selection query —
+reuses `drayageService.fetchDrayageRates({ scope:'current' })`). No persistence, internal-only,
+single-selection — all per the doc.
 **Purpose:** given an OFQ (a real customer quote tracked in AIS) and the ocean rate(s) already
 applied to it, let an internal user explore which **real drayage rate** completes the door delivery
 for each ocean option, and compare the combined landed cost across combinations.

@@ -11,6 +11,7 @@ import {
   FileText,
   Upload,
   Route,
+  Container,
 } from 'lucide-react'
 import { useAuth } from '../../app/providers/AuthProvider'
 import { ROLES, ROLE_LABELS } from '../../lib/roles'
@@ -109,6 +110,12 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
     end: true,
   }
 
+  // Cross-service internal tools that belong to neither the Ocean nor Drayage group —
+  // they sit ungrouped, right under Dashboard (DRAY.md §3a "shared, ungrouped" slot).
+  const topLevel = isForwarder
+    ? []
+    : [{ label: 'Bookings', icon: Container, to: '/internal/bookings' }]
+
   // One stacked section per accessible service (order = serviceConfig order)
   const groups = services
     .filter((slug) => serviceConfig[slug])
@@ -167,6 +174,9 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
       {/* Nav: Dashboard, then one stacked section per service (§3a) */}
       <nav className="relative flex-1 overflow-y-auto scrollbar-rail px-2.5 py-3">
         <NavItem collapsed={!open} onClick={onNavClick} {...dashboard} />
+        {topLevel.map((item) => (
+          <NavItem key={item.to} collapsed={!open} onClick={onNavClick} {...item} />
+        ))}
         {groups.map((group) => (
           <div key={group.slug}>
             <GroupHeader label={group.label} collapsed={!open} />
