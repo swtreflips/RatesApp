@@ -59,11 +59,28 @@ is currently selected** — that's the dynamic behavior the feature is built aro
 
 ## 2. Data model
 
-### 2a. Ocean side — read from the uploaded file, never the DB
+### 2a. Ocean side — read from the OFR universe search, never the DB
 
-**Locked: ocean data comes ONLY from the uploaded file** — the AIS **"OFR universe" export**
-(`OFRUniverseExample.csv`, the committed structural reference: the universe of OFQs and of the OFRs
-applied to them). The `rates` table is never queried here; drayage (§2b) is the only DB side.
+**Locked: ocean data comes ONLY from the "OFR universe" input** — the `rates` table is never queried
+here; drayage (§2b) is the only DB side. Bookings is deliberately a **join across two systems of
+record**: NetSuite owns the ocean/OFQ side, Supabase owns the drayage side. Mirroring NetSuite data
+into Supabase would create a second, staler copy of something that already has an owner.
+
+**Provenance (matters for risk + roadmap):** the input is a **NetSuite saved search built
+specifically for this app** — not a generic export. The schema is **owner-controlled**: columns only
+change if we change the saved search, so header-drift is a deliberate act, not an external risk.
+`OFRUniverseExample.csv` is the committed structural reference of that search's output.
+
+- **MVP transport:** download the saved search result manually → drag-drop upload.
+- **Future transport:** the app fetches the *same saved search* via the NetSuite API. A saved search
+  can't be called from the browser (auth + CORS), so this goes through a small server-side
+  intermediary holding the NetSuite credentials — either a Supabase Edge Function (the
+  `notify-forwarders` pattern) or the geoapi-brain proxy pattern; the app receives clean JSON.
+  This also removes file-staleness entirely (every fetch is current).
+- **The parser is the designated swap point.** The pipeline is
+  `transport (CSV parse) → group (groupByOfqWithOptions) → match/display`; the API future replaces
+  only the transport step — structured rows feed the same grouping, and everything downstream
+  (matching, itinerary, totals) is untouched. The upload button becomes "Refresh from NetSuite."
 
 One row per **OFR**, grouped by `OFQID`; rows carrying an **`OFRID`** are the applied ocean rates.
 
@@ -80,9 +97,10 @@ OceanOption = {
 }
 ```
 
-**Parsing quirk that shaped the code** (`bookings/inputCsv.js`): the universe export's header has
+**Parsing quirk that shaped the code** (`bookings/inputCsv.js`): the saved search's output header has
 **two column blocks** — an OFQ-side block that *also* contains `Rate/Unit` / `Port of Discharge` /
-`Last CY/CFS` / `Carrier` (all blank in the export), then the OFR block with the real values. A
+`Last CY/CFS` / `Carrier` (all blank in the export — an artifact of how the search joins OFQ and OFR
+fields), then the OFR block with the real values. A
 first-occurrence `headers.indexOf(...)` (Apply Rates' approach — fine for its simpler input shape)
 binds to the empty first block, which surfaced in v1.1 as "OFRs with no rate." Bookings therefore
 has its **own block-aware header index**: every OFR-block column is resolved **at/after the OFRID
