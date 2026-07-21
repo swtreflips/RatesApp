@@ -11,26 +11,28 @@ import { norm } from './matching'
 
 const cell = (cells, i) => (i != null && i >= 0 ? String(cells[i] ?? '').trim() : '')
 
-// buildApplyHeaderIndex covers the shared columns but not container info — detect those here.
-function containerCols(headerCells) {
+// buildApplyHeaderIndex covers the shared columns but not container / cargo-ready info —
+// detect those here (they exist in the OFQ file; Apply Rates just never needed them).
+function extraCols(headerCells) {
   const headers = headerCells.map((h) => norm(h))
   return {
     containerType: headers.indexOf('container type'),
     containerCount: headers.indexOf('# of containers'),
+    cargoReadyDate: headers.indexOf('cargo ready date'),
   }
 }
 
-/** Reuses Apply Rates' index (+ its `missing` check on OFQID/POL/FD), plus container columns. */
+/** Reuses Apply Rates' index (+ its `missing` check on OFQID/POL/FD), plus the extra columns. */
 export function buildBookingsHeaderIndex(headerCells) {
   const { index, missing } = buildApplyHeaderIndex(headerCells)
-  return { index: { ...index, ...containerCols(headerCells) }, missing }
+  return { index: { ...index, ...extraCols(headerCells) }, missing }
 }
 
 /**
  * One Ofq per OFQID; each OFRID row (a rate already applied to that OFQ) becomes a selectable
  * OceanOption with its full identity. First row's POL/FD/container win.
  *
- * @returns {{ ofqId, pol, fd, containerType, containerCount, oceanOptions: OceanOption[] }[]}
+ * @returns {{ ofqId, pol, fd, cargoReadyDate, containerType, containerCount, oceanOptions: OceanOption[] }[]}
  */
 export function groupByOfqWithOptions(dataRows, index) {
   const map = new Map()
@@ -44,6 +46,7 @@ export function groupByOfqWithOptions(dataRows, index) {
         ofqId,
         pol: cell(cells, index.ofqPol),
         fd: cell(cells, index.fd),
+        cargoReadyDate: cell(cells, index.cargoReadyDate),
         containerType: cell(cells, index.containerType),
         containerCount: cell(cells, index.containerCount),
         oceanOptions: [],

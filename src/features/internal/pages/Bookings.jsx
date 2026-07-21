@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
-  Upload, Search, Ship, Truck, Container, ArrowRight, Loader2, Award,
-  PackageX, FileSpreadsheet, AlertTriangle,
+  Upload, Search, Ship, Truck, Container, ArrowRight, ChevronRight, Loader2, Award,
+  PackageX, FileSpreadsheet, AlertTriangle, CalendarDays,
 } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 import { parseRateFile, Toast } from '../../rates/rateGrid'
@@ -12,94 +12,180 @@ import { laneKey, toNum, indexDrayageByLane, grandTotal } from '../bookings/matc
 
 /*
   Internal "Bookings" — landed-cost scenario planner (BOOKINGS.md). Cross-service, so it lives
-  outside the ocean/drayage sidebar groups. Upload the OFQ file → pick an OFQ → its already-applied
-  ocean options are cards → selecting one reveals the REAL drayage rates on file for that Last CY →
-  the OFQ's Final Destination, ranked cheapest-first by grand total (ocean rate + drayage total_rate).
+  outside the ocean/drayage sidebar groups.
 
-  v1: no persistence, no geo hint (deferred), internal-only. Drayage coverage is fetched ONCE and
-  indexed by normalized lane key, so selecting an ocean option is instant + normalization is fully
-  under our control (matching.js).
+  Progressive disclosure, grid-first (the v2 layout — v1's picker+cards read as unintuitive):
+    1. a familiar GRID of OFQs (OFQID · POL · FD · Cargo Ready · containers · ocean-rate summary);
+    2. clicking an OFQ row EXPANDS it in place → its applied OFRs as indented sub-rows;
+    3. clicking an OFR opens the BOOKING ITINERARY panel on the right — a vertical route timeline
+       (POL → ocean leg → POD → Last CY → drayage leg → FD) where the drayage leg holds the
+       selectable options (cheapest preselected) and the landed total is the pinned hero numeral.
+
+  Drayage coverage is fetched ONCE and indexed by normalized lane key (matching.js), so every
+  OFR click is an O(1) lookup — no round-trip. v1 decisions unchanged: no persistence, no geo
+  hint yet, internal-only.
 */
 
 const ACCEPTED_EXTS = ['csv', 'xlsx', 'xls']
 
-/* ── ocean option card (routing chain, à la Apply Rates' RouteCell) ──────── */
+/* ── small pieces ────────────────────────────────────────────────────────── */
 
-function OceanOptionCard({ option, hasDrayage, selected, onSelect }) {
-  const rate = toNum(option.rate)
+function CoverageChip({ count }) {
+  if (count > 0) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded bg-sea-50 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-sea-700 ring-1 ring-inset ring-sea-200">
+        <Truck size={10} /> {count} drayage
+      </span>
+    )
+  }
   return (
-    <button
-      onClick={onSelect}
-      className={[
-        'group relative flex w-full flex-col gap-1.5 rounded-xl border bg-white px-3.5 py-3 text-left transition-all',
-        selected
-          ? 'border-signal-400 shadow-signal ring-1 ring-signal-300'
-          : 'border-fog-200 shadow-card hover:border-harbor-300 hover:shadow-card-hover',
-      ].join(' ')}
-    >
-      <div className="flex items-center gap-1.5">
-        <Ship size={14} className={selected ? 'text-sea-600' : 'text-sea-500'} />
-        <span className="flex flex-wrap items-center gap-x-1 text-xs font-semibold text-harbor-900">
-          <span className="truncate">{option.pol || '—'}</span>
-          <ArrowRight size={11} className="text-fog-400" />
-          <span className="truncate">{option.pod || '—'}</span>
-          <ArrowRight size={11} className="text-fog-400" />
-          <span className="truncate text-sea-700">{option.lastCy || '—'}</span>
-        </span>
-      </div>
-      <div className="flex items-center justify-between gap-2">
-        <span className="truncate font-mono text-[11px] text-fog-500">
-          {option.carrier || 'no carrier'}
-        </span>
-        <span className="shrink-0 font-mono text-sm font-bold text-harbor-900">
-          {rate == null ? '—' : money(rate)}
-        </span>
-      </div>
-      {!hasDrayage && (
-        <span className="inline-flex w-max items-center gap-1 rounded bg-fog-100 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-fog-500">
-          <PackageX size={10} /> no drayage on file
-        </span>
-      )}
-    </button>
+    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-fog-100 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-fog-500">
+      <PackageX size={10} /> no drayage on file
+    </span>
   )
 }
 
-/* ── drayage option row (grand total = the hero numeral) ─────────────────── */
-
-function DrayageOptionRow({ d, oceanRate, best }) {
-  const gt = grandTotal(oceanRate, d)
-  const dTotal = toNum(d.total_rate)
-  const oceanMissing = toNum(oceanRate) == null
+/** One stop on the itinerary. `accent` colors the dot; children render the leg BELOW the stop. */
+function TimelineStop({ label, place, accent = 'bg-harbor-400', last = false, children }) {
   return (
-    <div
-      className={[
-        'flex items-center gap-3 rounded-xl border bg-white px-4 py-3 transition-all',
-        best ? 'border-sea-300 ring-1 ring-sea-200' : 'border-fog-200',
-      ].join(' ')}
-    >
-      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${best ? 'bg-sea-50 text-sea-600' : 'bg-signal-50 text-signal-600'}`}>
-        <Truck size={16} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-semibold text-harbor-900">{d.forwarder?.name ?? '—'}</span>
-          {best && (
-            <span className="inline-flex items-center gap-1 rounded bg-sea-50 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-sea-700 ring-1 ring-inset ring-sea-200">
-              <Award size={10} /> best total
+    <div className="relative pl-6">
+      {/* rail segment (skipped after the last stop) */}
+      {!last && <span className="absolute left-[5px] top-3 h-full w-px bg-fog-200" />}
+      {/* node dot */}
+      <span className={`absolute left-0 top-[5px] h-[11px] w-[11px] rounded-full ring-2 ring-white ${accent}`} />
+      <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-fog-400">{label}</p>
+      <p className="text-sm font-semibold leading-tight text-harbor-900">{place || '—'}</p>
+      {children && <div className="py-3">{children}</div>}
+      {!children && <div className="pb-4" />}
+    </div>
+  )
+}
+
+/* ── booking itinerary panel (right) ─────────────────────────────────────── */
+
+function ItineraryPanel({ ofq, ofr, ranked, selectedDrayageId, onSelectDrayage }) {
+  const selectedDrayage = ranked.find((d) => d.id === selectedDrayageId) ?? null
+  const oceanRate = toNum(ofr.rate)
+  const total = grandTotal(ofr.rate, selectedDrayage)
+
+  return (
+    <div className="stagger flex flex-col overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card">
+      {/* header */}
+      <div className="border-b border-fog-100 px-5 py-3.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-mono text-xs font-bold text-harbor-900">{ofq.ofqId}</span>
+          {(ofq.containerType || ofq.containerCount) && (
+            <span className="inline-flex items-center gap-1 rounded bg-fog-100 px-1.5 py-0.5 font-mono text-[10px] text-fog-500">
+              <Container size={11} />
+              {ofq.containerCount && `${ofq.containerCount}× `}{ofq.containerType || 'container'}
+            </span>
+          )}
+          {ofq.cargoReadyDate && (
+            <span className="inline-flex items-center gap-1 rounded bg-fog-100 px-1.5 py-0.5 font-mono text-[10px] text-fog-500">
+              <CalendarDays size={11} /> ready {ofq.cargoReadyDate}
             </span>
           )}
         </div>
-        <div className="mt-0.5 font-mono text-[11px] text-fog-500">
-          {money(d.rate)} rate + {money(d.fuel_surcharge_amount)} fuel = {money(dTotal)} drayage
-          {toNum(d.storage_fee_per_day) != null && ` · ${money(d.storage_fee_per_day)}/day storage`}
-        </div>
+        <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-fog-400">Booking itinerary</p>
       </div>
-      <div className="shrink-0 text-right">
-        <div className="font-mono text-2xl font-extrabold leading-none text-harbor-950">
-          {gt != null ? money(gt) : money(dTotal)}
-        </div>
-        <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.14em] text-fog-400">
-          {oceanMissing ? 'drayage only' : 'grand total'}
+
+      {/* timeline */}
+      <div className="flex-1 overflow-y-auto scrollbar-rail px-5 py-4">
+        <TimelineStop label="Port of Loading" place={ofr.pol || ofq.pol}>
+          {/* ocean leg */}
+          <div className="rounded-xl border border-sea-200 bg-sea-50/50 px-3.5 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <Ship size={14} className="shrink-0 text-sea-600" />
+                <span className="truncate text-xs font-semibold text-harbor-900">
+                  {ofr.forwarder || 'Ocean'}{ofr.carrier ? ` · ${ofr.carrier}` : ''}
+                </span>
+              </span>
+              <span className="shrink-0 font-mono text-sm font-bold text-harbor-900">
+                {oceanRate == null ? '—' : money(oceanRate)}
+              </span>
+            </div>
+            {ofr.validUntil && (
+              <p className="mt-0.5 font-mono text-[10px] text-fog-500">valid until {ofr.validUntil}</p>
+            )}
+          </div>
+        </TimelineStop>
+
+        <TimelineStop label="Port of Discharge" place={ofr.pod} />
+
+        <TimelineStop label="Last CY / ramp" place={ofr.lastCy} accent="bg-sea-500">
+          {/* drayage leg — the selectable options */}
+          {ranked.length === 0 ? (
+            <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-fog-300 bg-fog-50/60 px-3 py-4 text-center">
+              <PackageX size={18} className="text-fog-300" />
+              <p className="text-xs font-medium text-harbor-800">No drayage rate on file</p>
+              <p className="text-[11px] leading-snug text-fog-500">
+                Nothing quoted yet for {ofr.lastCy || '—'} → {ofq.fd || '—'}.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {ranked.map((d, i) => {
+                const active = d.id === selectedDrayageId
+                return (
+                  <button
+                    key={d.id}
+                    onClick={() => onSelectDrayage(d.id)}
+                    className={[
+                      'w-full rounded-xl border px-3 py-2 text-left transition-all',
+                      active
+                        ? 'border-signal-400 bg-signal-50/60 ring-1 ring-signal-300'
+                        : 'border-fog-200 bg-white hover:border-signal-200 hover:bg-signal-50/30',
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                        <span className={`h-2 w-2 shrink-0 rounded-full border ${active ? 'border-signal-500 bg-signal-500' : 'border-fog-300'}`} />
+                        <Truck size={13} className={`shrink-0 ${active ? 'text-signal-600' : 'text-fog-400'}`} />
+                        <span className="truncate text-xs font-semibold text-harbor-900">{d.forwarder?.name ?? '—'}</span>
+                        {i === 0 && (
+                          <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-sea-50 px-1 py-0.5 font-mono text-[8px] font-semibold uppercase tracking-[0.12em] text-sea-700 ring-1 ring-inset ring-sea-200">
+                            <Award size={9} /> best
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 font-mono text-xs font-bold text-harbor-900">{money(toNum(d.total_rate))}</span>
+                    </div>
+                    <p className="mt-0.5 pl-[22px] font-mono text-[10px] text-fog-500">
+                      {money(d.rate)} + {money(d.fuel_surcharge_amount)} fuel
+                      {toNum(d.storage_fee_per_day) != null && ` · storage ${money(d.storage_fee_per_day)}/day`}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </TimelineStop>
+
+        <TimelineStop label="Final Destination" place={ofq.fd} accent="bg-signal-500" last />
+      </div>
+
+      {/* footer — the hero */}
+      <div className="border-t border-fog-100 bg-fog-50/50 px-5 py-4">
+        {oceanRate == null && (
+          <p className="mb-1.5 flex items-center gap-1.5 text-[11px] text-signal-800">
+            <AlertTriangle size={12} /> No ocean rate in the file for this option — total is drayage only.
+          </p>
+        )}
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-fog-400">Landed total</p>
+            {selectedDrayage && (
+              <p className="mt-0.5 font-mono text-[10px] text-fog-500">
+                {oceanRate != null ? `${money(oceanRate)} ocean + ` : ''}{money(toNum(selectedDrayage.total_rate))} drayage
+              </p>
+            )}
+          </div>
+          <span className="font-mono text-3xl font-extrabold leading-none text-harbor-950">
+            {total != null ? money(total)
+              : selectedDrayage ? money(toNum(selectedDrayage.total_rate))
+              : oceanRate != null ? money(oceanRate) : '—'}
+          </span>
         </div>
       </div>
     </div>
@@ -112,8 +198,9 @@ export default function Bookings() {
   const [ofqs, setOfqs] = useState([])
   const [fileName, setFileName] = useState(null)
   const [query, setQuery] = useState('')
-  const [selectedOfqId, setSelectedOfqId] = useState(null)
+  const [expandedOfqId, setExpandedOfqId] = useState(null)
   const [selectedOfrId, setSelectedOfrId] = useState(null)
+  const [selectedDrayageId, setSelectedDrayageId] = useState(null)
 
   const [drayByLane, setDrayByLane] = useState(() => new Map())
   const [drayLoading, setDrayLoading] = useState(true)
@@ -131,7 +218,7 @@ export default function Bookings() {
     return () => clearTimeout(t)
   }, [toast])
 
-  /* ── load the current drayage coverage once, index by lane ─────────────── */
+  /* ── drayage coverage: fetch once, index by lane ───────────────────────── */
 
   const loadDrayage = useCallback(async () => {
     setDrayLoading(true)
@@ -162,8 +249,9 @@ export default function Bookings() {
         if (!parsed.length) return showToast('warning', 'No OFQ rows found in the file.')
         setOfqs(parsed)
         setFileName(file.name)
-        setSelectedOfqId(parsed[0].ofqId)
+        setExpandedOfqId(null)
         setSelectedOfrId(null)
+        setSelectedDrayageId(null)
         setQuery('')
       },
       error() { showToast('error', 'Failed to read file') },
@@ -195,29 +283,48 @@ export default function Bookings() {
       [o.ofqId, o.pol, o.fd].some((v) => String(v ?? '').toLowerCase().includes(q)))
   }, [ofqs, query])
 
-  const selectedOfq = useMemo(
-    () => ofqs.find((o) => o.ofqId === selectedOfqId) ?? null,
-    [ofqs, selectedOfqId],
+  const expandedOfq = useMemo(
+    () => ofqs.find((o) => o.ofqId === expandedOfqId) ?? null,
+    [ofqs, expandedOfqId],
   )
-  const selectedOption = useMemo(
-    () => selectedOfq?.oceanOptions.find((o) => o.ofrId === selectedOfrId) ?? null,
-    [selectedOfq, selectedOfrId],
-  )
-
-  const hasDrayageFor = useCallback(
-    (option) => drayByLane.has(laneKey(option.lastCy, selectedOfq?.fd)),
-    [drayByLane, selectedOfq],
+  const selectedOfr = useMemo(
+    () => expandedOfq?.oceanOptions.find((o) => o.ofrId === selectedOfrId) ?? null,
+    [expandedOfq, selectedOfrId],
   )
 
-  // Drayage rows for the selected ocean option, ranked cheapest-first by grand total.
-  const rankedDrayage = useMemo(() => {
-    if (!selectedOption || !selectedOfq) return []
-    const rows = drayByLane.get(laneKey(selectedOption.lastCy, selectedOfq.fd)) ?? []
-    const keyOf = (d) => grandTotal(selectedOption.rate, d) ?? toNum(d.total_rate) ?? Infinity
+  const drayageFor = useCallback(
+    (ofq, ofr) => drayByLane.get(laneKey(ofr.lastCy, ofq.fd)) ?? [],
+    [drayByLane],
+  )
+
+  /** Drayage options for (ofq, ofr), cheapest grand total first. */
+  const rankFor = useCallback((ofq, ofr) => {
+    const rows = drayageFor(ofq, ofr)
+    const keyOf = (d) => grandTotal(ofr.rate, d) ?? toNum(d.total_rate) ?? Infinity
     return [...rows].sort((a, b) => keyOf(a) - keyOf(b))
-  }, [selectedOption, selectedOfq, drayByLane])
+  }, [drayageFor])
 
-  const bestGrand = rankedDrayage.length ? grandTotal(selectedOption?.rate, rankedDrayage[0]) : null
+  const ranked = useMemo(
+    () => (expandedOfq && selectedOfr ? rankFor(expandedOfq, selectedOfr) : []),
+    [expandedOfq, selectedOfr, rankFor],
+  )
+
+  const bestGrand = ranked.length ? grandTotal(selectedOfr?.rate, ranked[0]) : null
+  const totalOfrs = useMemo(() => ofqs.reduce((n, o) => n + o.oceanOptions.length, 0), [ofqs])
+
+  /* ── interactions ──────────────────────────────────────────────────────── */
+
+  const toggleOfq = (ofqId) => {
+    setSelectedOfrId(null)
+    setSelectedDrayageId(null)
+    setExpandedOfqId((prev) => (prev === ofqId ? null : ofqId))
+  }
+
+  const selectOfr = (ofq, ofr) => {
+    setSelectedOfrId(ofr.ofrId)
+    // cheapest drayage preselected — the user can switch in the panel
+    setSelectedDrayageId(rankFor(ofq, ofr)[0]?.id ?? null)
+  }
 
   /* ── render ────────────────────────────────────────────────────────────── */
 
@@ -243,7 +350,7 @@ export default function Bookings() {
       <PageHeader
         kicker="Internal · Planning"
         title="Bookings"
-        subtitle="Explore the landed cost of each open quote: pick an OFQ, choose an applied ocean rate, and compare the real drayage rates that complete the door delivery."
+        subtitle="Open a quote to see its applied ocean rates, pick one, and assemble the door delivery from the drayage rates on file."
         actions={
           <div className="flex items-center gap-2">
             {fileName && (
@@ -270,7 +377,6 @@ export default function Bookings() {
         </div>
       )}
 
-      {/* idle — drop CTA */}
       {!hasFile ? (
         <button
           type="button"
@@ -280,7 +386,7 @@ export default function Bookings() {
           <Container size={30} className="text-fog-300" />
           <div className="max-w-sm text-sm text-fog-500">
             Drag & drop the OFQ export (.csv or .xlsx) here — or click to browse.<br />
-            Each quote’s applied ocean rates open up their matching drayage options and the combined landed cost.
+            Each quote opens into its applied ocean rates and the drayage options that complete the delivery.
           </div>
           {drayLoading && (
             <span className="mt-1 inline-flex items-center gap-1.5 font-mono text-[11px] text-fog-400">
@@ -293,142 +399,141 @@ export default function Bookings() {
           {/* summary */}
           <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-3">
             <StatCard label="OFQs loaded" value={String(ofqs.length)} icon={FileSpreadsheet} accent="harbor" index={0} />
-            <StatCard label="Ocean options" value={selectedOfq ? String(selectedOfq.oceanOptions.length) : '—'} icon={Ship} accent="sea" index={1} hint={selectedOfq ? `for ${selectedOfq.ofqId}` : undefined} />
-            <StatCard label="Best landed total" value={bestGrand != null ? money(bestGrand) : '—'} icon={Award} accent="signal" index={2} hint={selectedOption ? 'cheapest drayage on this route' : 'select an ocean option'} />
+            <StatCard label="Ocean rates in file" value={String(totalOfrs)} icon={Ship} accent="sea" index={1} />
+            <StatCard label="Best landed total" value={bestGrand != null ? money(bestGrand) : '—'} icon={Award} accent="signal" index={2} hint={selectedOfr ? 'cheapest drayage on this routing' : 'pick an ocean rate'} />
           </div>
 
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-[300px_1fr]">
-            {/* OFQ list (master) */}
-            <div className="flex flex-col overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card">
+          <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            {/* ── OFQ grid ── */}
+            <div className="overflow-hidden rounded-2xl border border-fog-200 bg-white shadow-card">
+              {/* toolbar */}
               <div className="border-b border-fog-100 p-2.5">
-                <div className="flex items-center gap-2 rounded-lg border border-fog-200 bg-fog-50 px-2.5 py-1.5">
+                <div className="flex max-w-xs items-center gap-2 rounded-lg border border-fog-200 bg-fog-50 px-2.5 py-1.5">
                   <Search size={14} className="text-fog-400" />
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search OFQs…"
+                    placeholder="Search OFQID, POL, destination…"
                     className="w-full bg-transparent text-sm text-harbor-900 outline-none placeholder:text-fog-400"
                   />
                 </div>
               </div>
-              <ul className="max-h-[60vh] overflow-y-auto scrollbar-rail p-1.5">
-                {filteredOfqs.map((o) => {
-                  const active = o.ofqId === selectedOfqId
-                  return (
-                    <li key={o.ofqId}>
-                      <button
-                        onClick={() => { setSelectedOfqId(o.ofqId); setSelectedOfrId(null) }}
-                        className={[
-                          'w-full rounded-lg px-3 py-2 text-left transition-colors',
-                          active ? 'bg-harbor-50 ring-1 ring-inset ring-harbor-200' : 'hover:bg-fog-50',
-                        ].join(' ')}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-mono text-xs font-semibold text-harbor-900">{o.ofqId}</span>
-                          <span className="shrink-0 font-mono text-[10px] text-fog-400">
-                            {o.oceanOptions.length} opt{o.oceanOptions.length === 1 ? '' : 's'}
+
+              <div className="overflow-x-auto">
+                <div className="min-w-[720px]">
+                  {/* header */}
+                  <div className="grid grid-cols-[28px_110px_1.1fr_1.1fr_100px_130px] items-center gap-2 border-b border-fog-200 px-3 py-2.5 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] text-fog-500">
+                    <span />
+                    <span>OFQID</span>
+                    <span>Port of Loading</span>
+                    <span>Final Destination</span>
+                    <span>Cargo Ready</span>
+                    <span className="text-right">Ocean rates</span>
+                  </div>
+
+                  {filteredOfqs.length === 0 && (
+                    <p className="px-4 py-8 text-center text-xs text-fog-400">No OFQs match “{query}”.</p>
+                  )}
+
+                  {filteredOfqs.map((ofq) => {
+                    const isOpen = ofq.ofqId === expandedOfqId
+                    const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
+                    return (
+                      <div key={ofq.ofqId} className="border-b border-fog-100 last:border-0">
+                        {/* OFQ row */}
+                        <button
+                          onClick={() => toggleOfq(ofq.ofqId)}
+                          className={`grid w-full grid-cols-[28px_110px_1.1fr_1.1fr_100px_130px] items-center gap-2 px-3 py-2.5 text-left transition-colors ${isOpen ? 'bg-harbor-50/60' : 'hover:bg-fog-50/70'}`}
+                        >
+                          <ChevronRight size={15} className={`text-fog-400 transition-transform ${isOpen ? 'rotate-90 text-harbor-600' : ''}`} />
+                          <span className="truncate font-mono text-xs font-bold text-harbor-900">{ofq.ofqId}</span>
+                          <span className="truncate text-sm text-harbor-800">{ofq.pol || '—'}</span>
+                          <span className="truncate text-sm text-harbor-800">{ofq.fd || '—'}</span>
+                          <span className="truncate font-mono text-xs text-harbor-700">{ofq.cargoReadyDate || '—'}</span>
+                          <span className="truncate text-right font-mono text-[11px] text-fog-500">
+                            {ofq.oceanOptions.length === 0
+                              ? 'none applied'
+                              : `${ofq.oceanOptions.length} rate${ofq.oceanOptions.length === 1 ? '' : 's'} · ${covered} covered`}
                           </span>
-                        </div>
-                        <div className="mt-0.5 truncate text-[11px] text-fog-500">
-                          {o.pol || '—'} <ArrowRight size={9} className="inline text-fog-400" /> {o.fd || '—'}
-                        </div>
-                      </button>
-                    </li>
-                  )
-                })}
-                {filteredOfqs.length === 0 && (
-                  <li className="px-3 py-6 text-center text-xs text-fog-400">No OFQs match “{query}”.</li>
-                )}
-              </ul>
+                        </button>
+
+                        {/* expanded: OFR sub-rows */}
+                        {isOpen && (
+                          <div className="stagger space-y-1 border-t border-fog-100 bg-fog-50/60 px-3 py-2.5 pl-10">
+                            {ofq.oceanOptions.length === 0 ? (
+                              <p className="flex items-center gap-1.5 py-1.5 text-xs text-fog-500">
+                                <Ship size={13} className="text-fog-400" />
+                                No ocean rate applied to this OFQ yet — apply one first, then plan the delivery here.
+                              </p>
+                            ) : (
+                              ofq.oceanOptions.map((ofr) => {
+                                const active = ofr.ofrId === selectedOfrId
+                                const drayCount = drayageFor(ofq, ofr).length
+                                return (
+                                  <button
+                                    key={ofr.ofrId}
+                                    onClick={() => selectOfr(ofq, ofr)}
+                                    className={[
+                                      'flex w-full items-center gap-3 rounded-lg border bg-white px-3 py-2 text-left transition-all',
+                                      active
+                                        ? 'border-signal-400 shadow-signal ring-1 ring-signal-300'
+                                        : 'border-fog-200 hover:border-harbor-300 hover:shadow-card',
+                                    ].join(' ')}
+                                  >
+                                    <Ship size={14} className={`shrink-0 ${active ? 'text-sea-600' : 'text-sea-500'}`} />
+                                    <span className="flex min-w-0 flex-1 flex-col">
+                                      <span className="flex flex-wrap items-center gap-x-1 text-xs font-semibold text-harbor-900">
+                                        <span className="truncate">{ofr.pol || ofq.pol || '—'}</span>
+                                        <ArrowRight size={10} className="text-fog-400" />
+                                        <span className="truncate">{ofr.pod || '—'}</span>
+                                        <ArrowRight size={10} className="text-fog-400" />
+                                        <span className="truncate text-sea-700">{ofr.lastCy || '—'}</span>
+                                      </span>
+                                      <span className="mt-0.5 truncate font-mono text-[10px] text-fog-500">
+                                        {ofr.forwarder || '—'}{ofr.carrier ? ` · ${ofr.carrier}` : ''}{ofr.validUntil ? ` · until ${ofr.validUntil}` : ''}
+                                      </span>
+                                    </span>
+                                    <CoverageChip count={drayCount} />
+                                    <span className="w-20 shrink-0 text-right font-mono text-sm font-bold text-harbor-900">
+                                      {toNum(ofr.rate) == null ? '—' : money(toNum(ofr.rate))}
+                                    </span>
+                                  </button>
+                                )
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
             </div>
 
-            {/* detail */}
-            <div className="min-w-0 space-y-5">
-              {!selectedOfq ? (
-                <div className="flex min-h-[30vh] items-center justify-center rounded-2xl border border-fog-200 bg-white text-sm text-fog-500 shadow-card">
-                  Select an OFQ to explore its options.
-                </div>
-              ) : selectedOfq.oceanOptions.length === 0 ? (
-                <div className="flex min-h-[30vh] flex-col items-center justify-center gap-2 rounded-2xl border border-fog-200 bg-white text-center shadow-card">
-                  <Ship size={26} className="text-fog-300" />
-                  <p className="text-sm font-medium text-harbor-800">No ocean rate applied to {selectedOfq.ofqId} yet</p>
-                  <p className="max-w-xs text-xs text-fog-500">Apply an ocean rate to this OFQ first — then its drayage options show up here.</p>
-                </div>
+            {/* ── itinerary panel ── */}
+            <div className="xl:sticky xl:top-6">
+              {expandedOfq && selectedOfr ? (
+                drayLoading ? (
+                  <div className="flex min-h-[30vh] items-center justify-center rounded-2xl border border-fog-200 bg-white shadow-card">
+                    <Loader2 size={22} className="animate-spin text-fog-400" />
+                  </div>
+                ) : (
+                  <ItineraryPanel
+                    ofq={expandedOfq}
+                    ofr={selectedOfr}
+                    ranked={ranked}
+                    selectedDrayageId={selectedDrayageId}
+                    onSelectDrayage={setSelectedDrayageId}
+                  />
+                )
               ) : (
-                <>
-                  {/* OFQ header line */}
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                    <span className="font-mono text-xs font-semibold text-harbor-500">{selectedOfq.ofqId}</span>
-                    <span className="font-semibold text-harbor-900">{selectedOfq.pol || '—'}</span>
-                    <ArrowRight size={13} className="text-fog-400" />
-                    <span className="font-semibold text-harbor-900">{selectedOfq.fd || '—'}</span>
-                    {(selectedOfq.containerType || selectedOfq.containerCount) && (
-                      <span className="ml-1 inline-flex items-center gap-1 rounded bg-fog-100 px-1.5 py-0.5 font-mono text-[10px] text-fog-500">
-                        <Container size={11} />
-                        {selectedOfq.containerCount && `${selectedOfq.containerCount}× `}{selectedOfq.containerType || 'container'}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* ocean options */}
-                  <div>
-                    <p className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-fog-400">
-                      Ocean options — pick one to complete
-                    </p>
-                    <div className="stagger grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                      {selectedOfq.oceanOptions.map((opt) => (
-                        <OceanOptionCard
-                          key={opt.ofrId}
-                          option={opt}
-                          hasDrayage={hasDrayageFor(opt)}
-                          selected={opt.ofrId === selectedOfrId}
-                          onSelect={() => setSelectedOfrId(opt.ofrId)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* drayage panel */}
-                  {selectedOption && (
-                    <div>
-                      <p className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-fog-400">
-                        Drayage options · {selectedOption.lastCy || '—'} <ArrowRight size={10} className="inline" /> {selectedOfq.fd || '—'}
-                      </p>
-
-                      {toNum(selectedOption.rate) == null && (
-                        <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-signal-200 bg-signal-50 px-3 py-2 text-xs text-signal-800">
-                          <AlertTriangle size={13} /> This ocean option has no rate in the file — showing drayage totals only.
-                        </div>
-                      )}
-
-                      {drayLoading ? (
-                        <div className="flex min-h-[20vh] items-center justify-center rounded-2xl border border-fog-200 bg-white shadow-card">
-                          <Loader2 size={22} className="animate-spin text-fog-400" />
-                        </div>
-                      ) : rankedDrayage.length === 0 ? (
-                        <div className="flex min-h-[22vh] flex-col items-center justify-center gap-2 rounded-2xl border border-fog-200 bg-white text-center shadow-card">
-                          <PackageX size={26} className="text-fog-300" />
-                          <p className="text-sm font-medium text-harbor-800">No drayage rate on file</p>
-                          <p className="max-w-sm text-xs text-fog-500">
-                            Nothing quoted yet for {selectedOption.lastCy || '—'} → {selectedOfq.fd || '—'}. Request a drayage rate for this lane to fill the gap.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="stagger space-y-2">
-                          {rankedDrayage.map((d, i) => (
-                            <DrayageOptionRow key={d.id} d={d} oceanRate={selectedOption.rate} best={i === 0} />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {!selectedOption && (
-                    <div className="rounded-2xl border border-dashed border-fog-300 bg-fog-50/50 px-4 py-6 text-center text-sm text-fog-500">
-                      Pick an ocean option above to see its drayage rates and the landed cost.
-                    </div>
-                  )}
-                </>
+                <div className="flex min-h-[30vh] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-fog-300 bg-fog-50/50 px-6 text-center">
+                  <Container size={24} className="text-fog-300" />
+                  <p className="text-sm font-medium text-harbor-800">No booking assembled yet</p>
+                  <p className="max-w-[220px] text-xs leading-relaxed text-fog-500">
+                    Open a quote, then pick one of its ocean rates — the door-to-door itinerary and landed total build here.
+                  </p>
+                </div>
               )}
             </div>
           </div>

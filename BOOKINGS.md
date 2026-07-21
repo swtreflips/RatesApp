@@ -1,12 +1,14 @@
 # BOOKINGS.md — Landed-Cost Scenario Planner (Ocean + Drayage)
 
-**Status:** **v1 implemented** (July 2026) — `features/internal/pages/Bookings.jsx` +
+**Status:** **v1.1 implemented** (July 2026) — `features/internal/pages/Bookings.jsx` +
 `features/internal/bookings/{inputCsv,matching}.js`, flat route `/internal/bookings`, ungrouped
-sidebar item below Dashboard. Shipped scope vs. this doc: **geo hint (§7) deferred**; ocean options
-with no drayage coverage are **shown + badged** "no drayage on file"; drayage coverage is fetched
-**once** and indexed client-side by normalized lane key (refinement over §2b's per-selection query —
-reuses `drayageService.fetchDrayageRates({ scope:'current' })`). No persistence, internal-only,
-single-selection — all per the doc.
+sidebar item below Dashboard. **v1's picker+cards layout was superseded after first real use** (it
+read as unintuitive); v1.1 is the grid-first three-state model in §4: OFQ grid → row expands to its
+OFRs → clicking an OFR opens the Booking Itinerary panel on the right. Shipped scope vs. this doc:
+**geo hint (§7) deferred**; no-coverage OFRs are **shown + badged** "no drayage on file"; drayage
+coverage is fetched **once** and indexed client-side by normalized lane key (refinement over §2b's
+per-selection query — reuses `drayageService.fetchDrayageRates({ scope:'current' })`). No
+persistence, internal-only, single-selection — all per the doc.
 **Purpose:** given an OFQ (a real customer quote tracked in AIS) and the ocean rate(s) already
 applied to it, let an internal user explore which **real drayage rate** completes the door delivery
 for each ocean option, and compare the combined landed cost across combinations.
@@ -155,56 +157,64 @@ existing `.stagger` reveal utility. So the mandate here is to apply the skill's 
 typographic hierarchy, spatial composition, motion, a clear visual "hero" — **inside** that existing
 system, not invent a new one. A new theme here would read as inconsistent, not bold.)*
 
-**Master-detail, not a wizard.** Everything lives on one page and updates in place — no modal, no
-second navigation — because the entire value of the feature is *fast comparison*:
+*(v1.1 — the original picker+cards master-detail shipped first and was replaced after real use;
+the grid-first model below matches how the user actually thinks about the data.)*
+
+**Three states, progressive disclosure, everything on one page:**
+
+1. **OFQ grid** — the landing state is a familiar grid, one row per OFQ:
+   `OFQID · Port of Loading · Final Destination · Cargo Ready Date · ocean-rate summary`
+   (summary = `3 rates · 2 covered`, or `none applied`). Searchable (OFQID/POL/FD).
+2. **Row expansion** — clicking an OFQ row expands it in place (chevron rotates, one OFQ open at a
+   time); its applied OFRs render as indented sub-rows: Ship icon, routing chain `POL → POD → Last
+   CY` (Last CY tinted sea — it's the segment drayage keys on), forwarder/carrier/valid-until meta,
+   ocean rate right-aligned, and a coverage chip (`n drayage` / `no drayage on file`).
+3. **Booking Itinerary panel** — clicking an OFR opens the sticky right panel: the door-to-door
+   route as a **vertical timeline**, with the drayage leg holding the selectable options.
 
 ```
-┌─ OFQ picker ───────────────────────────────────────────────────┐
-│ [search]  OFQ-4821  Nhava Sheva, India → Seymour, IN  (1×40'HC) │  ← from the parsed file
-└──────────────────────────────────────────────────────────────────┘
-
-┌─ Ocean options (selectable route-cards, Apply Rates' RouteCell lineage) ─┐
-│ ┌──────────────────────┐ ┌──────────────────────┐ ┌─────────────────┐  │
-│ │ ●  LA → Louisville,KY│ │ ○  Seattle → Indy,IN │ │ ○  NY → Cincy,OH│  │
-│ │    CMA · $2,000      │ │    — · —             │ │    — · —        │  │
-│ └──────────────────────┘ └──────────────────────┘ └─────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-        │ selecting a card reveals (stagger-in) the drayage panel below,
-        │ scoped to THAT option's Last CY → the OFQ's FD
-        ▼
-┌─ Drayage options for Louisville, KY → Seymour, IN ─────────────────────┐
-│  ★ Forwarder C   $780 + $46 fuel = $826         Grand total: $2,826    │ ← best, sea accent
-│    Forwarder A   $850 + $51 fuel = $901         Grand total: $2,901    │
-│    Forwarder B   $910 + $0 fuel  = $910         Grand total: $2,910    │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─ OFQ GRID ──────────────────────────────────┐  ┌─ BOOKING ITINERARY ────────────┐
+│  OFQID   POL          FD         Ready  Rates│  │ OFQ-4821 · 1×40'HC · ready 8/2 │
+│ ▸ 4818   Ningbo       Dallas,TX  7/25   1·1  │  │                                │
+│ ▾ 4821   Nhava Sheva  Seymour,IN 8/02   3·2  │  │ ● Port of Loading              │
+│    ├ ◉ NS → LA → Louisville,KY  CMA  $2,000  │  │ │  Nhava Sheva, India          │
+│    ├ ○ NS → Seattle → Indy,IN   —    $2,150  │  │ │  ⛴ ocean · CMA      $2,000  │
+│    └ ○ NS → NY → Cincy,OH  [no drayage] $1,9…│  │ ● Port of Discharge            │
+│ ▸ 4830   Qingdao      Boise,ID   8/10   0    │  │ │  Los Angeles, CA             │
+└──────────────────────────────────────────────┘  │ ● Last CY / ramp               │
+                                                  │ │  Louisville, KY              │
+                                                  │ │  🚚 pick the drayage leg:    │
+                                                  │ │   ◉ Fwd C  $826  ★ best      │
+                                                  │ │   ○ Fwd A  $901              │
+                                                  │ │   ○ Fwd B  $910              │
+                                                  │ ● Final Destination            │
+                                                  │    Seymour, IN                 │
+                                                  │ ───────────────────────────────│
+                                                  │ LANDED TOTAL          $2,826   │
+                                                  └────────────────────────────────┘
 ```
 
-- **Ocean options as route-cards**, not a grid — few rows, rich content, visually descended from
-  Apply Rates' `RouteCell` (routing-chain text + a compact meta line), so the routing reads as a
-  chain (`POL → POD → Last CY`) exactly as it already does elsewhere in the app.
-- **Drayage options ranked cheapest-first by grand total**, recomputed live as the ocean selection
-  changes — switching ocean cards re-queries and re-ranks without leaving the page. The top (cheapest)
-  row gets a **sea-accent "best total" badge** — reusing the existing accent-token system in
-  `DashboardPrimitives.jsx`, not a new color.
-- **Hero number.** Each row shows its own subtotal quietly (mono, standard weight) but the **grand
-  total is the largest, boldest numeral on the page** — comparing that one number across rows and
-  across ocean options is the entire point of the screen, so it should dominate the eye, not compete
-  with ten equally-weighted columns.
-- **Motion**: the drayage panel's appearance reuses the app's existing `.stagger` reveal (the same
-  utility the dashboards already animate stat cards with) — consistent motion language, no bespoke
-  transition invented for this one page.
-- **Color/icon continuity**: ocean cards carry ocean's already-established tone (`Ship` icon,
-  sea/harbor accents from `serviceConfig.js`); drayage rows carry drayage's (`Truck` icon, signal
-  accent). A user who already reads the sidebar's two service colors recognizes them immediately here
-  — no new visual dialect to learn.
-- **Empty state**: no drayage rate on file for the selected Last CY → FD is a calm, informative box
-  (same tone as `DrayageActiveRates`' "No drayage rates yet" empty state) — not styled as an error,
-  since it's a normal, expected gap in coverage. *Documented future enhancement, not v1:* deep-link
-  that empty state into a prefilled drayage request (`drayageService.postDrayageRequestBatch` already
-  exists and does exactly this shape of insert) so the gap can be closed in one click.
-- **Reuse, don't rebuild chrome**: `PageHeader`, `StatCard` (optional summary row — e.g. "OFQs
-  loaded," "Ocean options," "Best total found"), and `ScrollTable` all come from
-  `DashboardPrimitives.jsx` unchanged.
+- **The panel reads as assembling a booking** — which is the feature's name. Ocean leg is locked to
+  the clicked OFR; the drayage leg is the choice point: options sorted cheapest-first by grand
+  total, **cheapest preselected** with an Award "best" badge, radio-select to switch; the footer's
+  **landed total is the hero numeral** (largest, boldest mono number on the page) and updates
+  instantly on switch. Sticky on wide screens (grid scrolls, itinerary stays); stacks below on
+  narrow.
+- **Grid mechanics**: custom rows, not MUI DataGrid — the free tier has no master-detail, and the
+  expansion + selection states are trivial with plain rows styled in the app's ScrollTable header
+  idiom. One OFQ expanded at a time keeps state legible; expanding another collapses the first and
+  clears the selection.
+- **Color/icon continuity**: Ship + sea tones for the ocean leg, Truck + signal for the drayage leg
+  — the sidebar's existing service-color grammar, no new dialect.
+- **Motion**: the panel and expansion reuse the existing `.stagger` reveal.
+- **Empty states, all calm, none error-styled**: OFQ with no OFRs → inline note in the expansion;
+  OFR with no coverage → badged in the sub-row AND a PackageX block inside the itinerary's drayage
+  leg; no OFR selected → dashed "No booking assembled yet" placeholder panel. *Future enhancement
+  (not built):* deep-link the no-coverage state into a prefilled drayage request
+  (`drayageService.postDrayageRequestBatch` already does this shape of insert).
+- **Reuse, don't rebuild chrome**: `PageHeader` + `StatCard` summary row (`OFQs loaded · Ocean rates
+  in file · Best landed total`) from `DashboardPrimitives.jsx`; `money` from `drayageGrid.jsx`;
+  upload/drag-drop via `parseRateFile`.
 
 ---
 
