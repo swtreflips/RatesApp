@@ -62,6 +62,16 @@ function toNumber(v) {
   return v === '' || v == null ? null : Number(v)
 }
 
+// Date Received, as typed or picked — null on blank/unparseable (mirrors submissionService's
+// toDateString). Kept OUT of the insert object entirely when null (see buildRate) rather than
+// passed as null, since provided_at is NOT NULL DEFAULT current_date: an explicit null would
+// violate the constraint, while an omitted key lets the default apply.
+function toDateString(v) {
+  if (!v) return null
+  const d = v instanceof Date ? v : new Date(v)
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
+}
+
 /** Fuel % as typed → fraction. Forwarders think "34", the DB stores 0.34 (§6d). */
 function toPctFraction(v) {
   const n = toNumber(v)
@@ -71,6 +81,7 @@ function toPctFraction(v) {
 
 /** Map a grid row + identity into a drayage_rates insert (stored columns only). */
 function buildRate(r, { forwarderId, providerId, submissionId = null, laneId = null }) {
+  const providedAt = toDateString(r.providedAt)
   return {
     submission_id: submissionId,
     lane_id: laneId,
@@ -92,6 +103,8 @@ function buildRate(r, { forwarderId, providerId, submissionId = null, laneId = n
     chassis_days_included: toNumber(r.chassisDaysIncluded),
     storage_fee_per_day: toNumber(r.storagePerDay),
     notes: r.notes || null,
+    // omitted (not null) when blank — DB default fills in today (§6a Date Received)
+    ...(providedAt ? { provided_at: providedAt } : {}),
   }
 }
 

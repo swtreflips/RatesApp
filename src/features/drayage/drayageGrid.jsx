@@ -23,6 +23,7 @@ export const makeDrayEmptyRow = () => ({
   rate: '', fuelPct: '', fuelAmount: '',
   tollFee: '', prePullFee: '', pierPassFee: '', cleanTruckFee: '', dropFee: '',
   chassisFee: '', minChassisDays: '', chassisDaysIncluded: '', storagePerDay: '',
+  providedAt: null,  // Date Received — blank means "let the DB default to today" (drayageService)
   notes: '',
   forwarderId: null,
 })
@@ -66,6 +67,7 @@ const DRAY_CSV_ALIASES = {
   minChassisDays: ['min chassis days'],
   chassisDaysIncluded: ['chassis days included'],
   storagePerDay: ['storage fee (/day)', 'storage fee/day', 'storage fee'],
+  providedAt: ['date received', 'date recieved'],
   notes: ['notes', 'remarks'],
 }
 
@@ -86,6 +88,10 @@ export const makeDrayRowFromCsv = (cells, headerIndex) => {
     const i = headerIndex[field]
     return i == null ? '' : String(cells[i] ?? '').trim()
   }
+  // Date Received, if the file has it — blank/unparseable falls through to null, same as a
+  // blank manual-entry cell, so the DB's default-to-today applies either way (drayageService).
+  const receivedRaw = val('providedAt')
+  const received = receivedRaw ? new Date(receivedRaw) : null
   return {
     ...makeDrayEmptyRow(),
     origin: val('origin'),
@@ -103,6 +109,7 @@ export const makeDrayRowFromCsv = (cells, headerIndex) => {
     minChassisDays: val('minChassisDays'),
     chassisDaysIncluded: val('chassisDaysIncluded'),
     storagePerDay: val('storagePerDay'),
+    providedAt: received && !isNaN(received.getTime()) ? received : null,
     notes: val('notes'),
   }
 }
@@ -162,6 +169,9 @@ export function drayColumns({ renderActions, extraLeading = [] }) {
     numCol('minChassisDays', 'Min Ch. Days', 96),
     numCol('chassisDaysIncluded', 'Ch. Days Incl', 96),
     numCol('storagePerDay', 'Storage/Day', 94),
+    {
+      field: 'providedAt', headerName: 'Date Received', width: 108, editable: true, type: 'date',
+    },
     { field: 'notes', headerName: 'Notes', flex: 1, minWidth: 100, editable: true },
     {
       field: 'actions', headerName: '', width: 72, sortable: false, filterable: false,
