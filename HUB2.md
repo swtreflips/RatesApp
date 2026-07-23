@@ -350,6 +350,50 @@ Two rules so the planner's policies are written correctly:
 
 ---
 
+## Working across two repos, one database
+
+**One `supabase/` directory, and it lives in RatesApp. The planner repo gets no Supabase
+tooling at all.**
+
+> **The trap:** one database can have only one migration history. If both repos run
+> `supabase init` and link to the same project, you get two `migrations/` directories that do
+> not know about each other — `db push` from one tries to re-apply what the other already
+> ran, and `db diff` reports permanent phantom drift. Never `supabase init` in the planner
+> repo.
+
+**Schema work for either app** — in the RatesApp repo:
+
+```bash
+supabase migration new planner_containers
+# write the SQL
+supabase db reset      # replays everything locally, from scratch
+supabase db push       # when it is right
+```
+
+**App work on the planner** — in the stufferPlanner repo:
+
+```bash
+# in RatesApp, once:
+supabase start         # local Postgres + Auth + Storage
+
+# in stufferPlanner/.env.local:
+VITE_SUPABASE_URL=http://127.0.0.1:54321
+VITE_SUPABASE_ANON_KEY=<the local anon key supabase start prints>
+VITE_DATA_SOURCE=supabase
+```
+
+Each app points at whichever stack you want — local while developing, production when
+deployed. Neither app ever runs a migration; they only read env vars.
+
+- [ ] **`supabase/seed.sql` covers the whole database.** Add planner fixtures alongside the
+      rates ones — sample containers, master items, and the two factory organizations. Then
+      `db reset` produces a working local dataset for *both* apps in one command
+- [ ] The planner's existing repository abstraction is the right seam: `LocalMasterItemRepo`
+      gains a `SupabaseMasterItemRepo` sibling and `VITE_DATA_SOURCE` flips between them.
+      Migrate one repo at a time — the app stays shippable at every step
+
+---
+
 ## Stuffer Planner backend — the absorption checklist
 
 Stuffer Planner has **no backend yet** — `VITE_DATA_SOURCE=local`, everything behind
