@@ -80,10 +80,11 @@ The apps share **exactly three things: `profiles`, `organizations`, and the RLS 
 functions.** That is the entire surface. No shared code, no shared normalization, no
 coordinated releases, no monorepo.
 
-**And it is decoupled — the planner does not wait for RatesApp.** Expand is additive: create
-`organizations` carrying the existing `forwarders.id` values, add a nullable
-`profiles.organization_id` beside `forwarder_id`, backfill. RatesApp does not change a line.
-Whoever touches the database first runs it.
+**And it is nearly decoupled.** Expand is additive: create `organizations` carrying the
+existing `forwarders.id` values, add a nullable `profiles.organization_id` beside
+`forwarder_id`, backfill. RatesApp does not change a line. The single ordering constraint is
+that expand lands **before the planner's schema is written**, so the planner builds on
+`organizations` instead of inventing `suppliers`.
 
 **The piece that makes it genuinely cheap is the helper facade.** Create `my_org()`,
 `my_org_type()`, and `my_org_role()` now, backed by today's columns. The planner writes every
@@ -128,7 +129,7 @@ anything memorable to the people typing it.
 | 1 | **Standalone apps; hub = SSO** | Merging costs two major-version upgrades and a grid-library swap, and buys nothing a user notices |
 | 2 | **Vite SPA everywhere, never Next** | No SSR need — every route is behind a login. Consequence: **the frontend holds only public values; every secret lives in a Supabase Edge Function** |
 | 3 | **`organizations`, not `forwarders`/`suppliers`** | Two apps invented the same concept twice. One table, `type = internal \| forwarder \| customer` |
-| 4 | **One Supabase project per environment** | Production + Development. One `auth.users`, one organization directory, one onboarding — the apps stay standalone, but the *people* are the same |
+| 4 | **One Supabase project, everything in it** | One `auth.users`, one organization directory, one onboarding — the apps stay standalone, but the *people* are the same. Dev is local (`supabase start`), not a second project |
 | 5 | **Identity comes from `profiles`, never `user_metadata`** | `user_metadata` is user-writable. Client and RLS read the same row |
 | 6 | **Retire by unreachability, then delete** | A Vite build inlines its env vars, so stripping keys does not neutralize a deployment that already shipped. Only unreachability does |
 
@@ -165,17 +166,55 @@ Role lives in two places today: `profiles.role` (read by RLS and Edge Functions)
 
 **Gate:** from a forwarder session, `supabase.auth.updateUser({ data: { role: 'internal' } })` then reload. A rendered internal dashboard is a failed check.
 
-### Phase B — Database foundations
+### Phase B — One database
 
-- [ ] **CI exists** — no `.github/` and no test runner today. GitHub Actions + Vitest. Five items in this plan assume CI
-- [ ] Secret scanning in CI
-- [ ] Baseline verified: `supabase db reset` reproduces production, RLS policies and generated columns intact
-- [ ] Consolidate `schedules` into the rates project → the freed slot becomes **Development**
-- [ ] **Organizations migration** — expand, migrate, contract (below), rehearsed on Development
+Two Supabase projects today: `rates` and `schedules` (internal only). Everything ends up in
+one.
+
+- [ ] **Baseline `rates` first** — `supabase db pull`, commit. Minutes, and it is the recorded starting point before anything moves
+- [ ] Verify it reproduces: `supabase db reset` locally, RLS policies, helpers, and generated columns intact
+- [ ] **Move the schedules tables into `rates`**; repoint the schedules app
+- [ ] **Retire the `schedules` project**
+- [ ] **Expand** — `organizations`, `organization_services`, `profiles.org_role`, the three helpers (below). Additive: RatesApp keeps running on `forwarder_id` and does not change a line
+- [ ] **Then** build the planner's tables in the same project, on that model
 - [ ] `pg_dump` daily backup job (GitHub Action → private storage)
+- [ ] **CI exists** — no `.github/` and no test runner today. GitHub Actions + Vitest. Four items in this plan assume CI
+- [ ] Secret scanning in CI
 - [ ] Drift check in CI — `supabase db diff --linked`, non-empty output fails
 
-**Gate:** the schema reproduces from migrations alone; tenancy is `organization_id` everywhere.
+**Gate:** the schema reproduces from migrations alone, and one project holds everything.
+
+#### One project is not one tangled schema
+
+`containers` and `rates` have nothing to do with each other and never will. They are
+independent tables that happen to share a database.
+
+The apps share **two tables — `profiles` and `organizations` — plus the helper functions.**
+Everything else stays as separate as it is today. You are not merging the apps; you are
+giving them one place to look up *who someone is*.
+
+#### The development environment is local, not a second project
+
+The Supabase CLI runs a full local stack — Postgres, Auth, Storage — with `supabase start`.
+Write a migration, `supabase db reset` replays everything from scratch, verify, then push to
+production. **That is the dev environment.** No second cloud project required.
+
+So the slot freed by retiring `schedules` does not have to become anything. Leave it empty;
+it is there later if you want a staging environment that is not your laptop.
+
+> The one dependency is Docker Desktop. If you would rather not run it on Windows, use the
+> freed slot as a cloud Development project instead — same workflow, just not local. Either
+> is fine.
+
+#### The only ordering that matters
+
+```
+baseline → consolidate schedules → EXPAND → planner tables → everything else
+```
+
+When the planner's schema is written, `profiles` and `organizations` must already exist in
+their shared form. Otherwise the planner creates `suppliers` and a second `profiles`, and you
+migrate twice — re-testing the RLS you had just finished verifying.
 
 #### The organizations migration
 
@@ -246,10 +285,13 @@ all history survives — the UUID does not change.
 The two apps share **`profiles`, `organizations`, and the RLS helper functions.** Nothing
 else. Groundwork means readying those three, and stopping there.
 
-**The planner does not have to wait for this.** Expand is additive — create `organizations`
-carrying the existing `forwarders.id` values, add a nullable `profiles.organization_id`
-beside `forwarder_id`, backfill. RatesApp keeps reading `forwarder_id` and does not change a
-line. Whoever touches the database first runs expand; nothing blocks anything.
+**Expand is additive, so RatesApp is never blocked** — create `organizations` carrying the
+existing `forwarders.id` values, add a nullable `profiles.organization_id` beside
+`forwarder_id`, backfill. RatesApp keeps reading `forwarder_id` and does not change a line.
+
+But **the planner does wait for it**, because its schema has to be written against
+`organizations` and `my_org()` rather than inventing `suppliers`. That is the one ordering
+constraint in this plan — see [Phase B](#the-only-ordering-that-matters).
 
 ### Do anyway — improves RatesApp on its own merits
 
