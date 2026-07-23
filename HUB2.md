@@ -177,7 +177,7 @@ one.
 
 - [ ] **Baseline `rates` first** — `supabase db pull`, commit. Minutes, and it is the recorded starting point before anything moves
 - [ ] Verify it reproduces: `supabase db reset` locally, RLS policies, helpers, and generated columns intact
-- [ ] **Move the schedules tables into `rates`**; repoint the schedules app
+- [ ] **Move the schedules tables into `rates`** — [full procedure](#folding-a-supabase-project-into-the-target). PostGIS first; RLS is re-derived, not copied
 - [ ] **Retire the `schedules` project**
 - [ ] **Expand** — `organizations`, `organization_services`, `profiles.org_role`, the three helpers (below). Additive: RatesApp keeps running on `forwarder_id` and does not change a line
 - [ ] **Then** build the planner's tables in the same project, on that model
@@ -398,6 +398,112 @@ deployed. Neither app ever runs a migration; they only read env vars.
 
 ---
 
+## Folding a Supabase project into the target
+
+Written app-agnostically, because it applies to any project you absorb later. Schedules
+specifics follow.
+
+> **The principle that shapes all of it:** a schema is copied, **security is re-derived.**
+> The source project's policies were written for the blast radius it had. The target has a
+> different one — partners hold accounts there. Never carry RLS and grants across
+> unexamined.
+
+### 1. Inventory the source before touching anything
+
+- [ ] Tables, views, **materialized views**, functions, triggers, indexes, sequences
+- [ ] **Extensions** — these do not travel reliably in a schema dump
+- [ ] Grants and RLS policies, recorded as *what the target will need*, not as a copy
+- [ ] Storage buckets, auth users, cron jobs, Edge Functions
+- [ ] **Every writer and reader** — apps, scripts, notebooks, anything holding a key
+- [ ] Row counts and table sizes. The free tier is 500 MB; know before, not during
+
+### 2. Prepare the target
+
+- [ ] **Enable required extensions first.** A schema dump referencing `postgis` fails on a project that does not have it
+- [ ] Check every incoming name against the target: tables, functions, types. Rename in the migration, not afterwards
+
+### 3. Move the schema — as a migration, not a one-off
+
+```bash
+supabase db dump --schema public -f source_schema.sql    # from the source project
+```
+
+- [ ] **Read the dump by hand.** This is where you notice what did not come across
+- [ ] Land it in `supabase/migrations/`, so the target still reproduces from nothing
+- [ ] Strip the source's RLS and grants out of it — those get rewritten in step 6
+
+### 4. Move the data
+
+```bash
+supabase db dump --data-only -f source_data.sql
+```
+
+- [ ] Respect FK order; load parents first
+- [ ] For large tables prefer `COPY` over generated `INSERT`s
+- [ ] Data is **not** a migration — load it once, do not commit it to `migrations/`
+
+### 5. Rebuild derived objects rather than copying them
+
+- [ ] Materialized views: create, index, then refresh. Never dump their contents
+- [ ] Anything computable from base data — caches, aggregates — is recomputed
+
+### 6. Re-derive security for the target's blast radius
+
+- [ ] Enable RLS on every table that arrives without it, unless you can state why not
+- [ ] Rewrite policies against the target's identity model (`my_org()`, `my_org_type()`)
+- [ ] **Audit every `GRANT ... TO anon`.** In the target, `anon` is the key in every public bundle
+- [ ] Verify from a partner-scoped session, not an internal one
+
+### 7. Repoint the consumers, one at a time
+
+- [ ] New URL and key per consumer; verify each before moving to the next
+- [ ] Scripts and notebooks count. They fail silently and nobody notices for a week
+
+### 8. Verify, then retire
+
+- [ ] Row counts match, per table
+- [ ] Every consumer exercised end to end
+- [ ] Only then [decommission](#decommissioning) the old project
+
+---
+
+### Schedules specifics
+
+The source is a Python scraper pipeline (`ocean-routing`, `ingest_schedules.py`) writing a
+warehouse that a React app reads. Per `Schedules/SUPA.md`:
+
+| Object | Note |
+|---|---|
+| `schedules` | Warehouse — every snapshot ever, hybrid relational + JSONB, **PostGIS geom columns**, `UNIQUE(schedule_hash)`. **RLS disabled** |
+| `ports` | Port table + geocode cache |
+| BEFORE trigger | Auto-fills `pol_geom` / `pod_geom` / `last_cy_geom` — **requires PostGIS** |
+| `schedules_latest` | **Materialized view**, latest-per-lane, with a unique index required for `REFRESH ... CONCURRENTLY` |
+| `refresh_schedules_latest()` | `SECURITY DEFINER`, called by ingest over RPC |
+| Grants | `GRANT SELECT ON schedules_latest TO anon, authenticated` |
+
+**The one that matters — RLS off stops being safe the moment it moves.**
+
+Today `schedules` sits alone in a project only internal people hold keys to, so RLS disabled
+costs nothing. In the target, forwarders and factories have accounts and the anon key ships
+in every public bundle. Carried across unchanged, **every partner could read the entire
+schedules warehouse, and so could anyone who extracted the anon key from a bundle.**
+
+- [ ] Enable RLS on `schedules` and `ports`; internal-only policy via `my_org_type() = 'internal'`
+- [ ] **`REVOKE SELECT ON schedules_latest FROM anon`**, keep `authenticated`, and gate it by policy
+- [ ] Confirm the ingest scripts use the **service-role** key — it bypasses RLS, so ingestion keeps working. If they hold an anon key, enabling RLS breaks the pipeline
+
+**The rest, in order:**
+
+- [ ] Enable **PostGIS** on the target *before* importing anything
+- [ ] Check `ports` against the target — the brain also caches geocodes; confirm no collision
+- [ ] Import `schedules` + `ports` + the geom trigger as a migration
+- [ ] Recreate `schedules_latest`, its unique index, and `refresh_schedules_latest()`. **An MV's query cannot be altered in place** — drop and recreate, and recreate the index too
+- [ ] Check the size of `schedules` first. "Every snapshot, kept forever" is the one table here that can threaten 500 MB
+- [ ] Repoint, one at a time: `ingest_schedules.py` → `ocean-routing`'s scripts and alerts engine → the React app → the nested `api/` service
+- [ ] Verify by running one full ingest and confirming the MV refreshes and the React grid still loads
+
+---
+
 ## Stuffer Planner backend — the absorption checklist
 
 Stuffer Planner has **no backend yet** — `VITE_DATA_SOURCE=local`, everything behind
@@ -581,6 +687,7 @@ extend past one full cycle of whatever the app does.
 3. **Custom SMTP** — invitations and password recovery both depend on it
 4. **Isolation tests in CI, across two organizations** — `ptpdesk.com` has no proxy in front of it
 5. **Role and organization never come from anything the user can write**
+6. **RLS re-derived on every absorbed table** — a table that was safely open in a single-tenant project is readable by every partner in a shared one
 
 ---
 
