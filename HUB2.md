@@ -19,8 +19,11 @@ ptpdesk.com               partners
                           plan.ptpworkspace.com                 Supabase + MFA
 
 Supabase                  ONE project. Postgres + Auth + RLS + Edge Functions.
-                          The only place server-side code runs, and the only
-                          thing the apps actually share.
+                          The only thing the apps actually share.
+
+geoapi-next               the brain — HERE/Nominatim keys + route cache.
+                          Deliberately PUBLIC, never behind Zero Trust,
+                          protected by a Supabase JWT check. See groundwork.
 ```
 
 **Apps stay standalone.** They relate through data, not code. The hub is a dashboard plus
@@ -127,7 +130,7 @@ anything memorable to the people typing it.
 | # | Decision | One-line reason |
 |---|---|---|
 | 1 | **Standalone apps; hub = SSO** | Merging costs two major-version upgrades and a grid-library swap, and buys nothing a user notices |
-| 2 | **Vite SPA everywhere, never Next** | No SSR need — every route is behind a login. Consequence: **the frontend holds only public values; every secret lives in a Supabase Edge Function** |
+| 2 | **Vite SPA everywhere for the apps** | No SSR need — every route is behind a login. Consequence: **the frontend holds only public values.** Secrets live server-side: Supabase Edge Functions, or `geoapi-next` where an upstream API key and a rate limiter genuinely need a server |
 | 3 | **`organizations`, not `forwarders`/`suppliers`** | Two apps invented the same concept twice. One table, `type = internal \| forwarder \| customer` |
 | 4 | **One Supabase project, everything in it** | One `auth.users`, one organization directory, one onboarding — the apps stay standalone, but the *people* are the same. Dev is local (`supabase start`), not a second project |
 | 5 | **Identity comes from `profiles`, never `user_metadata`** | `user_metadata` is user-writable. Client and RLS read the same row |
@@ -144,6 +147,7 @@ Each was argued out and settled. Reverse one only deliberately.
 Cheap habits that stop later phases from growing. Nothing else in this file applies yet.
 
 - [ ] **Baseline the schema** — `supabase db pull`, commit it. Every hand-run change from here is drift someone has to reconstruct
+- [ ] **Close the brain's three gaps** — CORS, JWT auth, and the two batch endpoints. Not domain work: Apply Rates and Drayage Analytics cannot work until it is done. See [brain groundwork](#the-brain-geoapi-next--groundwork)
 - [ ] **Write migrations from today on.** One repo owns them — see [Stuffer Planner](#stuffer-planner-backend--the-absorption-checklist)
 - [ ] **Identity hardening in RatesApp** (below) — a day, depends on nothing
 - [ ] Any new table gets `organization_id`, never `forwarder_id` or `supplier_id`
@@ -454,6 +458,103 @@ the answer from whichever doc gets implemented.
 
 - [ ] Presence and locking work unchanged, but confirm Realtime connection limits on your tier before onboarding several factories at once
 - [ ] Presence broadcasts identity. If factories cannot see each other's containers, make sure they cannot see each other's **avatars** either — a presence channel is a side channel
+
+---
+
+## The brain (`geoapi-next`) — groundwork
+
+A Next.js service on Vercel holding the HERE and Nominatim keys plus a Supabase-backed cache.
+RatesApp's browser calls it directly; `src/lib/geo.js` is the only place RatesApp knows it
+exists.
+
+**It is not ready — and this is not a domain problem.**
+
+### Three gaps between what RatesApp calls and what the brain serves
+
+| Gap | Evidence | Consequence |
+|---|---|---|
+| **No CORS** | No `Access-Control-*` headers, no `OPTIONS` handler, empty `next.config.ts`, no `vercel.json` | Every browser call is blocked — **on any domain**, including today's |
+| **No auth** | No `Authorization` handling anywhere in `app/` or `lib/` | Anyone who finds the URL spends your HERE quota |
+| **Two endpoints missing** | Only `geocode`, `route`, `within`, `healthz` exist | `/api/within-batch` and `/api/route-batch` 404 — Apply Rates geo checks and Drayage Analytics benchmarks cannot run |
+
+Confirm in ten seconds: run a Drayage Analytics benchmark against the deployed app and watch
+the network tab for a 404, or a CORS failure on `/api/route`.
+
+> **RatesApp's client is ahead of the brain's server.** The consuming side was built to
+> BRAIN.md's spec; the brain stopped at four endpoints. All of this has to be built anyway —
+> the only choice is whether it gets built once, with the final domains in mind, or twice.
+
+### CORS as an allowlist, not a single origin
+
+`Access-Control-Allow-Origin` holds exactly one origin and cannot take a list, so BRAIN.md's
+single `ALLOWED_ORIGIN` would make the domain move a flag day. Echo the request origin
+instead:
+
+```ts
+const ALLOWED = (process.env.ALLOWED_ORIGINS ?? '').split(',').map(s => s.trim())
+
+function corsFor(request: Request) {
+  const origin = request.headers.get('origin') ?? ''
+  return {
+    ...(ALLOWED.includes(origin) && { 'Access-Control-Allow-Origin': origin }),
+    'Vary': 'Origin',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'content-type,authorization',
+  }
+}
+```
+
+`ALLOWED_ORIGINS` then holds the old and new URLs at the same time, and **the custom-domain
+cutover becomes an env var edit with no downtime.**
+
+- [ ] Allowlist + `Vary: Origin` on every `/api/*` response
+- [ ] An `OPTIONS` handler per route — the batch endpoints are JSON POSTs, so they preflight
+- [ ] Never `*` in production
+
+### Skip the shared secret; go straight to the Supabase JWT
+
+BRAIN.md sequences shared-secret now, JWT later. Since neither exists, that is two pieces of
+work where one will do — and a static token ends up inlined in the public bundle anyway, so
+it proves little.
+
+The brain already holds a Supabase client and a service-role key. Verify the caller's token
+server-side and have `geo.js` attach `session.access_token`. Result: **only logged-in users
+spend your HERE quota, with nothing secret in the browser.**
+
+- [ ] Verify the Supabase JWT on every `/api/*` route except `/healthz`
+- [ ] `geo.js` sends `Authorization: Bearer <session.access_token>`
+- [ ] Per-IP rate limiting only if abuse appears — it caps damage, it does not authenticate
+- [ ] Remember the cache is the real quota defence: only *novel* pairs cost anything upstream
+
+### The two missing endpoints
+
+- [ ] `/api/within-batch` — POST `{ pairs: [{a,b,miles}] }`, results index-aligned with input
+- [ ] `/api/route-batch` — POST `{ pairs: [{a,b}] }`, route summaries without polylines
+- [ ] Honour the contract `geo.js` already assumes: **per-pair failures, never a whole-batch throw**
+- [ ] Stay inside the brain's 60s `maxDuration` — the client already chunks at 30 and 15 for this reason, sequentially, so Nominatim's rate limiter is not multiplied
+
+### Domain — deliberately public, outside Zero Trust
+
+- [ ] **Never put the brain behind Cloudflare Access.** `geo.js` sends no credentials, so Access would return HTML login pages where the code expects JSON — and the failure would not obviously point at Cloudflare
+- [ ] A stable subdomain is optional and cosmetic. BRAIN.md is right: *"a custom domain only changes the label of a still-public URL."* The JWT is the protection, not the hostname
+- [ ] **Write down that it is intentionally public**, so it never reads as an oversight against the "no `.vercel.app` serves production data" rule
+
+### It shares your Supabase project
+
+The brain holds `SUPABASE_SERVICE_ROLE_KEY` for the same project and writes its geocode and
+route cache there.
+
+- [ ] Its cache tables belong in the shared migration history — `geoapi-next/schema.sql` becomes a migration under `supabase/migrations/`
+- [ ] Treat it as a **second server-side component with elevated database access**, listed alongside the Edge Functions — not as a frontend dependency
+
+### The exit, if you ever want it
+
+`src/lib/geo.js` is the only place RatesApp knows the brain exists, and its interface already
+matches what a Supabase Edge Function would expose. BRAIN.md §9's "Path B" really is a
+one-file swap — and it would retire this deployment, its CORS, and its auth entirely, since
+an Edge Function sits behind Supabase auth by default.
+
+Not now. Worth knowing the door is there.
 
 ---
 
