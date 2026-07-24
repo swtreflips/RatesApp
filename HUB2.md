@@ -521,7 +521,8 @@ supabase db dump --data-only -f source_data.sql
 ### 6. Re-derive security for the target's blast radius
 
 - [ ] Enable RLS on every table that arrives without it, unless you can state why not
-- [ ] Rewrite policies against the target's identity model (`my_org()`, `my_org_type()`)
+- [ ] Rewrite policies against the target's identity model (`my_org()`, `my_org_type()`) — the gate is a predicate over `profiles`, **never a `GRANT` to a role.** `authenticated` includes partners
+- [ ] **Materialized views cannot hold RLS.** Any MV that was safe on grants alone must be locked (`revoke from anon, authenticated`) and exposed through a guarded view. See [schedules](#rls-in-the-shared-project--the-one-that-matters)
 - [ ] **Audit every `GRANT ... TO anon`.** In the target, `anon` is the key in every public bundle
 - [ ] Verify from a partner-scoped session, not an internal one
 
@@ -552,17 +553,57 @@ warehouse that a React app reads. Per `Schedules/SUPA.md`:
 | `refresh_schedules_latest()` | `SECURITY DEFINER`, called by ingest over RPC |
 | Grants | `GRANT SELECT ON schedules_latest TO anon, authenticated` |
 
-**The one that matters — RLS off stops being safe the moment it moves.**
+#### RLS in the shared project — the one that matters
 
 Today `schedules` sits alone in a project only internal people hold keys to, so RLS disabled
-costs nothing. In the target, forwarders and factories have accounts and the anon key ships
-in every public bundle. Carried across unchanged, **every partner could read the entire
-schedules warehouse, and so could anyone who extracted the anon key from a bundle.**
+costs nothing: **the project is the boundary.** In the target that boundary moves down to the
+**table**, because `authenticated` now includes forwarders and factories and the anon key
+ships in every partner bundle. Carried across unchanged, **every partner could read the entire
+schedules warehouse, and so could anyone who pulled the anon key out of a bundle.**
 
-- [ ] Enable RLS on `schedules`; internal-only policy via `my_org_type() = 'internal'`
-- [ ] **`REVOKE SELECT ON schedules_latest FROM anon`**, keep `authenticated`, and gate it by policy
-- [ ] Confirm the ingest scripts use the **service-role** key — it bypasses RLS, so ingestion keeps working. If they hold an anon key, enabling RLS breaks the pipeline
-- [ ] `us_ports` is shared geo reference — its RLS follows the [shared-reference](#shared-reference--the-anti-redundancy-rule) rules, not schedules' internal-only rule
+**The trap: "internal" is not a Postgres role.** Supabase has three API roles — `anon`,
+`authenticated`, `service_role` — and no "internal". Internal-ness lives in `profiles` /
+`organizations.type`, so **you cannot express it with a `GRANT`**: `GRANT ... TO authenticated`
+hands it to partners too. The gate is always a policy (or function) checking
+`my_org_type() = 'internal'`, never a role. This is the same shape as every other boundary in
+this plan — a predicate over `profiles`, not a role or a grant.
+
+**Base table — RLS on, internal policy:**
+
+```sql
+alter table schedules enable row level security;
+
+create policy schedules_internal_read on schedules
+  for select using (my_org_type() = 'internal');
+```
+
+- [ ] Ingest keeps working untouched — **`service_role` bypasses RLS.** Confirm the scripts hold the service key, not an anon key; that is the one thing that would break the pipeline
+
+**The materialized view — the real gotcha: RLS cannot be attached to a materialized view.**
+Postgres refuses a policy on an MV, so the current `GRANT SELECT ON schedules_latest TO anon,
+authenticated` is the *only* thing guarding it — and it guards nothing against partners. Wrap
+it in a guarded view:
+
+```sql
+revoke all on schedules_latest from anon, authenticated;   -- lock the raw MV
+
+create view schedules_latest_secure as
+  select * from schedules_latest
+  where my_org_type() = 'internal';
+
+grant select on schedules_latest_secure to authenticated;
+```
+
+A plain view runs with its owner's rights, so it can read the locked MV, while the `where`
+evaluates the **caller's** `my_org_type()` — internal sees rows, everyone else sees zero.
+
+- [ ] The React app changes one string: `.from('schedules_latest')` → `.from('schedules_latest_secure')`. It **keeps every PostgREST `.eq()` filter and sort** — an RPC would cost you that, which is why the view beats a `SECURITY DEFINER` function here
+- [ ] `us_ports` and the geo caches are **non-tenant reference** — they do not take the internal gate. Read-only to clients, written only by their owner; scope read to `authenticated` (or internal, if no partner app needs them). Not sensitive — this one is not load-bearing
+
+**Prove it from a partner session, not an internal one:**
+
+- [ ] From a forwarder/factory login, query `schedules`, `schedules_latest`, and `schedules_latest_secure` — all three must return **zero rows**
+- [ ] Pull the anon key from the built bundle and hit them with `curl` — still zero. This is the real check; the anon key is public by design
 
 **The Render FastAPI geocoder is deleted, not migrated.**
 
