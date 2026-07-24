@@ -135,6 +135,7 @@ anything memorable to the people typing it.
 | 4 | **One Supabase project, everything in it** | One `auth.users`, one organization directory, one onboarding — the apps stay standalone, but the *people* are the same. Dev is local (`supabase start`), not a second project |
 | 5 | **Identity comes from `profiles`, never `user_metadata`** | `user_metadata` is user-writable. Client and RLS read the same row |
 | 6 | **Retire by unreachability, then delete** | A Vite build inlines its env vars, so stripping keys does not neutralize a deployment that already shipped. Only unreachability does |
+| 7 | **`public` + prefixes, not schemas** | Everything in Supabase's toolchain assumes `public`. Redundancy is prevented by table *ownership*, not by namespaces. See [organizing tables](#organizing-tables-in-one-database) |
 
 Each was argued out and settled. Reverse one only deliberately.
 
@@ -350,7 +351,7 @@ Two rules so the planner's policies are written correctly:
 ### Two decisions that are documents, not code
 
 - [ ] **`supabase/` stops being RatesApp's.** It is the database's. Planner SQL lands there too. Put a README in the directory saying so, before you forget you decided it
-- [ ] **Write the `profiles` / `organizations` contract down once**, in a doc both repos link to. That page is what stops the planner inventing `suppliers`
+- [ ] **Write the `profiles` / `organizations` contract down once**, in a doc both repos link to. That page is what stops the planner inventing `suppliers`. Give it the [shared-tables registry](#organizing-tables-in-one-database) too — owner and readers per shared table
 
 ---
 
@@ -395,6 +396,75 @@ deployed. Neither app ever runs a migration; they only read env vars.
 - [ ] The planner's existing repository abstraction is the right seam: `LocalMasterItemRepo`
       gains a `SupabaseMasterItemRepo` sibling and `VITE_DATA_SOURCE` flips between them.
       Migrate one repo at a time — the app stays shippable at every step
+
+---
+
+## Organizing tables in one database
+
+Three apps, one database. The instinct is "use Postgres schemas to keep them apart." Before
+reaching for that, separate **two problems that feel like one:**
+
+| Problem | Solved by |
+|---|---|
+| Keeping the namespace tidy | naming convention (or schemas) |
+| Not duplicating shared data — two `ports` tables, two caches | **ownership**, not namespace |
+
+**Schemas do nothing for the second one.** A `sched` schema and a `rates` schema will not stop
+you from creating `ports` in both. What prevents redundancy is deciding a table has **one
+owner** and everyone else reads it. That is a convention, not a namespace.
+
+### On schemas — the Supabase reality
+
+**Default to `public`. Reach for a schema rarely, and knowingly.** Everything in the Supabase
+toolchain assumes `public`:
+
+- `supabase-js` `.from('t')` is `public` unless you call `.schema('x')` on every query
+- non-`public` schemas must be added to **Exposed schemas** in API settings before PostgREST serves them
+- PostgREST relationship embedding (`select('*, organizations(*)')`) across schemas is fiddly
+- the dashboard's table editor and RLS UI are `public`-first
+
+So a schema buys *visible* separation at the cost of *real* friction on every app that reads
+across it. For three apps that all need to join to `organizations`, that friction lands
+everywhere.
+
+### The convention that actually scales: `public` + domain prefixes
+
+You already do this — `rate_*`, `drayage_*`. Keep it, and give each absorbed app a prefix
+where names are not already distinct:
+
+| App | Prefix / names |
+|---|---|
+| Rates | `rate_*`, `drayage_*` (existing — **do not rename**, per `SUPABASE.md`) |
+| Schedules | `schedules`, `ports`, `schedules_latest` — already distinct, keep |
+| Planner | `containers`, `container_allocations`, `master_items` — distinct, keep |
+
+The rule for a new table: **its name must be globally unique and self-evidently app-scoped.**
+`containers` passes; a bare `items` would not. The prefix *is* the namespace — no schema needed.
+
+### Three tiers, three homes
+
+| Tier | Examples | Home | Who writes |
+|---|---|---|---|
+| **App-private** | `drayage_rates`, `containers`, `schedules` | `public`, prefixed, RLS per app | that app |
+| **Shared identity** | `profiles`, `organizations`, the helpers | `public` | onboarding only |
+| **Shared reference / cache** | `ports`, `geocode_cache` | `public` | **one owner, many readers** |
+
+### Shared reference — the anti-redundancy rule
+
+This is the heart of it. A reference or cache table that more than one app needs is **one
+physical table, with exactly one writer:**
+
+- [ ] **`geocode_cache` → owned by the brain.** Already true. Schedules stops carrying its own (its Render geocoder is [deleted](#schedules-specifics)). Any app that needs a geocode calls the brain; the cache is singular
+- [ ] **`ports` → owned by schedules**, read by anyone. It is a curated port list (LOCODE, coordinates) — **not** the same thing as `geocode_cache` (a generic query→lat/lon cache), so both exist, each with one owner. If rates ever wants canonical port tokens for normalization, it reads this `ports`; it does not build a second one
+- [ ] **A shared-tables registry** — a short table in the `profiles`/`organizations` contract doc: each shared table, its owner, who writes, who reads. Both repos link to it. **This registry, not the schema layout, is what stops redundant tables**
+
+### The check before creating any table
+
+> Is this reference or cache data another app already owns? If yes, read theirs — the registry
+> says which. Cross-app foreign keys are fine and encouraged: in one database, `containers`,
+> `rates`, and `schedules` can all FK to `organizations` and to `ports`. That join working is
+> the entire payoff of one database — and the reason not to scatter these into schemas that
+> make cross-schema FKs and embedding awkward.
 
 ---
 
