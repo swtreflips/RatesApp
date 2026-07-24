@@ -491,16 +491,20 @@ schedules warehouse, and so could anyone who extracted the anon key from a bundl
 - [ ] Enable RLS on `schedules` and `ports`; internal-only policy via `my_org_type() = 'internal'`
 - [ ] **`REVOKE SELECT ON schedules_latest FROM anon`**, keep `authenticated`, and gate it by policy
 - [ ] Confirm the ingest scripts use the **service-role** key — it bypasses RLS, so ingestion keeps working. If they hold an anon key, enabling RLS breaks the pipeline
+- [ ] The nested `api/` carries its **own `schema.sql`** — inventory what it creates against the target before it runs, so it does not quietly add or expect tables the migration did not account for
 
 **The rest, in order:**
 
-- [ ] Enable **PostGIS** on the target *before* importing anything
 - [ ] Check `ports` against the target — the brain also caches geocodes; confirm no collision
 - [ ] Import `schedules` + `ports` + the geom trigger as a migration
-- [ ] Recreate `schedules_latest`, its unique index, and `refresh_schedules_latest()`. **An MV's query cannot be altered in place** — drop and recreate, and recreate the index too
-- [ ] Check the size of `schedules` first. "Every snapshot, kept forever" is the one table here that can threaten 500 MB
-- [ ] Repoint, one at a time: `ingest_schedules.py` → `ocean-routing`'s scripts and alerts engine → the React app → the nested `api/` service
 - [ ] Verify by running one full ingest and confirming the MV refreshes and the React grid still loads
+
+**Four specifics that are easy to get wrong:**
+
+- [ ] **PostGIS on the target first — before importing anything.** The geom-filling BEFORE trigger depends on it, and **extensions do not travel reliably in a schema dump.** Import first and the trigger creation fails, or worse, the geom columns import as a type the project does not recognise
+- [ ] **`schedules_latest` is recreated, never dumped.** A materialized view's query cannot be altered in place — drop and recreate. Recreate its **unique index** too: that index is what makes `REFRESH ... CONCURRENTLY` possible, and without concurrent refresh every ingest locks the view the React app is reading
+- [ ] **Check the table size before you start.** `schedules` is "every snapshot ever, kept forever" — the one table in your entire estate that can genuinely threaten the **500 MB free tier**. Know the number going in, not when an import stalls
+- [ ] **Four consumers to repoint, not one.** `ingest_schedules.py` · `ocean-routing`'s scrapers and alerts engine · the React app · **the nested `api/` service — its own git repo inside `Schedules/`, with its own `render.yaml` and `schema.sql`, so it is the one that gets forgotten.** Scripts fail *silently* — a repointed pipeline that still writes the old project looks fine for a week, until someone asks why the grid stopped updating
 
 ---
 
