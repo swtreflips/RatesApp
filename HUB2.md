@@ -435,7 +435,7 @@ where names are not already distinct:
 | App | Prefix / names |
 |---|---|
 | Rates | `rate_*`, `drayage_*` (existing — **do not rename**, per `SUPABASE.md`) |
-| Schedules | `schedules`, `ports`, `schedules_latest` — already distinct, keep |
+| Schedules | `schedules`, `schedules_latest` — already distinct, keep (`ports` → shared `us_ports`, does not come across) |
 | Planner | `containers`, `container_allocations`, `master_items` — distinct, keep |
 
 The rule for a new table: **its name must be globally unique and self-evidently app-scoped.**
@@ -447,23 +447,24 @@ The rule for a new table: **its name must be globally unique and self-evidently 
 |---|---|---|---|
 | **App-private** | `drayage_rates`, `containers`, `schedules` | `public`, prefixed, RLS per app | that app |
 | **Shared identity** | `profiles`, `organizations`, the helpers | `public` | onboarding only |
-| **Shared reference / cache** | `ports`, `geocode_cache` | `public` | **one owner, many readers** |
+| **Shared geo reference / cache** | `us_ports`, `geocode_cache`, `here_route_cache` | `public` | **one owner, many readers** |
 
 ### Shared reference — the anti-redundancy rule
 
 This is the heart of it. A reference or cache table that more than one app needs is **one
-physical table, with exactly one writer:**
+physical table, with exactly one writer.** The rates project already *is* the target, and per
+`BRAIN.md` it already holds the geo common ground — so the shared tables mostly exist:
 
-- [ ] **`geocode_cache` → owned by the brain.** Already true. Schedules stops carrying its own (its Render geocoder is [deleted](#schedules-specifics)). Any app that needs a geocode calls the brain; the cache is singular
-- [ ] **`ports` → owned by schedules**, read by anyone. It is a curated port list (LOCODE, coordinates) — **not** the same thing as `geocode_cache` (a generic query→lat/lon cache), so both exist, each with one owner. If rates ever wants canonical port tokens for normalization, it reads this `ports`; it does not build a second one
+- [ ] **`us_ports` is the canonical port list — rates already has it.** Schedules' `ports` has the same structure, so it **does not migrate**: schedules repoints to `us_ports` (see [schedules specifics](#schedules-specifics)). One curated port table, read by rates and schedules, never two
+- [ ] **`geocode_cache` and `here_route_cache` → owned by the brain.** Already in the rates project. Schedules stops carrying its own geocode cache (its Render geocoder is [deleted](#schedules-specifics)). Any app needing a geocode or a route calls the brain; the caches are singular
 - [ ] **A shared-tables registry** — a short table in the `profiles`/`organizations` contract doc: each shared table, its owner, who writes, who reads. Both repos link to it. **This registry, not the schema layout, is what stops redundant tables**
 
 ### The check before creating any table
 
 > Is this reference or cache data another app already owns? If yes, read theirs — the registry
 > says which. Cross-app foreign keys are fine and encouraged: in one database, `containers`,
-> `rates`, and `schedules` can all FK to `organizations` and to `ports`. That join working is
-> the entire payoff of one database — and the reason not to scatter these into schemas that
+> `rates`, and `schedules` can all FK to `organizations` and to `us_ports`. That join working
+> is the entire payoff of one database — and the reason not to scatter these into schemas that
 > make cross-schema FKs and embedding awkward.
 
 ---
@@ -545,8 +546,8 @@ warehouse that a React app reads. Per `Schedules/SUPA.md`:
 | Object | Note |
 |---|---|
 | `schedules` | Warehouse — every snapshot ever, hybrid relational + JSONB, **PostGIS geom columns**, `UNIQUE(schedule_hash)`. **RLS disabled** |
-| `ports` | Port table + geocode cache |
-| BEFORE trigger | Auto-fills `pol_geom` / `pod_geom` / `last_cy_geom` — **requires PostGIS** |
+| `ports` | Port table + geocode. **Does not migrate — maps onto rates' existing `us_ports`** (same structure). See below |
+| BEFORE trigger | Auto-fills `pol_geom` / `pod_geom` / `last_cy_geom` from the port table — **requires PostGIS**, and must read `us_ports` in the target |
 | `schedules_latest` | **Materialized view**, latest-per-lane, with a unique index required for `REFRESH ... CONCURRENTLY` |
 | `refresh_schedules_latest()` | `SECURITY DEFINER`, called by ingest over RPC |
 | Grants | `GRANT SELECT ON schedules_latest TO anon, authenticated` |
@@ -558,9 +559,10 @@ costs nothing. In the target, forwarders and factories have accounts and the ano
 in every public bundle. Carried across unchanged, **every partner could read the entire
 schedules warehouse, and so could anyone who extracted the anon key from a bundle.**
 
-- [ ] Enable RLS on `schedules` and `ports`; internal-only policy via `my_org_type() = 'internal'`
+- [ ] Enable RLS on `schedules`; internal-only policy via `my_org_type() = 'internal'`
 - [ ] **`REVOKE SELECT ON schedules_latest FROM anon`**, keep `authenticated`, and gate it by policy
 - [ ] Confirm the ingest scripts use the **service-role** key — it bypasses RLS, so ingestion keeps working. If they hold an anon key, enabling RLS breaks the pipeline
+- [ ] `us_ports` is shared geo reference — its RLS follows the [shared-reference](#shared-reference--the-anti-redundancy-rule) rules, not schedules' internal-only rule
 
 **The Render FastAPI geocoder is deleted, not migrated.**
 
@@ -572,13 +574,22 @@ rates-specific; it is the org's geo service, and schedules uses the same one.**
 So this is a retirement, not a repoint:
 
 - [ ] Point whatever geocodes in schedules (`add_port.py`, ingest) at the brain's `/api/geocode`
-- [ ] **Do not migrate the `api/geocode_cache` table** — the brain owns the geocode cache now. This also settles the "`ports` vs brain cache collision" worry by deleting one side of it
+- [ ] **Do not migrate the `api/geocode_cache` table** — the brain owns the geocode cache now
 - [ ] Delete the Render service and its nested `api/` repo. One fewer deployment target, no Render in the estate at all
 - [ ] **New auth wrinkle:** the brain's [JWT check](#skip-the-shared-secret-go-straight-to-the-supabase-jwt) assumes a logged-in browser user. `add_port.py` and ingest are **server-side scripts with no user session** — so the brain must *also* accept a service credential (service-role key or a server-only shared secret) for backend callers. Browser → JWT; script → service token. Add this when you build the brain's auth, not after
 
+**`ports` maps onto `us_ports` — it does not come across.**
+
+Rates already holds `us_ports` (`BRAIN.md`: the geo common ground), and schedules' `ports`
+has the same structure. So it is a repoint, not an import:
+
+- [ ] **Confirm the columns line up** — `canonical_name`, `geom geography(Point,4326)`, the `LOWER(TRIM(canonical_name))` index. Reconcile any drift into `us_ports` once, as a migration
+- [ ] Repoint the geom-filling trigger and `add_port.py` at `us_ports`
+- [ ] Fold any schedules-only ports **not** already in `us_ports` into it — one curated list, no second table
+
 **The rest, in order:**
 
-- [ ] Import `schedules` + `ports` + the geom trigger as a migration
+- [ ] Import `schedules` + the geom trigger (reading `us_ports`) as a migration — **`ports` is not imported**
 - [ ] Verify by running one full ingest and confirming the MV refreshes and the React grid still loads
 
 **Three specifics that are easy to get wrong:**
