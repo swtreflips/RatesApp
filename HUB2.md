@@ -286,9 +286,55 @@ a repeatable reproducibility test, and it is the same check CI runs later.
 > inventory is the durable artifact — you just cannot mechanically prove the rebuild. See
 > [the dev environment](#the-development-environment-is-local-not-a-second-project).
 
-**Access:** the inventory needs read access to the database. `supabase login` (a personal
-access token) is enough to run introspection through the Management API. `supabase db pull`
-additionally prompts for the **database password**, which is 0b's only manual step.
+#### What has to be set up first — the access prerequisites
+
+Nothing on this machine can currently reach the database: **no Supabase CLI access token, no
+password in `supabase/.temp/pooler-url`, no `psql` installed.** Three tiers, and only the
+first is needed to start.
+
+> **The distinction that makes "one CLI, many projects" safe.** *Linking* and *querying* are
+> different things, and only one of them is singular:
+>
+> | | Scope | Rule |
+> |---|---|---|
+> | **Migrations** (`link`, `db push`, `db diff`) | **exactly one project** | One `supabase/` directory owns the migration history. A second one means two histories that do not know about each other — see [working across two repos](#working-across-two-repos-one-database) |
+> | **Querying** (Management API) | **every project you own** | Addressed by project ref per request. No linking, no state, nothing to collide |
+>
+> So one login covers rates (`sfoz…`) *and* schedules (`jnui…`) — which is exactly what Phase B
+> needs, since folding a project means introspecting source and target side by side. It does
+> **not** mean linking to two projects. It never means that.
+
+**Tier 1 — read-only introspection.** Everything 0a needs.
+
+```bash
+npx supabase login          # stores a personal access token in ~/.supabase/access-token
+```
+
+```
+POST https://api.supabase.com/v1/projects/{ref}/database/query
+Authorization: Bearer <token>          body: { "query": "select …" }
+```
+
+- [ ] Run `supabase login` once. The token lives outside any repo and is not per-project
+- [ ] Confirm both refs answer — rates and schedules — before Phase B needs it
+
+**Tier 2 — `supabase db pull` (0b only).** Needs the **database password**, separate from the
+access token: Dashboard → Settings → Database. Prompted interactively, or set
+`SUPABASE_DB_PASSWORD` in the environment to skip the prompt.
+
+- [ ] Have the DB password to hand for 0b. It is the one step that cannot be delegated
+
+**Tier 3 — a direct SQL client.** Not required. The Management API covers introspection; a
+direct connection only matters for bulk `COPY` during Phase B's data move. `psql` is not
+installed, and the Python environment already available (`schedulesenv`) can fill in with a
+driver if it comes to that.
+
+> **Be clear about what the token is.** The Management API query endpoint runs arbitrary SQL as
+> a privileged role, across every project in the account — it can write as easily as read.
+> Granting it is granting write access. The discipline that makes it safe is a convention, not
+> a permission boundary: **introspection is `select`-only, and every change to the database
+> goes through a migration you read first.** Tokens are revocable at
+> `supabase.com/dashboard/account/tokens`.
 
 ---
 
@@ -674,6 +720,11 @@ tooling at all.**
 > not know about each other — `db push` from one tries to re-apply what the other already
 > ran, and `db diff` reports permanent phantom drift. Never `supabase init` in the planner
 > repo.
+
+> **This constrains `link`, not `login`.** One access token queries every project you own,
+> addressed by ref, with no local state to collide — which is how Phase B introspects the
+> schedules project and the rates project side by side without ever linking to two. See
+> [the access prerequisites](#what-has-to-be-set-up-first--the-access-prerequisites).
 
 **Schema work for either app** — in the RatesApp repo:
 
