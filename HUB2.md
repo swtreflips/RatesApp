@@ -141,6 +141,192 @@ Each was argued out and settled. Reverse one only deliberately.
 
 ---
 
+## Next steps
+
+[Sequence](#sequence) is the map. This is the route — what to do first, in order, and why each
+step has to come before the next. Everything here is inside the **Now** and **Phase A** bands;
+nothing below touches domains, DNS, or the hub.
+
+**The ordering principle:** do the things whose *cost grows* if you delay them. Two qualify.
+Un-baselined hand-run SQL gets harder to reconstruct with every change. And every policy
+written against today's column names is a policy you rewrite later.
+
+| # | Step | Cost | Why it is where it is |
+|---|---|---|---|
+| 0 | [Baseline the schema](#0-baseline-the-schema-first-1-hour) | ~1 hr | Nothing else records what the database already is. Gets worse every week |
+| 1 | [Lock the brain's front door](#1-lock-the-brains-front-door) | **written** — deploy left | It is open to the internet and spends your HERE quota |
+| 2 | [Brain SQL → migrations](#2-fold-the-brains-sql-into-the-migration-history) | ~1 hr | The brain's tables exist only as prose in `SUPA.md` |
+| 3 | [Identity hardening](#3-identity-hardening-phase-a) | ~1 day | A live privilege-escalation hole, and the pattern the planner copies |
+| 4 | [The helper facade](#4-the-helper-facade-three-functions) | ~1 hr | Three functions that make the organizations migration nearly free |
+| 5 | [CI](#5-ci--the-thing-four-later-steps-assume) | ~half day | Four items in this plan say "in CI". There is no `.github/` |
+
+Steps 0 and 2 are the database thread and are ordered. Steps 1, 3, 4 are independent of
+everything — **any of them can be done on any day, by anyone, in any order.** There is no hard
+chain left in this list.
+
+> **What changed.** An earlier version of this section budgeted 1–2 days for the brain and put
+> it first. That was read off a local checkout **two commits behind `origin/main`.** CORS and
+> both batch endpoints were already built and deployed; the features that section called broken
+> have been working the whole time. Only auth was ever open.
+
+---
+
+### 0. Baseline the schema first (~1 hour)
+
+`supabase/migrations/` holds six feature migrations and **no baseline.** The database's
+starting shape — `us_ports`, `geocode_cache`, `drayage_routes`, `forwarders`, `profiles`,
+every RLS policy, `cache_within_miles`, `set_geom` — exists only as hand-run SQL and prose in
+`SUPA.md`. The migrations sit on top of a foundation that is not written down anywhere
+executable.
+
+That is tolerable today and gets worse with every change. Step 2 puts the brain's three tables
+into the history, and it needs somewhere coherent to put them — **so this comes first.**
+
+- [ ] `supabase db pull` → commit the generated baseline migration
+- [ ] Read it. Confirm RLS policies, `security definer` functions, triggers, and generated columns survived — `db pull` is good, not perfect
+- [ ] `supabase db reset` locally and confirm the schema reproduces from migrations alone
+- [ ] Create `supabase/seed.sql` — it does not exist. **Two organizations minimum**; the isolation test in Phase D is vacuous with one
+
+> Needs Docker Desktop for the local reset. If that is a problem, `db pull` + a careful read
+> still gets you most of the value — see [the dev environment](#the-development-environment-is-local-not-a-second-project).
+
+---
+
+### 1. Lock the brain's front door
+
+**First: `git pull` in `geoapi-next`.** Working from a stale checkout is what produced the
+wrong version of this section.
+
+CORS and both batch endpoints are done and deployed. What remains is one thing, reproducible
+from any machine on earth:
+
+```bash
+curl -X POST https://geoapi-next.vercel.app/api/route-batch \
+  -H 'content-type: application/json' \
+  -d '{"pairs":[{"a":"long beach, ca","b":"phoenix, az"}]}'
+# → 200  {"results":[{"ok":true,"distance_m":613925,"duration_s":23350,"cached":true}]}
+```
+
+No `Authorization` header. No account. **That is your HERE quota, and the URL is in the
+public bundle of every RatesApp deployment** — `VITE_GEO_API_URL` is inlined at build time, so
+it is one View Source away.
+
+The cache is the reason this has not already cost anything: only *novel* pairs reach HERE.
+It is also why an abuser would be free to pick novel pairs.
+
+#### Written, not yet deployed
+
+Both sides exist and compile; nothing is live.
+
+| Repo | Change |
+|---|---|
+| geoapi-next | **`lib/auth.ts`** — `authenticate()` / `requireCaller()`. Local ES256 verification against the cached JWKS, plus the optional `GEO_SERVICE_TOKEN` path |
+| geoapi-next | Guard on `geocode`, `route`, `within`, `route-batch`, `within-batch`. `/healthz` open; every `OPTIONS` untouched |
+| geoapi-next | `lib/cors.ts` fails closed in production — `'*'` survives only in development |
+| RatesApp | `geo.js` attaches the token in `get()` and `post()`, read **per request** — tokens last an hour, Apply Rates runs chunked for minutes |
+| RatesApp | Errors carry `.status`, so `postChunked` stops retrying 4xx. It retried *everything*, which would have doubled every 401 |
+
+Verified: TypeScript clean, Vite build clean, JWKS resolves as ES256, malformed tokens
+rejected. **Not** verified without credentials: a real token being accepted, and the service
+path. The Apply Rates run is the test.
+
+#### Deploying it — the order is the risky part
+
+Apply Rates works today *because* the brain answers unauthenticated. Reverse these and it
+breaks.
+
+- [ ] **RatesApp first.** The `geo.js` change alone. The brain ignores the header; behaviour is unchanged
+- [ ] Confirm `ALLOWED_ORIGINS` is set in the brain's Vercel env — it was always set, but it is **load-bearing now** that unset fails closed
+- [ ] Optionally set `GEO_SERVICE_TOKEN` (`openssl rand -base64 32`). Nothing needs it yet; setting it now saves a redeploy later
+- [ ] **Then the brain.** Env changes need a redeploy to take effect
+- [ ] Verify with a real Drayage Analytics run — **not a `curl`**, which authenticates in ways a browser cannot
+- [ ] Re-run the unauthenticated `curl` above: it must return `401 {"detail":"unauthorized"}`
+
+> **Preview deployments will fail CORS** — Vercel gives each one a unique hostname that is not
+> in the allowlist. Already true before this change, so not a regression, but it is why a
+> preview is not a valid place to test the cutover.
+
+---
+
+### 2. Fold the brain's SQL into the migration history
+
+`geoapi-next/schema.sql` is marked *"reference only"* and `SUPA.md` is a beautifully written
+record of SQL that was **typed into the dashboard by hand.** `geocode_cache`, `drayage_routes`,
+`us_ports`'s geography conversion, `set_geom`, `set_route_geom`, `cache_within_miles`,
+`is_near_port` — none of it is in `supabase/migrations/`.
+
+The brain is [a second server-side component with elevated database
+access](#it-shares-your-supabase-project), not a frontend dependency. Its tables belong in the
+same history as everything else.
+
+- [ ] One migration in **RatesApp's** `supabase/migrations/` holding all of it, written `create ... if not exists` / `create or replace` so it is a no-op against production and a real create against a fresh local database
+- [ ] **PostGIS first**, in the same migration — `create extension if not exists postgis`
+- [ ] `supabase db reset` locally, then point a local brain at it and geocode something. That is the proof
+- [ ] Leave `schema.sql` and `SUPA.md` in place, with a line at the top pointing at the migration as the executable source. `SUPA.md`'s type-vs-value lessons are worth keeping as prose
+
+---
+
+### 3. Identity hardening (Phase A)
+
+The [full checklist is above](#phase-a--identity-hardening-ratesapp-1-day). What the code
+actually looks like today, so the size is not a surprise:
+
+[AuthProvider.jsx](src/app/providers/AuthProvider.jsx) derives role as
+`normalizeRole(user?.user_metadata?.role ?? devRole)`. Both halves are a problem:
+`user_metadata` is **user-writable**, and `devRole` defaults to `ROLES.INTERNAL` from
+`localStorage` — so the fallback for *no session at all* is internal. It already reads
+`profiles` twice (`forwarderName`, `forwarder_services`); it just does not read `role` from
+there.
+
+- [ ] One `profiles` query in `AuthProvider` returning `role`, `forwarder_id`, name — collapse the two existing queries into it
+- [ ] `undefined` = loading, `null` = no row = **no access.** Query failure resolves to `null`, never a guess
+- [ ] Delete `devRole`, `toggleDevRole`, the `dev_role` localStorage read, and the TopNav switcher
+- [ ] Then the gate: from a forwarder session, `supabase.auth.updateUser({ data: { role: 'internal' } })` and reload. A rendered internal dashboard is a failed check
+
+> Note the interaction with step 1c: once the brain trusts a Supabase JWT, "logged in" is what
+> spends your HERE quota. It does not read `role` — but the two land next to each other, and
+> the auth boundary should be trustworthy on both sides at the same time.
+
+---
+
+### 4. The helper facade (three functions)
+
+The [smallest high-leverage thing in the whole plan](#one-migration-before-the-planners-backend).
+`my_org()`, `my_org_type()`, `my_org_role()`, backed by today's columns — plus
+`profiles.org_role`. RatesApp does not have to use them yet.
+
+- [ ] Add the three functions and `profiles.org_role` as one migration
+- [ ] Write them down in the shared contract doc *before* the planner's backend starts
+
+**Do it early even though nothing consumes it yet.** It is an hour, and it is the difference
+between the organizations migration being a function-body edit and being a rewrite of every
+policy in two applications.
+
+---
+
+### 5. CI — the thing four later steps assume
+
+There is **no `.github/` directory and no test runner.** Isolation tests, drift checks, secret
+scanning, and the build-output `service_role` check all say "in CI".
+
+- [ ] GitHub Actions + Vitest, running `npm run build` and one real test
+- [ ] `supabase db diff --linked` — non-empty output fails the build. **This is what makes step 0 stay true** instead of decaying back into hand-run drift
+- [ ] Secret scanning
+- [ ] Isolation tests once `seed.sql` has two organizations
+
+---
+
+### Not yet
+
+Deliberately excluded, so their absence reads as a decision:
+
+- **Domains.** [Buy two](#domains--buy-two) — but not this week. Nothing above needs them, and the [CORS allowlist](#cors-as-an-allowlist-not-a-single-origin) makes the eventual cutover an env-var edit
+- **Anything hub-shaped** — Vercel projects, Cloudflare Access, DNS
+- **The schedules consolidation.** It is Phase B, it is the largest single piece, and it wants step 0 finished and the brain's `/api/geocode` [working with a service credential](#the-render-fastapi-geocoder-is-deleted-not-migrated) before it starts
+- **Touching `forwarder_id`.** Expand is additive and RatesApp does not change a line. Step 4 is preparation, not migration
+
+---
+
 ## Sequence
 
 ### Now — while the apps stay separate
@@ -148,7 +334,7 @@ Each was argued out and settled. Reverse one only deliberately.
 Cheap habits that stop later phases from growing. Nothing else in this file applies yet.
 
 - [ ] **Baseline the schema** — `supabase db pull`, commit it. Every hand-run change from here is drift someone has to reconstruct
-- [ ] **Close the brain's three gaps** — CORS, JWT auth, and the two batch endpoints. Not domain work: Apply Rates and Drayage Analytics cannot work until it is done. See [brain groundwork](#the-brain-geoapi-next--groundwork)
+- [x] ~~Close the brain's three gaps~~ — **CORS and the two batch endpoints are done and deployed** (`ebf421d`, `e837b83`); Apply Rates and Drayage Analytics work. **JWT auth is still open** — see [brain groundwork](#the-brain-geoapi-next--groundwork)
 - [ ] **Write migrations from today on.** One repo owns them — see [Stuffer Planner](#stuffer-planner-backend--the-absorption-checklist)
 - [ ] **Identity hardening in RatesApp** (below) — a day, depends on nothing
 - [ ] Any new table gets `organization_id`, never `forwarder_id` or `supplier_id`
@@ -612,12 +798,36 @@ The nested `api/` service — FastAPI on Render, `GET /geocode`, backed by its o
 `/api/geocode` already does: Nominatim lookup, PostGIS cache. **The brain is not
 rates-specific; it is the org's geo service, and schedules uses the same one.**
 
-So this is a retirement, not a repoint:
+So this is a retirement, not a repoint.
 
-- [ ] Point whatever geocodes in schedules (`add_port.py`, ingest) at the brain's `/api/geocode`
+**It has exactly one consumer, and it is a browser.** `React/src/lib/geoapi.ts` →
+`searchSchedules.ts`: geocode the user's typed destination, then call a Supabase RPC. That is
+the whole surface.
+
+> **Correction — `add_port.py` and ingest do not geocode.** An earlier version of this section
+> said they did, and built a service-credential requirement on top of that. They don't:
+> `add_port.py` reads a JSON port file and upserts rows, with no HTTP client in it at all, and
+> there is no Nominatim/geopy/geoapi reference in any Python outside the `api/` service itself.
+> The geom columns come from the DB trigger, exactly as `SUPA.md` describes.
+
+**One browser consumer means one gate, and it is the issuer.** Schedules' Supabase project
+(`jnui…`) is not the rates project (`sfoz…`), and the brain verifies against exactly one
+issuer's JWKS. A schedules browser token is *correctly* rejected today. So:
+
+```
+consolidate the projects → schedules browser holds a rates-project JWT
+                         → repoint /geocode → /api/geocode, add Authorization
+                         → delete Render
+```
+
+**Render dies after Phase B, not alongside it.** Nothing pulls it earlier — there is no
+script half that could move first. Do not teach the brain a second issuer to get around this;
+that is a workaround for a merge already on the plan.
+
+- [ ] Repoint `geoapi.ts` — path gains `/api`, plus an `Authorization` header. One function, the same shape `geo.js` already took
 - [ ] **Do not migrate the `api/geocode_cache` table** — the brain owns the geocode cache now
 - [ ] Delete the Render service and its nested `api/` repo. One fewer deployment target, no Render in the estate at all
-- [ ] **New auth wrinkle:** the brain's [JWT check](#skip-the-shared-secret-go-straight-to-the-supabase-jwt) assumes a logged-in browser user. `add_port.py` and ingest are **server-side scripts with no user session** — so the brain must *also* accept a service credential (service-role key or a server-only shared secret) for backend callers. Browser → JWT; script → service token. Add this when you build the brain's auth, not after
+- [ ] **Move the hardcoded `service_role` key out of `add_port.py` and `ingest_schedules.py` into env vars — before the repo exists.** Both scripts carry a live service-role key valid to 2036, in source. `Schedules` is not a git repository today, so it has never been pushed anywhere; this plan puts those scripts into version control, and the key would go with them. It bypasses RLS on the project that is about to hold partner data
 
 **`ports` maps onto `us_ports` — it does not come across.**
 
@@ -718,22 +928,39 @@ routing — one service, one place for the upstream keys, one cache.
 
 **It is not ready — and this is not a domain problem.**
 
-### Three gaps between what RatesApp calls and what the brain serves
+### Three gaps — two are closed, one is open
 
-| Gap | Evidence | Consequence |
+Commits `ebf421d` (CORS) and `e837b83` (batch endpoints) closed two of the three. **Verified
+against the deployed service, not the source**, because a stale local checkout is exactly how
+this section went out of date in the first place.
+
+| Gap | State | Verified by |
 |---|---|---|
-| **No CORS** | No `Access-Control-*` headers, no `OPTIONS` handler, empty `next.config.ts`, no `vercel.json` | Every browser call is blocked — **on any domain**, including today's |
-| **No auth** | No `Authorization` handling anywhere in `app/` or `lib/` | Anyone who finds the URL spends your HERE quota |
-| **Two endpoints missing** | Only `geocode`, `route`, `within`, `healthz` exist | `/api/within-batch` and `/api/route-batch` 404 — Apply Rates geo checks and Drayage Analytics benchmarks cannot run |
+| **No CORS** | ✅ **Closed.** `lib/cors.ts` — allowlist, echoed origin, `Vary: Origin`, `OPTIONS` per route, `Access-Control-Max-Age` | `OPTIONS` preflight from `localhost:5173` and from the app's origin each get themselves back; an unlisted origin gets a mismatched header the browser rejects |
+| **Two endpoints missing** | ✅ **Closed.** Both exist, both `export const maxDuration = 60` | `POST /api/route-batch` → `200 {"ok":true,"distance_m":613925,"cached":true}` |
+| **No auth** | ❌ **OPEN** | The same POST, **with no `Authorization` header**, returns that data. Anyone with the URL spends your HERE quota |
 
-Confirm in ten seconds: run a Drayage Analytics benchmark against the deployed app and watch
-the network tab for a 404, or a CORS failure on `/api/route`.
+**This is why Apply Rates works today.** RatesApp's client is no longer ahead of the brain —
+they meet. What is left is the one gap that costs money rather than function.
 
-> **RatesApp's client is ahead of the brain's server.** The consuming side was built to
-> BRAIN.md's spec; the brain stopped at four endpoints. All of this has to be built anyway —
-> the only choice is whether it gets built once, with the final domains in mind, or twice.
+Two things noticed while verifying, neither urgent:
 
-### CORS as an allowlist, not a single origin
+- `lib/cors.ts` falls back to `'*'` when `ALLOWED_ORIGINS` is unset. It is set today, so this
+  is inert — but it is the single line that would silently open the service if that variable
+  were ever lost moving a Vercel project. Fail closed instead
+- `within-batch` deliberately uses an **in-memory haversine**, not a PostGIS round trip
+  (`lib/haversine.ts`: *"<0.5% from geography `ST_DWithin`, and stage 1 is a coarse pre-filter
+  whose real gate is the stage-2 road route"*). Correct call — and it means the batch work
+  needed **no new SQL at all**
+
+> **Re-verify before trusting this table.** It described a service two commits behind reality
+> for as long as it existed. `curl` the deployed URL; do not read a local checkout.
+
+### CORS as an allowlist, not a single origin — ✅ built
+
+Shipped in `ebf421d` as `lib/cors.ts`, and it took the allowlist shape below rather than
+BRAIN.md's single `ALLOWED_ORIGIN`. **So the domain cutover really is an env-var edit** — the
+load-bearing property this section existed to secure. Kept as the record of why.
 
 `Access-Control-Allow-Origin` holds exactly one origin and cannot take a list, so BRAIN.md's
 single `ALLOWED_ORIGIN` would make the domain move a flag day. Echo the request origin
@@ -756,9 +983,10 @@ function corsFor(request: Request) {
 `ALLOWED_ORIGINS` then holds the old and new URLs at the same time, and **the custom-domain
 cutover becomes an env var edit with no downtime.**
 
-- [ ] Allowlist + `Vary: Origin` on every `/api/*` response
-- [ ] An `OPTIONS` handler per route — the batch endpoints are JSON POSTs, so they preflight
-- [ ] Never `*` in production
+- [x] Allowlist + `Vary: Origin` on every `/api/*` response
+- [x] An `OPTIONS` handler per route — the batch endpoints are JSON POSTs, so they preflight
+- [ ] **Never `*` in production** — the one line still outstanding. `allowOrigin()` returns
+      `'*'` when `ALLOWED_ORIGINS` is unset. Fail closed: omit the header entirely instead
 
 ### Skip the shared secret; go straight to the Supabase JWT
 
@@ -770,18 +998,28 @@ The brain already holds a Supabase client and a service-role key. Verify the cal
 server-side and have `geo.js` attach `session.access_token`. Result: **only logged-in users
 spend your HERE quota, with nothing secret in the browser.**
 
-- [ ] Verify the Supabase JWT on every `/api/*` route except `/healthz`
-- [ ] `geo.js` sends `Authorization: Bearer <session.access_token>`
-- [ ] **Also accept a service credential for backend callers.** Schedules' `add_port.py` and ingest have no user session — browser callers present a JWT, server-side scripts present a server-only token (service-role key or shared secret, never in a bundle). Build both when you build the auth
+- [x] Verify the Supabase JWT on every `/api/*` route except `/healthz` — `lib/auth.ts`, verified **locally** against the project's ES256 JWKS. No round trip to Supabase per request, which matters when one Apply Rates job makes dozens of chunked calls
+- [x] `geo.js` sends `Authorization: Bearer <session.access_token>`, read per request
+- [x] **A service credential for callers with no session** — `GEO_SERVICE_TOKEN`, optional and inert when unset. Note the original justification was wrong: schedules' `add_port.py` and ingest **do not geocode** (see [schedules specifics](#schedules-specifics)). Keep it anyway — it costs nothing and is there the day any script does need it — but it unblocks nothing today
 - [ ] Per-IP rate limiting only if abuse appears — it caps damage, it does not authenticate
 - [ ] Remember the cache is the real quota defence: only *novel* pairs cost anything upstream
 
-### The two missing endpoints
+**Two consequences of switching it on, neither obvious:**
 
-- [ ] `/api/within-batch` — POST `{ pairs: [{a,b,miles}] }`, results index-aligned with input
-- [ ] `/api/route-batch` — POST `{ pairs: [{a,b}] }`, route summaries without polylines
-- [ ] Honour the contract `geo.js` already assumes: **per-pair failures, never a whole-batch throw**
-- [ ] Stay inside the brain's 60s `maxDuration` — the client already chunks at 30 and 15 for this reason, sequentially, so Nominatim's rate limiter is not multiplied
+- [ ] **The brain's own homepage stops working.** `app/page.tsx` is a demo UI calling `/api/geocode`, `/api/within`, and `/api/route` from the browser with no session — it will 401. That is the lock doing its job (it was a free quota-spending console for anyone who found the URL), but it reads as a bug if you are not expecting it
+- [ ] **A valid signature is not enough.** The project's own anon/publishable key is issued by the same project and ships in every bundle. The check is `role = 'authenticated'`, not merely "verifies"
+
+### The two missing endpoints — ✅ built
+
+Shipped in `e837b83`. Both are HTTP-shape batching only: internally they loop the **existing
+single-route path** (`resolveRoute` / `resolveLocation`) once per pair. **No HERE batch or
+Matrix product is involved, and quota is unchanged** — one regular HERE call per novel pair,
+zero for cached pairs.
+
+- [x] `/api/within-batch` — POST `{ pairs: [{a,b,miles}] }`, results index-aligned with input
+- [x] `/api/route-batch` — POST `{ pairs: [{a,b}] }`, route summaries without polylines
+- [x] Honour the contract `geo.js` already assumes: **per-pair failures, never a whole-batch throw**
+- [x] Stay inside the brain's 60s `maxDuration` — the client already chunks at 30 and 15 for this reason, sequentially, so Nominatim's rate limiter is not multiplied. **Both routes export it explicitly**; the Vercel default (10–15s) would have timed out cold chunks
 
 ### Domain — deliberately public, outside Zero Trust
 
