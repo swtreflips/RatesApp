@@ -154,8 +154,8 @@ written against today's column names is a policy you rewrite later.
 | # | Step | Cost | Why it is where it is |
 |---|---|---|---|
 | 1 | [~~Lock the brain's front door~~](#1-lock-the-brains-front-door) | ✅ **DONE** | Deployed and verified in production |
-| 0 | [Baseline the schema](#0-baseline-the-schema-first-1-hour) | ~1 hr | Nothing else records what the database already is. **Everything below needs it** |
-| 2 | [Brain SQL → migrations](#2-fold-the-brains-sql-into-the-migration-history) | ~1 hr | The brain's tables exist only as prose in `SUPA.md` |
+| 0 | [Reproducible + understood](#0-make-the-rates-database-reproducible--and-understood-2-hours) | ~2 hrs | Nothing records what the database already is. **Everything below needs it** |
+| 2 | [Retire `SUPA.md` as truth](#2-retire-supamd-as-a-source-of-truth-30-min-mostly-absorbed-by-step-0) | ~30 min | Mostly absorbed by step 0 — the pull already captures those tables |
 | 3 | [Identity hardening](#3-identity-hardening-phase-a) | ~1 day | A live privilege-escalation hole, and the pattern every other app copies |
 | 4 | [The helper facade](#4-the-helper-facade-three-functions) | ~1 hr | Three functions that make the organizations migration nearly free |
 | 5 | [CI](#5-ci--the-thing-four-later-steps-assume) | ~half day | Four items in this plan say "in CI". There is no `.github/` |
@@ -191,8 +191,8 @@ not the start of it.
 ### The route to deleting Render
 
 ```
-0. baseline the schema          ~1 hr    ← the recorded starting point, before anything moves
-2. brain SQL → migrations       ~1 hr    ← its tables must be in the history before more arrive
+0. baseline + inventory         ~2 hr    ← the recorded starting point, before anything moves
+2. retire SUPA.md as truth      ~30 min  ← mostly absorbed by step 0
 3. identity hardening           ~1 day   ← schedules' app will mirror this at the auth boundary
    ├ secrets out of the schedules scripts  ← before that repo gets a git history
    └ 4. helper facade           ~1 hr
@@ -213,7 +213,7 @@ recorded in an hour.
 
 ---
 
-### 0. Baseline the schema first (~1 hour)
+### 0. Make the rates database reproducible — and understood (~2 hours)
 
 `supabase/migrations/` holds six feature migrations and **no baseline.** The database's
 starting shape — `us_ports`, `geocode_cache`, `drayage_routes`, `forwarders`, `profiles`,
@@ -221,16 +221,74 @@ every RLS policy, `cache_within_miles`, `set_geom` — exists only as hand-run S
 `SUPA.md`. The migrations sit on top of a foundation that is not written down anywhere
 executable.
 
-That is tolerable today and gets worse with every change. Step 2 puts the brain's three tables
-into the history, and it needs somewhere coherent to put them — **so this comes first.**
+**Two artifacts, and each is what makes the other trustworthy.**
 
-- [ ] `supabase db pull` → commit the generated baseline migration
-- [ ] Read it. Confirm RLS policies, `security definer` functions, triggers, and generated columns survived — `db pull` is good, not perfect
-- [ ] `supabase db reset` locally and confirm the schema reproduces from migrations alone
+| | `supabase db pull` → the baseline | `DATABASE.md` → the inventory |
+|---|---|---|
+| Rebuilds the database | ✅ | ❌ |
+| Says `geom` is `geography`, not `geometry` or `text` | buried in thousands of generated lines | ✅ it is the headline |
+| Lets you notice something was dropped | ❌ nothing to compare against | ✅ it *is* the comparison |
+| Readable in a year | ❌ | ✅ |
+
+`db pull` is good, not perfect — policies, `security definer` bodies, `search_path` settings,
+generated columns and grants are all things it can mangle or omit. **Without an independent
+inventory there is no way to notice.** `SUPA.md` exists precisely because this class of thing
+already bit once: `geom` was declared `text`, a trigger wrote a geometry into it, it *looked*
+spatial, and the GiST index failed.
+
+> This plan already demands an inventory before absorbing a project — see
+> [Folding a Supabase project](#1-inventory-the-source-before-touching-anything). Rates is the
+> **target** of that fold, and nobody has ever written down what is in it. Same discipline,
+> applied to the database everything else lands in.
+
+#### 0a — Inventory first
+
+First, because it is the checklist everything after is verified against.
+
+- [ ] Extensions (**postgis** above all — it does not travel in a schema dump)
+- [ ] Every table and column with its **real** `udt_name`, not the label — `geography(Point,4326)` vs `geometry` vs `text` is the distinction that has already cost a day
+- [ ] Generated columns, defaults, identity/sequences
+- [ ] Functions: signature, `security definer`, `search_path`, and body
+- [ ] Triggers, and which function each fires
+- [ ] Indexes — especially GiST spatial ones and the **unique constraints that back every upsert** (`onConflict` silently needs them)
+- [ ] RLS: enabled per table, plus every policy verbatim
+- [ ] Grants to `anon` and `authenticated` — in the shared project these become partner-visible
+- [ ] Views and **materialized views** (an MV cannot hold RLS — see [schedules](#rls-in-the-shared-project--the-one-that-matters))
+- [ ] Row counts and table sizes — the free tier is 500 MB
+- [ ] **Who writes each table** — RatesApp, the brain, an Edge Function, a script. This is the ownership column the [shared-tables registry](#shared-reference--the-anti-redundancy-rule) needs anyway
+
+#### 0b — Pull the baseline
+
+- [ ] `supabase db pull` → commit the generated migration
+
+#### 0c — Reconcile the two
+
+**This is the step that makes the pair worth more than either half.** Walk the inventory
+against the generated SQL; anything present in 0a and absent from 0b gets hand-written into a
+companion migration. Expect misses in that known-weak list: RLS policies, `security definer` +
+`search_path`, generated columns, grants, extensions.
+
+- [ ] Every object in the inventory appears in `migrations/`, or is deliberately excluded with a reason
+
+#### 0d — Prove it, mechanically
+
+- [ ] `supabase db reset` locally
+- [ ] **Re-run the same 0a introspection queries against the local rebuild and diff the two inventories.** A clean diff is the proof — not "the migration ran without error," which only says the SQL parsed
+
+That diff is the point of doing 0a as *queries* rather than prose: it turns the inventory into
+a repeatable reproducibility test, and it is the same check CI runs later.
+
+#### 0e — Seed
+
 - [ ] Create `supabase/seed.sql` — it does not exist. **Two organizations minimum**; the isolation test in Phase D is vacuous with one
 
-> Needs Docker Desktop for the local reset. If that is a problem, `db pull` + a careful read
-> still gets you most of the value — see [the dev environment](#the-development-environment-is-local-not-a-second-project).
+> Needs Docker Desktop for 0d. Without it, 0a→0c still deliver most of the value — the
+> inventory is the durable artifact — you just cannot mechanically prove the rebuild. See
+> [the dev environment](#the-development-environment-is-local-not-a-second-project).
+
+**Access:** the inventory needs read access to the database. `supabase login` (a personal
+access token) is enough to run introspection through the Management API. `supabase db pull`
+additionally prompts for the **database password**, which is 0b's only manual step.
 
 ---
 
@@ -302,7 +360,18 @@ breaks.
 
 ---
 
-### 2. Fold the brain's SQL into the migration history
+### 2. Retire `SUPA.md` as a source of truth (~30 min, mostly absorbed by step 0)
+
+> **Smaller than it looks.** `db pull` dumps the entire `public` schema of the rates project,
+> which **already contains** `geocode_cache`, `drayage_routes`, and `us_ports`. Step 0b captures
+> them for free. What is left is not writing SQL — it is stopping two files from claiming to be
+> authoritative when they are not.
+
+- [ ] Header on `geoapi-next/schema.sql` and `SUPA.md`: the migration is the source of truth; these are the reasoning behind it
+- [ ] Confirm the pull actually caught `set_geom`, `set_route_geom`, `cache_within_miles`, `is_near_port`, and the GiST indexes — they are exactly the shapes 0c expects to be missing
+- [ ] Keep `SUPA.md`'s type-vs-value lessons as prose. They are the most valuable page in that repo and no dump preserves them
+
+#### The original framing, kept for the reasoning
 
 `geoapi-next/schema.sql` is marked *"reference only"* and `SUPA.md` is a beautifully written
 record of SQL that was **typed into the dashboard by hand.** `geocode_cache`, `drayage_routes`,
