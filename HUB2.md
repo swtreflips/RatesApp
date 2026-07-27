@@ -153,21 +153,63 @@ written against today's column names is a policy you rewrite later.
 
 | # | Step | Cost | Why it is where it is |
 |---|---|---|---|
-| 0 | [Baseline the schema](#0-baseline-the-schema-first-1-hour) | ~1 hr | Nothing else records what the database already is. Gets worse every week |
-| 1 | [Lock the brain's front door](#1-lock-the-brains-front-door) | **written** — deploy left | It is open to the internet and spends your HERE quota |
+| 1 | [~~Lock the brain's front door~~](#1-lock-the-brains-front-door) | ✅ **DONE** | Deployed and verified in production |
+| 0 | [Baseline the schema](#0-baseline-the-schema-first-1-hour) | ~1 hr | Nothing else records what the database already is. **Everything below needs it** |
 | 2 | [Brain SQL → migrations](#2-fold-the-brains-sql-into-the-migration-history) | ~1 hr | The brain's tables exist only as prose in `SUPA.md` |
-| 3 | [Identity hardening](#3-identity-hardening-phase-a) | ~1 day | A live privilege-escalation hole, and the pattern the planner copies |
+| 3 | [Identity hardening](#3-identity-hardening-phase-a) | ~1 day | A live privilege-escalation hole, and the pattern every other app copies |
 | 4 | [The helper facade](#4-the-helper-facade-three-functions) | ~1 hr | Three functions that make the organizations migration nearly free |
 | 5 | [CI](#5-ci--the-thing-four-later-steps-assume) | ~half day | Four items in this plan say "in CI". There is no `.github/` |
 
-Steps 0 and 2 are the database thread and are ordered. Steps 1, 3, 4 are independent of
-everything — **any of them can be done on any day, by anyone, in any order.** There is no hard
-chain left in this list.
+### The Render retirement is not next — and here is the gate
+
+**The obvious next move looks like "point schedules at the brain and delete Render." It is
+not available yet, and the reason is one line of arithmetic:**
+
+```
+schedules React app  →  users authenticate against Supabase project  jnui…
+the brain            →  verifies tokens against project              sfoz…
+```
+
+The brain trusts exactly **one** issuer's JWKS. A schedules browser token is *correctly*
+rejected — that is the lock working, not a bug. Repointing `geoapi.ts` at `/api/geocode`
+today gets a 401 on every search.
+
+Three ways out, and only one is right:
+
+| Option | Verdict |
+|---|---|
+| Teach the brain a second issuer | ❌ A workaround for a merge already on the plan. Two issuers is permanent complexity bought to save a temporary wait |
+| Give the schedules browser the service token | ❌ **Never.** It would ship a server credential in a public bundle — the exact hole just closed |
+| Consolidate the projects, then repoint | ✅ Phase B. The Render deletion is its **last** step, not its first |
+
+**So Render dies at the end of the schedules absorption, not before it.** The absorption is
+the largest single piece of work in this plan — PostGIS first, a materialized view that must
+be recreated rather than dumped, RLS re-derived for a blast radius that now includes partners,
+and three consumers to repoint. Getting the geo brain locked was a prerequisite for it; it was
+not the start of it.
+
+### The route to deleting Render
+
+```
+0. baseline the schema          ~1 hr    ← the recorded starting point, before anything moves
+2. brain SQL → migrations       ~1 hr    ← its tables must be in the history before more arrive
+3. identity hardening           ~1 day   ← schedules' app will mirror this at the auth boundary
+   ├ secrets out of the schedules scripts  ← before that repo gets a git history
+   └ 4. helper facade           ~1 hr
+────────────────────────────────────────
+PHASE B — fold schedules into rates      ← the big one; see the full procedure below
+   └ repoint geoapi.ts → the brain, delete the Render service   ← the goal
+```
+
+Steps 0 and 2 are ordered and cheap. Step 3 is independent and can start any day. **Nothing
+in the first block is optional if Phase B is the destination** — consolidating projects on an
+un-baselined schema is how you end up reconstructing by hand what a `db pull` would have
+recorded in an hour.
 
 > **What changed.** An earlier version of this section budgeted 1–2 days for the brain and put
 > it first. That was read off a local checkout **two commits behind `origin/main`.** CORS and
 > both batch endpoints were already built and deployed; the features that section called broken
-> have been working the whole time. Only auth was ever open.
+> have been working the whole time. Only auth was ever open — and it is closed now.
 
 ---
 
@@ -214,9 +256,16 @@ it is one View Source away.
 The cache is the reason this has not already cost anything: only *novel* pairs reach HERE.
 It is also why an abuser would be free to pick novel pairs.
 
-#### Written, not yet deployed
+#### ✅ Done — deployed and verified in production
 
-Both sides exist and compile; nothing is live.
+Verified from a notebook against the deployed service, not by reading source: anonymous
+callers 401 on all five routes, **both** public key formats 401, a real ES256 user session
+200, a one-character signature forgery 401, `/healthz` still open, and an Apply Rates run
+green through the deployed browser app.
+
+The one outstanding line is the optional `GEO_SERVICE_TOKEN` — nothing consumes it, so a
+failing service-token check gates nothing. Requires the Vercel key to be named exactly
+`GEO_SERVICE_TOKEN`, a redeploy after setting it, and the same value on both sides.
 
 | Repo | Change |
 |---|---|
