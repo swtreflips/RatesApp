@@ -263,9 +263,14 @@ callers 401 on all five routes, **both** public key formats 401, a real ES256 us
 200, a one-character signature forgery 401, `/healthz` still open, and an Apply Rates run
 green through the deployed browser app.
 
-The one outstanding line is the optional `GEO_SERVICE_TOKEN` — nothing consumes it, so a
-failing service-token check gates nothing. Requires the Vercel key to be named exactly
-`GEO_SERVICE_TOKEN`, a redeploy after setting it, and the same value on both sides.
+**27/27 against production**, including the optional service-token path.
+
+- [x] `/api/healthz` reports which auth inputs are configured — presence only, never values. Without it, an unset variable, a value mismatch, and a deploy predating the variable are indistinguishable from outside
+- [ ] **Rotate `GEO_SERVICE_TOKEN` when a real consumer appears.** Today it exists only to prove the branch works
+
+> Two things that cost time and will again: the Vercel key must be named exactly
+> `GEO_SERVICE_TOKEN` (the notebook's `SERVICE_TOKEN` is just a local variable), and **adding
+> a variable does not apply it — a deployment created before it never sees it.**
 
 | Repo | Change |
 |---|---|
