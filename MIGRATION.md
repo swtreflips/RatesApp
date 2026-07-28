@@ -229,9 +229,39 @@ where schemaname = 'public' order by n_live_tup desc;
 
 ---
 
-## Phase 2 — Replicate the structure (~2 hrs)
+## Phase 2 — Replicate the structure — ✅ DONE
 
-One migration in `supabase/migrations/`, written **from the inventory**, not from `SUPA.md`.
+`supabase/migrations/20260727120000_schedules_schema.sql`, written from
+[MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md), not from `SUPA.md`.
+
+**Verified on a local rebuild — every object, then every behaviour:**
+
+```
+ports.geom via trigger              POINT(-118.1916 33.769)
+schedules.pol_geom via trigger      POINT(-118.1916 33.769)
+schedules.last_cy_geom              POINT(-112.074 33.4484)
+sea_routes.route_geom               ST_LineString srid=4326
+REFRESH MATERIALIZED VIEW CONCURRENTLY   → 1 row
+distinct_pols()                     long beach
+nearby_schedules(…200km)            1
+nearest_ports(LA, 1)                long beach @ 31.5km
+is_near(LA, 'long beach', 50mi)     true
+```
+
+Column types match the source exactly — three `geography(Point,4326)` on `schedules`, one on
+`ports`, and `geometry(LineString,4326)` on `sea_routes`. RLS on all four tables, `anon` and
+`authenticated` grants revoked, the MV's unique index present.
+
+Two deliberate departures from the source, both recorded in the migration header: `routes`
+arrives as **`sea_routes`** (so `polylines/push_routes.py` needs `TABLE = "sea_routes"`), and
+`ports` gains a geom trigger and GiST index it never had — reusing the target's existing
+`set_geom()`. Without the trigger a re-seed leaves `geom` null, which silently breaks
+`nearest_ports`, `is_near`, and `set_schedule_geoms`.
+
+`refresh_schedules_latest` keeps `SECURITY DEFINER` but gains `set search_path = public`, which
+the source omitted.
+
+<details><summary>Original checklist</summary>
 
 - [ ] **`create extension if not exists postgis` first**, in the same migration. The geom-filling
       trigger depends on it, and extensions do not travel reliably in a schema dump — import
@@ -263,6 +293,8 @@ One migration in `supabase/migrations/`, written **from the inventory**, not fro
 - [ ] **Re-run Phase 1's query set against the local rebuild and diff it against the source
       inventory.** A clean diff is the proof. "The migration ran without error" only says the
       SQL parsed
+
+</details>
 
 ---
 
