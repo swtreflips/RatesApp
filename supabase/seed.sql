@@ -73,4 +73,18 @@ values
    'long beach', now(), current_date + 5, current_date + 24, 19)
 on conflict (schedule_hash) do nothing;
 
+-- vessels and sea_routes exist so the isolation test can actually FAIL on them. With these
+-- tables empty, "a forwarder sees 0 rows" is indistinguishable from "there was nothing to
+-- see" -- a column that always reads zero proves nothing.
+insert into public.vessels (vessel_id, carrier_name, marinetraffic_name, marinetraffic_url) values
+  (100001, 'Test Carrier', 'TEST VESSEL ONE', 'https://example.test/v/100001'),
+  (100002, 'Test Carrier', 'TEST VESSEL TWO', 'https://example.test/v/100002')
+on conflict (vessel_id) do nothing;
+
+insert into public.sea_routes (origin_port, destination_port, route_geom, geojson, distance_km, duration_hours) values
+  ('shanghai', 'long beach',
+   st_geomfromtext('LINESTRING(121.4737 31.2304, -118.1916 33.7690)', 4326),
+   '{"type":"LineString"}'::jsonb, 10500, 480)
+on conflict (origin_port, destination_port) do nothing;
+
 refresh materialized view public.schedules_latest;
