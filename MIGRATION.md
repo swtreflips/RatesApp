@@ -354,7 +354,27 @@ grant select on schedules_latest_secure to authenticated;
 
 ---
 
-## Phase 4 — Repoint the writers (~1 hr)
+## Phase 4 — Repoint the writers — ⏳ code done, re-seed outstanding
+
+**Done:**
+
+- [x] **Secrets out of source.** `ingest_schedules.py` and `add_port.py` read `SUPABASE_URL` /
+      `SUPABASE_KEY` from `.env` via `python-dotenv`, and exit with a clear message if unset.
+      The inline `service_role` key is gone from both. `Schedules/` gains a `.gitignore` and
+      `.env.example` **before** it has a git history, which was the whole point
+- [x] `ocean-routing/.env` → the rates project. Old values in `.env.jnui-backup`, and
+      `.gitignore` extended to `.env.*` so that backup cannot be committed
+- [x] Table renames applied across all five consumers — `world_ports`, `sched_vessels`,
+      `sea_routes`
+- [x] **Verified against production**: all four tables reachable with the service key (which
+      bypasses the internal-only RLS), and an upsert into `world_ports` fires the geom trigger
+- [x] `polylines/push_routes.py` → `TABLE = "sea_routes"`. It loads `ocean-routing/.env` by
+      absolute path, so it was repointed by the same change
+
+> **`Schedules/` and `polylines/` are not git repositories.** Those edits exist only on this
+> machine. Until they are initialised, there is no history and no way to review or revert them.
+
+**Outstanding — the re-seed. Needs judgement about source data, so it is yours:**
 
 Files: `ocean-routing/.env`, `Schedules/ingest_schedules.py`, `Schedules/add_port.py`.
 
