@@ -17,7 +17,7 @@ Four things the planning documents got wrong or missed entirely.
 
 | # | Finding | Consequence |
 |---|---|---|
-| 1 | **A `routes` table exists** — 180 rows, `geometry(LineString,4326)` | In no doc, found by no grep. It is the only **geometry** (not geography) and the only **LineString** in the estate. Declaring it geography or Point would silently break it |
+| 1 | **A `routes` table exists** — 180 rows, `geometry(LineString,4326)` | In no doc, found by no grep. It is the only **geometry** (not geography) and the only **LineString** in the estate. Declaring it geography or Point would silently break it. **Written by `polylines/push_routes.py`** — a fifth repo, and a fifth consumer Phase 4 must repoint |
 | 2 | **`nearby_schedules`, `distinct_pols`, `nearest_ports`, `is_near` are SECURITY INVOKER**, not DEFINER | MIGRATION.md Phase 3 said they bypass RLS and need internal checks in their bodies. **They do not.** Enabling RLS is sufficient — this makes Phase 3 simpler |
 | 3 | **`anon` holds DELETE / TRUNCATE / UPDATE on every schedules table**, and RLS is off everywhere | HUB2 described a read leak. It is worse: with RLS off, the grants permit **destructive writes**. Harmless today (internal-only project) — catastrophic the moment these tables sit beside partner accounts |
 | 4 | **Only one name collides**: `geocode_cache` | And it is already excluded — the brain owns the geocode cache. `schedules`, `ports`, `vessels`, `routes`, `schedules_latest` are all free in the target |
@@ -171,6 +171,25 @@ set_geom() / set_route_geom()          [triggers, INVOKER — correct for trigge
 > database.** It was written down but never created.
 
 ---
+
+## Why a code grep could never have found this
+
+Worth recording, because the same reasoning applies to whatever is still missing.
+
+`routes` was invisible to both pre-introspection sources. The docs never mentioned it. The grep
+searched `.table("…")` string literals across `ocean-routing` and `Schedules` — and its writer is
+`polylines/push_routes.py`, which is (a) in a **repo neither the plan nor the grep covered**, and
+(b) written as `TABLE = "routes"` then `.table(TABLE)`, which **no literal-matching pattern would
+have caught even in the right repo**.
+
+Both failures are the same shape: searching for what you expect, where you expect it. A grep
+answers *"what does the code I thought to look at use"*, which is a poor proxy for *"what does the
+database contain"*. Introspection has no such blind spot — which is the entire reason it runs
+before anything is written.
+
+**The corollary: assume there are more consumers.** Five repos are now known to touch these
+tables. Nothing guarantees that is all of them, and a writer still pointing at `jnui…` after the
+cutover fails silently.
 
 ## What this changes in the plan
 

@@ -336,6 +336,11 @@ Files: `ocean-routing/.env`, `Schedules/ingest_schedules.py`, `Schedules/add_por
 - [ ] Confirm `refresh_schedules_latest()` runs and the MV populates
 - [ ] Exercise `alerts/run.py` — it reads `schedules_latest`, `vessels`, and `ports`, and is the
       consumer most likely to be forgotten
+- [ ] **`polylines/push_routes.py` — a fifth consumer, in a fifth repo.** It writes the `routes`
+      table (`TABLE = "routes"`, upsert on `(origin_port, destination_port)`) reading
+      `SUPABASE_URL` / `SUPABASE_KEY` from its own `.env`. Not a git repository. It appears in no
+      plan because it was found only by chasing a table introspection surfaced — the code grep
+      searched the wrong repos, and its pattern would have missed the constant anyway
 - [ ] **Verify the rows landed in `sfoz…`, not `jnui…`.** Scripts fail *silently*; a repointed
       pipeline still writing the old project looks fine for a week, until someone asks why the
       grid stopped updating
