@@ -388,7 +388,31 @@ grant select on schedules_latest_secure to authenticated;
 > - [ ] Same for `polylines/` — `push_routes.py` and `routes.json` are the only way `sea_routes`
 >       gets repopulated
 
-**Outstanding — the re-seed. Needs judgement about source data, so it is yours:**
+**Data path verified against production:**
+
+- [x] **`world_ports` populated — 598 rows, all with geometry.** Ports were a one-time push
+      originally, so they were moved once again rather than given a loader. Note the source has
+      no geom trigger on `ports`: replicating it exactly would have left all 598 with NULL
+      geometry, and every schedule after them
+- [x] **Schedules ingest end to end** — 21 files, 0 failed, 345 rows upserted on
+      `schedule_hash`. `pol_geom` and `last_cy_geom` resolved 345/345 through
+      `set_schedule_geoms` against `world_ports`
+- [x] `refresh_schedules_latest()` runs clean over RPC
+
+> **`schedules_latest` returns 0 rows, and that is correct.** The view is *latest per lane
+> within 5 days*; the available test files are all dated 2026-06-01, 57 days old. Without the
+> window they would form 21 lanes. A fresh scrape populates it — this is not a fault to chase.
+
+**Known gap, pre-existing:** 43 rows have NULL `pod_geom` because `Semarang` is not in
+`world_ports` under that spelling. Harmless for `nearby_schedules`, which filters on
+`last_cy_geom`, but it would leave holes in anything mapping POD positions.
+
+**Outstanding — the live pipeline. Needs a real scrape, so it is yours:**
+
+> **The live ingest is `ocean-routing/src/ingest/ingest.py`, not `Schedules/ingest_schedules.py`.**
+> The latter is its standalone twin — its own docstring says the hash logic must stay
+> byte-identical between them. The live one was already repointed, because it loads
+> `ocean-routing/.env`, the file this phase changed.
 
 Files: `ocean-routing/.env`, `Schedules/ingest_schedules.py`, `Schedules/add_port.py`.
 
