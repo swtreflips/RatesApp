@@ -172,6 +172,24 @@ set_geom() / set_route_geom()          [triggers, INVOKER — correct for trigge
 
 ---
 
+## Completeness — how this list was derived
+
+Every relation below comes from `pg_class` joined to `pg_namespace` on `nspname='public'`,
+**with no filter on `relkind`** — so tables, views, materialized views, partitions, sequences and
+foreign tables would all appear. Nothing is enumerated from a name I supplied.
+
+```
+schedules   6 tables · 1 materialized view · 2 PostGIS views · no sequences or partitions
+rates      18 tables ·                       2 PostGIS views · no sequences or partitions
+```
+
+> **The method matters more than the result.** On the first pass the schedules column query
+> returned **502** (payload too large), and the retry ran off a list of table names typed by
+> hand. `routes` was in that list only because the row-count query had already revealed it — had
+> that query also failed, the step meant to find unknown objects would have been driven by
+> assumptions again. The list above is re-derived from the catalog for that reason. **Never
+> hand-write the object list; ask the database.**
+
 ## Why a code grep could never have found this
 
 Worth recording, because the same reasoning applies to whatever is still missing.
