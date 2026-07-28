@@ -446,7 +446,37 @@ Files: `ocean-routing/.env`, `Schedules/ingest_schedules.py`, `Schedules/add_por
 
 ---
 
-## Phase 5 — The React app (~half day)
+## Phase 5 — The React app — ✅ DONE
+
+Deployed and working at `schedules-dusky.vercel.app`: sign-in with the same RatesApp
+credentials, and search resolving through the brain.
+
+**Measured against the deployed brain**, since the Render comparison was the open question:
+
+```
+cached (New York, NY)    200    919 ms   cached=True
+cached again             200    828 ms   cached=True
+novel city (Piqua, OH)   200   1153 ms   cached=False
+```
+
+Under 1.2s worst case. Render's free tier spins down after ~15 minutes idle and takes
+30–60s to wake, which is what the old "slow geocoder" actually was — a container booting,
+not geocoding. Note the novel city cost only ~230ms more than a cache hit: Nominatim was
+never the bottleneck.
+
+**Three things cost time here and are worth not repeating:**
+
+- [x] **Vite inlines `VITE_*` at BUILD time.** Setting the variables changed nothing until a
+      redeploy; before that the bundle held `undefined` and `createClient(undefined)` fails
+      with "Failed to fetch", which reads like a network fault
+- [x] **Same for the brain's own env.** Vercel binds environment variables to a deployment
+      when it is *created*
+- [x] **A missing `Access-Control-Allow-Origin` is invisible in a status code.** The preflight
+      returns **204 with every other CORS header present** — only that one absent. Diagnosing
+      it took adding `allowed_origin_count` to `/api/healthz`, which turns "is the allowlist
+      right?" into one number: expected 3, read 2, so the value had never saved to Production
+
+<details><summary>Original checklist</summary>
 
 Files: `Schedules/React/src/lib/supabase.ts`, `src/lib/geoapi.ts`, `src/state/searchSchedules.ts`,
 `React/.env`, plus new auth components.
@@ -469,6 +499,8 @@ Files: `Schedules/React/src/lib/supabase.ts`, `src/lib/geoapi.ts`, `src/state/se
 - [ ] Add the app's origin to the brain's `ALLOWED_ORIGINS` in Vercel — **and redeploy.** An env
       change never applies to a deployment created before it
 - [ ] If the app reads the MV directly, switch to `schedules_latest_secure`
+
+</details>
 
 ---
 
