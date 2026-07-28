@@ -363,8 +363,17 @@ Files: `ocean-routing/.env`, `Schedules/ingest_schedules.py`, `Schedules/add_por
       hold partner data. That repo has no git history yet; this plan gives it one. Minutes now,
       unfixable-in-history later
 - [ ] `ocean-routing/.env` → rates `SUPABASE_URL` + rates service key
-- [ ] Re-seed **in order**: `add_port.py` (ports) → `ingest_schedules.py` (schedules) →
-      `push_vessels.py` (vessels)
+- [ ] **Update the table names the scripts write.** Three tables were renamed so they are
+      self-evidently scoped in a shared database:
+
+      | Script | old | new |
+      |---|---|---|
+      | `add_port.py` | `ports` | **`world_ports`** |
+      | `push_vessels.py` | `vessels` | **`sched_vessels`** |
+      | `polylines/push_routes.py` | `routes` | **`sea_routes`** |
+
+- [ ] Re-seed **in order**: `add_port.py` (world_ports) → `ingest_schedules.py` (schedules) →
+      `push_vessels.py` (sched_vessels) → `polylines/push_routes.py` (sea_routes)
 - [ ] Confirm `refresh_schedules_latest()` runs and the MV populates
 - [ ] Exercise `alerts/run.py` — it reads `schedules_latest`, `vessels`, and `ports`, and is the
       consumer most likely to be forgotten

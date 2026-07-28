@@ -57,7 +57,7 @@ on conflict (id) do nothing;
 -- ── ports + schedules fixtures ───────────────────────────────────────────────
 -- geom is filled by trg_set_geom from lat/lon; the schedules trigger then resolves port
 -- NAMES into geography, so this exercises both triggers on every reset.
-insert into public.ports (canonical_name, name, latitude, longitude, type, country_code) values
+insert into public.world_ports (canonical_name, name, latitude, longitude, type, country_code) values
   ('long beach', 'Long Beach', 33.7690, -118.1916, 'port',   'US'),
   ('phoenix',    'Phoenix',    33.4484, -112.0740, 'inland', 'US'),
   ('shanghai',   'Shanghai',   31.2304,  121.4737, 'port',   'CN')
@@ -76,7 +76,7 @@ on conflict (schedule_hash) do nothing;
 -- vessels and sea_routes exist so the isolation test can actually FAIL on them. With these
 -- tables empty, "a forwarder sees 0 rows" is indistinguishable from "there was nothing to
 -- see" -- a column that always reads zero proves nothing.
-insert into public.vessels (vessel_id, carrier_name, marinetraffic_name, marinetraffic_url) values
+insert into public.sched_vessels (vessel_id, carrier_name, marinetraffic_name, marinetraffic_url) values
   (100001, 'Test Carrier', 'TEST VESSEL ONE', 'https://example.test/v/100001'),
   (100002, 'Test Carrier', 'TEST VESSEL TWO', 'https://example.test/v/100002')
 on conflict (vessel_id) do nothing;
