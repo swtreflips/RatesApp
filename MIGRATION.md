@@ -371,8 +371,22 @@ grant select on schedules_latest_secure to authenticated;
 - [x] `polylines/push_routes.py` → `TABLE = "sea_routes"`. It loads `ocean-routing/.env` by
       absolute path, so it was repointed by the same change
 
-> **`Schedules/` and `polylines/` are not git repositories.** Those edits exist only on this
-> machine. Until they are initialised, there is no history and no way to review or revert them.
+> **Where the repos actually are.** `Schedules/` is not itself a repository — two are nested
+> inside it:
+>
+> | Path | Remote | Note |
+> |---|---|---|
+> | `Schedules/React/` | `swtreflips/schedules` | the app Vercel deploys. **Phase 5 lands here** |
+> | `Schedules/api/` | `swtreflips/geoapi` | the Render FastAPI. **Phase 6 deletes this repo** |
+> | `Schedules/*.py`, `*.json`, `*.md` | — | **in no repository at all** |
+> | `polylines/` | — | **in no repository at all** |
+>
+> - [ ] **`git init` the loose files, or move them into a repo.** `add_port.py`,
+>       `ingest_schedules.py`, `portdbCanonical.json` and `seattle.json` are the entire
+>       re-seed path for `world_ports` and `schedules` — unversioned, unbackked-up, and on one
+>       machine. The secrets are out of them now, so there is nothing stopping this
+> - [ ] Same for `polylines/` — `push_routes.py` and `routes.json` are the only way `sea_routes`
+>       gets repopulated
 
 **Outstanding — the re-seed. Needs judgement about source data, so it is yours:**
 
