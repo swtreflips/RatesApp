@@ -48,9 +48,40 @@ one.
 
 | # | Decision | Reason |
 |---|---|---|
-| 1 | **The Schedules React app gets a Supabase login** | Its JWT becomes `sfoz…`-issued, so the geo brain accepts it unchanged. This *dissolves* HUB2's issuer gate instead of working around it — and it is the only way schedules data can be gated at all, since the app currently authenticates as nobody |
+| 1 | **The Schedules React app gets a Supabase login (Google OAuth)** | The only option where the guarantee is enforced by the database rather than maintained by discipline. See below |
 | 2 | **`ports` and `us_ports` stay separate** | HUB2 says they share a structure. **They do not.** See below |
 | 3 | **Scope is whatever introspection finds** | A code grep already found objects the docs omit. The database is the only authority |
+
+### On decision 1 — why a login, and why not Zero Trust
+
+**Two independent forces demand it.** The table move is only one: even if schedules stayed in
+its own project forever, the React app still could not call the geo brain without a credential.
+Retiring Render requires solving this regardless of consolidation.
+
+Identity reaches Postgres, so "internal only" is expressible as RLS rather than as a rule the
+application code has to keep remembering:
+
+```
+browser ──Google, one click──▶ sfoz… session
+        ──JWT──▶ nearby_schedules    (RLS: my_org_type() = 'internal')
+        ──JWT──▶ brain /api/geocode  (already accepts sfoz… tokens, unchanged)
+```
+
+> **Cloudflare Access is not an alternative here.** It protects a *hostname*, not the database.
+> Anyone holding the rates anon key — which ships in every RatesApp bundle — can hit
+> `sfoz….supabase.co` directly and call the RPCs without ever touching the app, so Access never
+> sees them. Zero Trust remains worth having later as a second gate on the *hostname*; it
+> cannot be the data boundary.
+
+**The trap in this decision, and it is a real one:** Google OAuth with signups open means
+**anyone with a Google account can create a session.** They would get no schedules data — the
+`profiles` gate fails closed — but their token still carries `role = 'authenticated'`, which is
+exactly what the geo brain accepts. **A stranger could spend your HERE quota by signing in.**
+
+- [ ] **Disable new user signups** in Supabase Auth settings, or restrict to your email domain
+      via an auth hook. Internal users are created deliberately — the same rule HUB2 Phase E
+      states for partners ("no self-registration"), applied to internal accounts too
+- [ ] Verify: sign in with a personal Gmail → must be refused, not merely data-less
 
 ### On decision 2 — HUB2 is wrong about this
 
@@ -304,9 +335,15 @@ Files: `Schedules/React/src/lib/supabase.ts`, `src/lib/geoapi.ts`, `src/state/se
 `React/.env`, plus new auth components.
 
 - [ ] Point `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` at the rates project
-- [ ] **Add a Supabase login.** Mirror RatesApp's post-Phase-A `AuthProvider`: `profiles` as the
+- [ ] **Enable Google OAuth** in Supabase Auth → Providers. Needs an OAuth client in Google
+      Cloud Console with Supabase's callback URL as an authorized redirect
+- [ ] **Disable new user signups** *before* the provider goes live — see
+      [decision 1](#on-decision-1--why-a-login-and-why-not-zero-trust). An open Google provider
+      hands a brain-accepted token to anyone with a Gmail address
+- [ ] **Add the login.** Mirror RatesApp's post-Phase-A `AuthProvider`: `profiles` as the
       only source of identity, `undefined` = loading, `null` = no access, fail closed, never
       `user_metadata`. Two apps behaving differently at the auth boundary is how one ends up wrong
+- [ ] Create `profiles` rows for the internal users who need this tool. No row, no access
 - [ ] `geoapi.ts`: `${base}/geocode` → `${base}/api/geocode`, and attach
       `Authorization: Bearer <session.access_token>` — read **per request** via `getSession()`,
       not once at module load. Same expiry trap already fixed in RatesApp's
@@ -340,6 +377,7 @@ In order. Each gates the next.
 4. `alerts/run.py` completes against the new project
 5. From a forwarder session **and** from a raw anon key: `schedules`, `vessels`,
    `schedules_latest`, `schedules_latest_secure` all return zero rows
+5b. A personal Gmail cannot create an account at all — signups disabled, not merely data-less
 6. The React app logs in, searches a typed destination, returns results — proving
    login → `sfoz…` JWT → brain `/api/geocode` → `nearby_schedules`
 7. `geoapi-next/lock_test.ipynb` still passes 27/27 — the brain was not weakened
