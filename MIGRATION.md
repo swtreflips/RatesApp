@@ -237,7 +237,13 @@ One migration in `supabase/migrations/`, written **from the inventory**, not fro
       trigger depends on it, and extensions do not travel reliably in a schema dump — import
       first and the trigger creation fails, or the geom columns arrive as a type the project
       does not recognise
-- [ ] Tables: `schedules`, `ports`, `vessels`, plus anything Phase 1 surfaced
+- [ ] Tables: `schedules`, `ports`, `vessels`, and **`routes`** — the last found only by
+      introspection, absent from every doc and every grep. Preserve its
+      `geometry(LineString,4326)`: it is the only **geometry** and the only **LineString** in
+      the estate, and declaring it geography or Point would break it silently
+- [ ] **Rename `routes` on arrival** — `sea_routes`. Beside `drayage_routes`, a bare `routes` is
+      neither globally unique nor self-evidently app-scoped, which is HUB2's naming rule
+- [ ] `geocode_cache` from the source **does not migrate** — the brain owns the geocode cache
 - [ ] **Geo columns declared `geography(Point,4326)`, never `text`.** A trigger writing a
       geometry into a `text` column *looks* spatial, silently stores hex EWKB, and the GiST
       index fails with `data type text has no default operator class`. This already happened
@@ -295,11 +301,18 @@ grant select on schedules_latest_secure to authenticated;
   evaluates the **caller's** identity. The app keeps every PostgREST `.eq()` and sort — which
   an RPC would cost.
 
-- [ ] **Audit the `SECURITY DEFINER` RPCs — this is the one enabling RLS does not fix.**
-      `nearby_schedules` and `distinct_pols` bypass RLS *by design* and are callable by anyone
-      holding the anon key. Locking the tables does nothing to them. Either add the internal
-      check inside each function body, or write down explicitly why it is acceptable
-- [ ] Audit every `grant … to anon` from the inventory
+- [ ] ~~Audit the `SECURITY DEFINER` RPCs~~ — **corrected by introspection.** `nearby_schedules`,
+      `distinct_pols`, `nearest_ports` and `is_near` are all `SECURITY INVOKER`, so they respect
+      RLS and need no changes to their bodies. Only `refresh_schedules_latest` is `DEFINER`, and
+      it is called by ingest holding the service key. See
+      [MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md)
+- [ ] **Repoint `nearby_schedules` at `schedules_latest_secure`.** It returns
+      `SETOF schedules_latest`; once the MV is locked, an INVOKER function reading it raises
+      *permission denied* rather than returning zero rows
+- [ ] **Revoke the write grants, not only the reads.** In the source, `anon` and `authenticated`
+      hold `INSERT, UPDATE, DELETE, TRUNCATE` on every table, with **no RLS at all**. Read
+      exposure is the smaller half — carried across unchanged, any partner could truncate the
+      warehouse
 - [ ] Ingest keeps working because **`service_role` bypasses RLS** — confirm the scripts hold
       the service key, not an anon key. That is the one thing that would break the pipeline
 - [ ] **Prove it from a partner session, not an internal one.** From a forwarder login, query
