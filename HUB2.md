@@ -131,7 +131,7 @@ anything memorable to the people typing it.
 |---|---|---|
 | 1 | **Standalone apps; hub = SSO** | Merging costs two major-version upgrades and a grid-library swap, and buys nothing a user notices |
 | 2 | **Vite SPA everywhere for the apps** | No SSR need — every route is behind a login. Consequence: **the frontend holds only public values.** Secrets live server-side: Supabase Edge Functions, or `geoapi-next` where an upstream API key and a rate limiter genuinely need a server |
-| 3 | **`organizations`, not `forwarders`/`suppliers`** | Two apps invented the same concept twice. One table, `type = internal \| forwarder \| customer` |
+| 3 | **`organizations`, not `forwarders`/`suppliers`** | Two apps invented the same concept twice. One table, `type = internal \| forwarder \| supplier|internal \| forwarder \| supplier|internal \| forwarder \| supplier` |
 | 4 | **One Supabase project, everything in it** | One `auth.users`, one organization directory, one onboarding — the apps stay standalone, but the *people* are the same. Dev is local (`supabase start`), not a second project |
 | 5 | **Identity comes from `profiles`, never `user_metadata`** | `user_metadata` is user-writable. Client and RLS read the same row |
 | 6 | **Retire by unreachability, then delete** | A Vite build inlines its env vars, so stripping keys does not neutralize a deployment that already shipped. Only unreachability does |
@@ -579,7 +579,7 @@ migrate twice — re-testing the RLS you had just finished verifying.
 #### The organizations migration
 
 ```
-organizations         id, name, type ('internal'|'forwarder'|'customer'), active
+organizations         id, name, type ('internal'|'forwarder'|'supplier'), active
 organization_services organization_id, service, active
 profiles              id → auth.users, organization_id NOT NULL, org_role, full_name, tags
 ```
@@ -1037,7 +1037,7 @@ second live schema later, with a table-name collision in the middle.
 
 ### Non-negotiable
 
-- [ ] **No `suppliers` table.** Factories are `organizations` with `type='customer'`
+- [ ] **No `suppliers` table.** Factories are `organizations` with `type='supplier'`
 - [ ] **No second `profiles` table.** There is one, shared with RatesApp: `id`, `organization_id`, `org_role`, `full_name`, notification tags. It already exists
 - [ ] **`admin` vs `internal` becomes `profiles.org_role`** (`admin | member`), orthogonal to `organizations.type`. The planner is what makes this real rather than hypothetical — RatesApp does not need it yet, the planner does on day one
 - [ ] **Use the shared RLS helpers** — `my_org()`, `my_org_type()`, `my_org_role()` as `SECURITY DEFINER`. `RLS.md` currently inlines `exists (select 1 from profiles me where …)` in every policy. Two RLS idioms in one database means every identity change is edited twice, in two styles

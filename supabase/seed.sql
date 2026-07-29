@@ -8,11 +8,28 @@
 --
 -- Deterministic UUIDs so tests can reference them directly.
 
--- ── organizations (forwarders, for now) ──────────────────────────────────────
+-- ── organizations ────────────────────────────────────────────────────────────
+-- NOTE: the expand migration's backfill cannot help here. Migrations run BEFORE seed.sql,
+-- so at that point these rows do not exist yet. In production the backfill works, because
+-- the forwarders are already there. Locally the fixture has to be written post-expand.
+--
+-- forwarders rows are kept alongside with IDENTICAL ids: RatesApp still reads forwarder_id
+-- until HUB2's contract phase drops it.
+insert into public.organizations (id, name, type, code, active) values
+  ('00000000-0000-0000-0000-000000000001', 'Prime Time Packaging', 'internal',  'PT', true),
+  ('11111111-1111-1111-1111-111111111111', 'Acme Forwarding',      'forwarder', 'AF', true),
+  ('22222222-2222-2222-2222-222222222222', 'Beta Logistics',       'forwarder', 'BL', true),
+  -- three factories for the planner. Two would do for isolation; three matches the
+  -- intended mock onboarding.
+  ('33333333-3333-3333-3333-333333333333', 'Ditar S.A',            'supplier',  'DT', true),
+  ('44444444-4444-4444-4444-444444444444', 'Tejaswi Papers',       'supplier',  'TP', true),
+  ('55555555-5555-5555-5555-555555555555', 'Manchester Paper Bags','supplier',  'MP', true)
+on conflict do nothing;
+
 insert into public.forwarders (id, name, active) values
   ('11111111-1111-1111-1111-111111111111', 'Acme Forwarding',   true),
   ('22222222-2222-2222-2222-222222222222', 'Beta Logistics',    true)
-on conflict (id) do nothing;
+on conflict do nothing;
 
 insert into public.forwarder_services (forwarder_id, service, active) values
   ('11111111-1111-1111-1111-111111111111', 'ocean',   true),
@@ -39,20 +56,42 @@ insert into auth.users (
   ('00000000-0000-0000-0000-000000000000', 'cccccccc-cccc-cccc-cccc-cccccccccccc',
    'authenticated', 'authenticated', 'beta@forwarder.test',
    crypt('password123', gen_salt('bf')), now(), now(), now(),
+   '{"provider":"email","providers":["email"]}', '{}', false),
+  -- the three factory logins for the planner
+  ('00000000-0000-0000-0000-000000000000', 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+   'authenticated', 'authenticated', 'ditar@factory.test',
+   crypt('password123', gen_salt('bf')), now(), now(), now(),
+   '{"provider":"email","providers":["email"]}', '{}', false),
+  ('00000000-0000-0000-0000-000000000000', 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+   'authenticated', 'authenticated', 'tejaswi@factory.test',
+   crypt('password123', gen_salt('bf')), now(), now(), now(),
+   '{"provider":"email","providers":["email"]}', '{}', false),
+  ('00000000-0000-0000-0000-000000000000', 'ffffffff-ffff-ffff-ffff-ffffffffffff',
+   'authenticated', 'authenticated', 'manchester@factory.test',
+   crypt('password123', gen_salt('bf')), now(), now(), now(),
    '{"provider":"email","providers":["email"]}', '{}', false)
-on conflict (id) do nothing;
+on conflict do nothing;
 
 -- ── profiles — the only source of identity ───────────────────────────────────
 -- Note the internal user has NO forwarder_id, so my_org() returns NULL for them. Every
 -- isolation policy must fail closed on that null rather than treating it as a wildcard.
-insert into public.profiles (id, role, forwarder_id, full_name, org_role) values
+insert into public.profiles (id, role, forwarder_id, organization_id, full_name, org_role) values
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'internal',  null,
-   'Internal Planner', 'admin'),
+   '00000000-0000-0000-0000-000000000001', 'Internal Planner', 'admin'),
   ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'forwarder', '11111111-1111-1111-1111-111111111111',
-   'Acme Analyst', 'member'),
+   '11111111-1111-1111-1111-111111111111', 'Acme Analyst', 'member'),
   ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'forwarder', '22222222-2222-2222-2222-222222222222',
-   'Beta Analyst', 'member')
-on conflict (id) do nothing;
+   '22222222-2222-2222-2222-222222222222', 'Beta Analyst', 'member'),
+  -- factory users for the planner. role stays 'forwarder' only because profiles.role's
+  -- check has not been widened; organizations.type is what actually classifies them, and
+  -- my_org_type() reads that.
+  ('dddddddd-dddd-dddd-dddd-dddddddddddd', 'forwarder', null,
+   '33333333-3333-3333-3333-333333333333', 'Ditar Merchandiser', 'admin'),
+  ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'forwarder', null,
+   '44444444-4444-4444-4444-444444444444', 'Tejaswi Merchandiser', 'member'),
+  ('ffffffff-ffff-ffff-ffff-ffffffffffff', 'forwarder', null,
+   '55555555-5555-5555-5555-555555555555', 'Manchester Merchandiser', 'member')
+on conflict do nothing;
 
 -- ── ports + schedules fixtures ───────────────────────────────────────────────
 -- geom is filled by trg_set_geom from lat/lon; the schedules trigger then resolves port
