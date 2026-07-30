@@ -23,8 +23,32 @@ insert into public.organizations (id, name, type, code, active) values
   -- intended mock onboarding.
   ('33333333-3333-3333-3333-333333333333', 'Ditar S.A',            'supplier',  'DT', true),
   ('44444444-4444-4444-4444-444444444444', 'Tejaswi Papers',       'supplier',  'TP', true),
-  ('55555555-5555-5555-5555-555555555555', 'Manchester Paper Bags','supplier',  'MP', true)
+  ('55555555-5555-5555-5555-555555555555', 'Manchester Paper Bags','supplier',  'MP', true),
+  -- the two real sibling cases. Separate organizations, separate POs and containers;
+  -- the SAME team handles both, so they share a group.
+  ('66666666-6666-6666-6666-666666666666', 'Packaging Manufacture of America, S.A.', 'supplier', 'PM', true),
+  ('77777777-7777-7777-7777-777777777777', 'Junsun Packaging (Thailand) Co., Ltd.',  'supplier', 'JT', true),
+  ('88888888-8888-8888-8888-888888888888', 'Qingdao Junsun Packaging Co., Ltd',      'supplier', 'QJ', true)
 on conflict do nothing;
+
+-- ── sibling groups ───────────────────────────────────────────────────────────
+-- Ditar (Colombia) also runs Packaging Manufacture of America (Guatemala) — different
+-- countries, same people. Junsun Thailand and Qingdao Junsun are the same legal entity but
+-- grouped for the same operational reason. Unlinking either is one UPDATE; no data moves.
+insert into public.organization_groups (id, name, notes) values
+  ('aaaa0000-0000-0000-0000-00000000aaaa', 'Ditar',
+   'Colombia is the relationship; Guatemala is a sibling plant run by the same team'),
+  ('bbbb0000-0000-0000-0000-00000000bbbb', 'Junsun',
+   'Thailand is the relationship; Qingdao is the same entity, grouped operationally')
+on conflict do nothing;
+
+update public.organizations set group_id = 'aaaa0000-0000-0000-0000-00000000aaaa',
+       is_group_primary = (id = '33333333-3333-3333-3333-333333333333')
+ where id in ('33333333-3333-3333-3333-333333333333','66666666-6666-6666-6666-666666666666');
+
+update public.organizations set group_id = 'bbbb0000-0000-0000-0000-00000000bbbb',
+       is_group_primary = (id = '77777777-7777-7777-7777-777777777777')
+ where id in ('77777777-7777-7777-7777-777777777777','88888888-8888-8888-8888-888888888888');
 
 insert into public.forwarders (id, name, active) values
   ('11111111-1111-1111-1111-111111111111', 'Acme Forwarding',   true),
@@ -127,3 +151,29 @@ insert into public.sea_routes (origin_port, destination_port, route_geom, geojso
 on conflict (origin_port, destination_port) do nothing;
 
 refresh materialized view public.schedules_latest;
+
+-- ── planner fixtures ─────────────────────────────────────────────────────────
+-- Lines for TWO different factories, so the isolation test can actually fail. With one
+-- supplier, "a factory sees only its own" passes trivially.
+insert into public.planner_po_lines
+  (organization_id, document_number, sku, internal_id, quantity, quantity_available,
+   due_date, origin, pol, destination)
+values
+  ('33333333-3333-3333-3333-333333333333','PO900001','DT-BAG-01','6900001',2000,2000,
+   current_date + 40,'India','Nhava Sheva, India','Dayton, NJ'),
+  ('33333333-3333-3333-3333-333333333333','PO900002','DT-BAG-02','6900002',1200,1000,
+   current_date + 55,'India','Nhava Sheva, India','Dayton, NJ'),
+  ('44444444-4444-4444-4444-444444444444','PO900003','TP-BAG-01','6900003',1550,1550,
+   current_date + 45,'India','Nhava Sheva, India','Fontana, CA'),
+  -- the Guatemalan sibling of Ditar. Ditar's team must see this; nobody else may.
+  ('66666666-6666-6666-6666-666666666666','PO900004','PM-BAG-01','6900004',800,800,
+   current_date + 50,'Guatemala','Puerto Quetzal, Guatemala','Dayton, NJ')
+on conflict do nothing;
+
+-- one draft container per factory, so container isolation is testable too
+insert into public.planner_containers (organization_id, code, name, type, destination, capacity_cbm)
+values
+  ('33333333-3333-3333-3333-333333333333','DT0001','Ditar first',   '40HC','Dayton, NJ',  65),
+  ('44444444-4444-4444-4444-444444444444','TP0001','Tejaswi first', '40HC','Fontana, CA', 65),
+  ('66666666-6666-6666-6666-666666666666','PM0001','Guatemala first','40HC','Dayton, NJ',  65)
+on conflict do nothing;
