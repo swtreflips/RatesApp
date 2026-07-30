@@ -53,16 +53,22 @@ create table if not exists public.planner_po_lines (
   -- GENERATED columns are writable by NOBODY, including service_role. That is deliberate:
   -- the derivation cannot be bypassed, so the column-write trigger and the history log only
   -- ever have to reason about the two input columns.
+  -- THE DIVISOR IS quantity_available, not quantity. Both files carry "Quantity Available"
+  -- and it is the figure the supplier measures a Total CBM against — what is still to ship,
+  -- not what was originally ordered. They are equal on an untouched PO and diverge as soon as
+  -- one is partially shipped, at which point dividing by `quantity` would understate every
+  -- per-case figure.
   cbm_per_case_eff numeric(12,6) generated always as (
     case
       when cbm_per_case is not null then cbm_per_case
-      when cbm_total is not null and quantity > 0 then round(cbm_total / quantity, 6)
+      when cbm_total is not null and quantity_available > 0
+        then round(cbm_total / quantity_available, 6)
       else 0
     end
   ) stored,
 
   cbm_total_eff numeric(12,3) generated always as (
-    coalesce(cbm_total, round(cbm_per_case * quantity, 3), 0)
+    coalesce(cbm_total, round(cbm_per_case * quantity_available, 3), 0)
   ) stored,
 
   -- stamped on FIRST set, never updated. Total slippage is then a subtraction, cheap enough
