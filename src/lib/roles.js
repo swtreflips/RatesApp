@@ -1,11 +1,17 @@
 /*
-  Role constants + display labels for the two user roles.
+  Role constants + display labels.
 
-  The stored role code (profiles.role / user_metadata.role) is the canonical value;
-  the label is what users see. `normalizeRole` maps the pre-rename codes
-  (requester/provider) onto the current ones so stale sessions, cached
-  user_metadata, and old localStorage values keep routing correctly after the
-  internal/forwarder migration.
+  THE CANONICAL VALUE IS `organizations.type`, resolved in AuthProvider and reaching
+  every policy through my_org_type(). `profiles.role` is a fallback kept only until
+  HUB2's contract phase drops it.
+
+  user_metadata.role is NOT a source of identity and must never become one again — it is
+  user-writable, so reading it let a forwarder mount the internal domain. Any residual
+  values on existing auth users are decorative.
+
+  normalizeRole maps pre-rename codes (requester/provider) onto the current ones so stale
+  sessions keep routing correctly. It deliberately does NOT supply a default: an unknown
+  role stays unknown, matches no ROLES constant, and mounts no domain.
 */
 
 export const ROLES = {

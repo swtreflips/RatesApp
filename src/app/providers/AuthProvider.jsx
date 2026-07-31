@@ -6,19 +6,33 @@ import { SERVICE_SLUGS, isService } from '../../features/rates/serviceConfig'
 const AuthContext = createContext(null)
 
 /**
- * Provides session, user, role, and loading state to the entire app.
- * Role is derived from user_metadata.role — seeded during sign-up or set via admin.
- * In Phase 1 this also supports a dev-mode mock role toggle.
+ * Session, identity and loading state for the whole app.
+ *
+ * IDENTITY COMES FROM `profiles`, JOINED TO `organizations`. Never from user_metadata.
+ *
+ * user_metadata is USER-WRITABLE: any signed-in person can run
+ *   supabase.auth.updateUser({ data: { role: 'internal' } })
+ * from the browser console. Reading role from there let a forwarder mount the internal
+ * domain. They never got data — every RLS policy reads profiles.role via current_role_is(),
+ * and profiles has no UPDATE policy — but an internal-looking UI invites someone to trust
+ * what they see, and it left the door open for a future policy to read the JWT instead.
+ *
+ * The old fallback was worse than the override: `user_metadata.role ?? devRole`, with
+ * devRole defaulting to 'internal'. A brand-new account with no metadata landed on the
+ * INTERNAL side by default. That is now impossible.
+ *
+ *   profile === undefined  still loading — decide nothing, render nothing
+ *   profile === null       no row, or the query failed → NO ACCESS
+ *
+ * A failed query resolves to null rather than guessing. Denying a real user on a network
+ * blip is recoverable; admitting an unknown one is not.
  */
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Dev-mode mock: allows toggling role without a real auth session.
-  // normalizeRole maps any legacy 'requester'/'provider' value left in localStorage.
-  const [devRole, setDevRole] = useState(
-    () => normalizeRole(localStorage.getItem('dev_role') ?? ROLES.INTERNAL)
-  )
+  // undefined = still loading. null = no profile = no access. Never a default.
+  const [profile, setProfile] = useState(undefined)
 
   // The signed-in user's forwarder company name (providers only; null for requesters)
   const [forwarderName, setForwarderName] = useState(null)
@@ -47,24 +61,29 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe()
   }, [])
 
-  // Load the user's forwarder name from their profile (for the workspace label)
+  // ONE query for identity: role, organization, and the workspace label together.
+  // organizations.type is the authoritative answer to "what kind of party is this";
+  // profiles.role is kept only until HUB2's contract phase drops it.
   useEffect(() => {
     const uid = session?.user?.id
     if (!uid) {
+      setProfile(null)
       setForwarderName(null)
       return
     }
     let active = true
+    setProfile(undefined) // loading — NOT "no access"
+
     supabase
       .from('profiles')
-      .select('company, forwarders(name)')
+      .select('id, role, org_role, full_name, company, organization_id, organizations(name, type)')
       .eq('id', uid)
-      .single()
-      .then(({ data }) => {
-        if (active) setForwarderName(data?.forwarders?.name ?? data?.company ?? null)
-      })
-      .catch(() => {
-        // profile/forwarder unreachable — leave null, label falls back
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!active) return
+        // No row and a failed query both resolve to null. Fail closed.
+        setProfile(error ? null : (data ?? null))
+        setForwarderName(data?.organizations?.name ?? data?.company ?? null)
       })
     return () => { active = false }
   }, [session?.user?.id])
@@ -95,8 +114,13 @@ export function AuthProvider({ children }) {
   }, [session?.user?.id])
 
   const user = session?.user ?? null
-  // normalizeRole keeps pre-rename codes (requester/provider) working from cached metadata.
-  const role = normalizeRole(user?.user_metadata?.role ?? devRole)
+
+  // organizations.type first — it is the single source of truth. profiles.role is the
+  // fallback only while contract has not yet dropped it. NO default: an unknown user is
+  // null, and null matches no ROLES constant, so no domain mounts.
+  const role = profile
+    ? normalizeRole(profile.organizations?.type ?? profile.role)
+    : null
 
   // Internal always sees every shipped service; forwarders see their company's
   // capabilities (falling back to all shipped services while loading / in dev-mock).
@@ -104,14 +128,8 @@ export function AuthProvider({ children }) {
     ? forwarderServices
     : SERVICE_SLUGS
 
-  function toggleDevRole() {
-    const next = devRole === ROLES.INTERNAL ? ROLES.FORWARDER : ROLES.INTERNAL
-    setDevRole(next)
-    localStorage.setItem('dev_role', next)
-  }
-
   return (
-    <AuthContext.Provider value={{ session, user, role, loading, devRole, toggleDevRole, forwarderName, services }}>
+    <AuthContext.Provider value={{ session, user, profile, role, loading, forwarderName, services }}>
       {children}
     </AuthContext.Provider>
   )

@@ -12,7 +12,7 @@ import { supabase } from '../../lib/supabase'
 import { ROLES, ROLE_LABELS } from '../../lib/roles'
 
 export default function TopNav({ onMenuToggle }) {
-  const { user, role, devRole, toggleDevRole, forwarderName } = useAuth()
+  const { user, profile, role, forwarderName } = useAuth()
 
   // Workspace breadcrumb label: internal users are "PTP"; forwarders show their company.
   const workspaceLabel =
@@ -31,7 +31,7 @@ export default function TopNav({ onMenuToggle }) {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  const displayName = user?.user_metadata?.full_name ?? user?.email ?? 'Dev User'
+  const displayName = profile?.full_name ?? user?.email ?? 'Account'
   const initials = displayName
     .split(' ')
     .map(w => w[0])
@@ -105,20 +105,6 @@ export default function TopNav({ onMenuToggle }) {
                 <Settings size={15} />
                 Settings
               </button>
-
-              {/* Dev-only role toggle — visible when no real session */}
-              {!user && (
-                <>
-                  <div className="my-1 border-t border-dashed border-fog-200" />
-                  <button
-                    onClick={toggleDevRole}
-                    className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs text-signal-700 transition-colors hover:bg-signal-50"
-                  >
-                    <span className="rounded bg-signal-100 px-1.5 py-0.5 font-mono font-bold text-signal-800">DEV</span>
-                    Switch to {devRole === ROLES.INTERNAL ? ROLE_LABELS.forwarder : ROLE_LABELS.internal}
-                  </button>
-                </>
-              )}
 
               <div className="my-1 border-t border-fog-100" />
               <button
