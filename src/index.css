@@ -4,11 +4,9 @@
 
 /* ── design tokens ─────────────────────────────────────────────────────── */
 
-:root {
-  /* grain overlay — a tiny SVG noise tile, reused across atmospheric surfaces */
-  --grain:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
-}
+/* Design tokens live in the ACTIVE SKIN — public/skins/*.css, loaded by <link id="skin">
+   in index.html. Nothing token-shaped belongs in this file: a value defined here cannot be
+   varied by a skin, which is exactly the coupling the skin system exists to remove. */
 
 @layer base {
   html {
@@ -31,8 +29,8 @@
   }
 
   ::selection {
-    background-color: theme('colors.signal.300');
-    color: theme('colors.harbor.950');
+    background-color: rgb(var(--c-signal-300));
+    color: rgb(var(--c-harbor-950));
   }
 }
 
@@ -46,7 +44,7 @@
     inset: 0;
     background-image: var(--grain);
     background-size: 160px 160px;
-    opacity: 0.05;
+    opacity: var(--grain-opacity);
     pointer-events: none;
     mix-blend-mode: overlay;
   }
@@ -58,7 +56,7 @@
 
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: theme('colors.fog.300') transparent;
+    scrollbar-color: rgb(var(--c-fog-300)) transparent;
   }
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
@@ -68,29 +66,29 @@
     background: transparent;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: theme('colors.fog.300');
+    background-color: rgb(var(--c-fog-300));
     border-radius: 3px;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background-color: theme('colors.fog.400');
+    background-color: rgb(var(--c-fog-400));
   }
 
   /* Dark-surface scrollbar variant for the navy sidebar */
   .scrollbar-rail {
     scrollbar-width: thin;
-    scrollbar-color: theme('colors.harbor.700') transparent;
+    scrollbar-color: rgb(var(--c-harbor-700)) transparent;
   }
   .scrollbar-rail::-webkit-scrollbar {
     width: 6px;
   }
   .scrollbar-rail::-webkit-scrollbar-thumb {
-    background-color: theme('colors.harbor.700');
+    background-color: rgb(var(--c-harbor-700));
     border-radius: 3px;
   }
 
   /* Staggered reveal helper — pair with animate-rise-in + inline delay */
   .stagger > * {
     opacity: 0;
-    animation: rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation: rise-in var(--motion-slow) var(--ease-out-expo) forwards;
   }
 }

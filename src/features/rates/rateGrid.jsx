@@ -380,37 +380,44 @@ export const makeRowFromCsv = (cells, headerIndex) => {
 export const isBlankRow = (r) =>
   !r.laneId && !r.pol && r.rate === '' && !r.pod && !r.lastCy && r.carrier.length === 0 && !r.remarks
 
-/* ── shared DataGrid styling ──────────────────────────────────────────────── */
+/* ── shared DataGrid styling ──────────────────────────────────────────────────
+   MUI is styled through `sx`, not Tailwind, so it cannot inherit the theme the way the rest of
+   the app does. Every value here therefore reads the SAME skin variables tailwind.config.js
+   maps its utilities onto — otherwise the grids, which are the densest and most-looked-at
+   surface in this app, would keep the old palette while everything around them changed.
+
+   Alpha is expressed as `rgb(var(--x) / 0.5)` rather than a baked rgba(), so a skin swap
+   carries the focus ring with it. */
 export const DATA_GRID_SX = {
   border: 'none',
-  fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
+  fontFamily: 'var(--font-sans)',
   '& .MuiDataGrid-columnHeaders': {
-    backgroundColor: '#f7f8fa',
-    borderBottom: '1px solid #dfe4ea',
+    backgroundColor: 'rgb(var(--c-fog-50))',
+    borderBottom: '1px solid rgb(var(--c-fog-200))',
   },
   '& .MuiDataGrid-columnHeader': {
-    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+    fontFamily: 'var(--font-mono)',
     fontSize: '0.62rem',
     fontWeight: 600,
     letterSpacing: '0.02em',
     textTransform: 'uppercase',
-    color: '#566270',
+    color: 'rgb(var(--c-fog-600))',
     padding: '0 8px',
   },
-  '& .MuiDataGrid-columnSeparator': { color: '#eef1f4' },
+  '& .MuiDataGrid-columnSeparator': { color: 'rgb(var(--c-fog-100))' },
   '& .MuiDataGrid-cell': {
     fontSize: '0.8rem',
-    color: '#132236',
-    borderColor: '#eef1f4',
+    color: 'rgb(var(--c-harbor-900))',
+    borderColor: 'rgb(var(--c-fog-100))',
     padding: '0 8px',
   },
-  '& .MuiDataGrid-row:hover': { backgroundColor: '#f7f8fa' },
+  '& .MuiDataGrid-row:hover': { backgroundColor: 'rgb(var(--c-fog-50))' },
   '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': {
-    outline: '2px solid rgba(245,165,36,0.5)',
+    outline: '2px solid rgb(var(--c-signal-500) / 0.5)',
     outlineOffset: '-2px',
   },
   '& .MuiDataGrid-cell--editing': {
-    boxShadow: 'inset 0 0 0 2px rgba(245,165,36,0.5)',
+    boxShadow: 'inset 0 0 0 2px rgb(var(--c-signal-500) / 0.5)',
   },
 }
 

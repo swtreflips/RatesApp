@@ -1,0 +1,113 @@
+/*
+  SKIN: maritime — the original look, unchanged.
+
+  A skin is ONE file that defines every visual token the app uses. Nothing here is imported by
+  JavaScript and no component references it: `tailwind.config.js` maps its utilities onto these
+  variables, so swapping this stylesheet re-skins the whole application without touching a line
+  of component code. That property is the point, and it is the thing to protect.
+
+  Loaded by a plain <link id="skin"> in index.html, from public/ rather than src/. That means a
+  variant swap is a href change — instant, no rebuild, no HMR round trip, and nothing to restore
+  if the process dies mid-run.
+
+  COLOURS ARE SPACE-SEPARATED RGB CHANNELS, not hex. Tailwind composes them as
+  `rgb(var(--c-harbor-800) / <alpha-value>)`, which is what keeps opacity modifiers working —
+  `bg-harbor-800/50`, `bg-fog-50/70` and `ring-signal-500/30` are used throughout, and they
+  silently break if a variable holds a finished colour instead of channels.
+*/
+
+:root {
+  /* harbor */
+  --c-harbor-50: 242 246 251;   /* #f2f6fb */
+  --c-harbor-100: 227 235 244;   /* #e3ebf4 */
+  --c-harbor-200: 195 212 230;   /* #c3d4e6 */
+  --c-harbor-300: 152 179 209;   /* #98b3d1 */
+  --c-harbor-400: 102 139 180;   /* #668bb4 */
+  --c-harbor-500: 69 108 152;   /* #456c98 */
+  --c-harbor-600: 51 84 123;   /* #33547b */
+  --c-harbor-700: 40 67 99;   /* #284363 */
+  --c-harbor-800: 29 49 73;   /* #1d3149 */
+  --c-harbor-900: 19 34 54;   /* #132236 */
+  --c-harbor-950: 11 23 38;   /* #0b1726 */
+
+  /* signal */
+  --c-signal-50: 255 248 234;   /* #fff8ea */
+  --c-signal-100: 255 237 198;   /* #ffedc6 */
+  --c-signal-200: 255 217 137;   /* #ffd989 */
+  --c-signal-300: 255 192 77;   /* #ffc04d */
+  --c-signal-400: 255 171 36;   /* #ffab24 */
+  --c-signal-500: 245 165 36;   /* #f5a524 */
+  --c-signal-600: 217 126 10;   /* #d97e0a */
+  --c-signal-700: 180 90 12;   /* #b45a0c */
+  --c-signal-800: 146 71 17;   /* #924711 */
+  --c-signal-900: 120 59 18;   /* #783b12 */
+  --c-signal-950: 69 29 5;   /* #451d05 */
+
+  /* sea */
+  --c-sea-50: 238 251 247;   /* #eefbf7 */
+  --c-sea-100: 212 245 236;   /* #d4f5ec */
+  --c-sea-200: 173 233 218;   /* #ade9da */
+  --c-sea-300: 120 214 194;   /* #78d6c2 */
+  --c-sea-400: 67 187 166;   /* #43bba6 */
+  --c-sea-500: 35 159 140;   /* #239f8c */
+  --c-sea-600: 23 128 114;   /* #178072 */
+  --c-sea-700: 22 102 92;   /* #16665c */
+  --c-sea-800: 22 81 74;   /* #16514a */
+  --c-sea-900: 22 67 62;   /* #16433e */
+  --c-sea-950: 6 39 36;   /* #062724 */
+
+  /* fog */
+  --c-fog-50: 247 248 250;   /* #f7f8fa */
+  --c-fog-100: 238 241 244;   /* #eef1f4 */
+  --c-fog-200: 223 228 234;   /* #dfe4ea */
+  --c-fog-300: 199 207 216;   /* #c7cfd8 */
+  --c-fog-400: 154 166 180;   /* #9aa6b4 */
+  --c-fog-500: 111 125 141;   /* #6f7d8d */
+  --c-fog-600: 86 98 112;   /* #566270 */
+  --c-fog-700: 68 78 90;   /* #444e5a */
+  --c-fog-800: 46 53 62;   /* #2e353e */
+  --c-fog-900: 27 32 39;   /* #1b2027 */
+
+  /* brand */
+  --c-brand-50: 255 248 234;   /* #fff8ea */
+  --c-brand-100: 255 237 198;   /* #ffedc6 */
+  --c-brand-200: 255 217 137;   /* #ffd989 */
+  --c-brand-300: 255 192 77;   /* #ffc04d */
+  --c-brand-400: 255 171 36;   /* #ffab24 */
+  --c-brand-500: 245 165 36;   /* #f5a524 */
+  --c-brand-600: 217 126 10;   /* #d97e0a */
+  --c-brand-700: 180 90 12;   /* #b45a0c */
+  --c-brand-800: 146 71 17;   /* #924711 */
+  --c-brand-900: 120 59 18;   /* #783b12 */
+  --c-brand-950: 69 29 5;   /* #451d05 */
+
+  /* ── type ──────────────────────────────────────────────────────────── */
+  --font-display: "Bricolage Grotesque", ui-serif, Georgia, serif;
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --tracking-display: -0.04em;
+
+  /* ── shape ─────────────────────────────────────────────────────────── */
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+
+  /* ── depth ─────────────────────────────────────────────────────────── */
+  --shadow-card: 0 1px 2px rgb(var(--c-harbor-950) / 0.04), 0 8px 24px -12px rgb(var(--c-harbor-950) / 0.18);
+  --shadow-card-hover: 0 2px 4px rgb(var(--c-harbor-950) / 0.06), 0 16px 40px -16px rgb(var(--c-harbor-950) / 0.28);
+  --shadow-rail: inset -1px 0 0 rgb(255 255 255 / 0.04);
+  --shadow-signal: 0 6px 20px -8px rgb(var(--c-signal-600) / 0.6);
+
+  /* ── motion ────────────────────────────────────────────────────────── */
+  /* Pace is part of a skin: an editorial look wants calm, a terminal look wants instant. */
+  --motion-fast: 150ms;
+  --motion-base: 300ms;
+  --motion-slow: 500ms;
+  --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ── texture ───────────────────────────────────────────────────────── */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  --grain-opacity: 0.05;
+  --bg-harbor-mesh: radial-gradient(110% 120% at 0% 0%, rgb(var(--c-harbor-800)) 0%, rgb(var(--c-harbor-900)) 45%, rgb(var(--c-harbor-950)) 100%);
+  --bg-chart-grid: linear-gradient(rgb(255 255 255 / 0.035) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / 0.035) 1px, transparent 1px);
+}

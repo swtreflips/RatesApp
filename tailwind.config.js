@@ -1,120 +1,90 @@
 /** @type {import('tailwindcss').Config} */
+
+/*
+  This file no longer holds the design — it holds the SHAPE of the design.
+
+  Every value below points at a CSS variable defined by the active skin in `public/skins/`.
+  The palette, type, depth, motion and texture live there, so re-skinning the entire app is a
+  <link href> swap and touches no component and no config. See public/skins/maritime.css.
+
+  WHY CHANNELS, NOT HEX. A colour is composed as `rgb(var(--c-x) / <alpha-value>)`, so the skin
+  stores `242 246 251` rather than `#f2f6fb`. Tailwind substitutes the alpha at build time,
+  which is what keeps opacity modifiers alive — `bg-harbor-800/50`, `bg-fog-50/70` and
+  `ring-signal-500/30` are all in use, and a variable holding a finished colour breaks every
+  one of them silently: the utility simply stops applying.
+*/
+
+// 50…950 for every family, so a skin can never define a shade the config forgot to expose.
+const SHADES = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]
+const ramp = (name) =>
+  Object.fromEntries(SHADES.map((s) => [s, `rgb(var(--c-${name}-${s}) / <alpha-value>)`]))
+
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
       colors: {
         /* Deep maritime navy — primary surfaces, text, the dark sidebar */
-        harbor: {
-          50:  '#f2f6fb',
-          100: '#e3ebf4',
-          200: '#c3d4e6',
-          300: '#98b3d1',
-          400: '#668bb4',
-          500: '#456c98',
-          600: '#33547b',
-          700: '#284363',
-          800: '#1d3149',
-          900: '#132236',
-          950: '#0b1726',
-        },
+        harbor: ramp('harbor'),
         /* Signal amber — primary actions, active states, key accents */
-        signal: {
-          50:  '#fff8ea',
-          100: '#ffedc6',
-          200: '#ffd989',
-          300: '#ffc04d',
-          400: '#ffab24',
-          500: '#f5a524',
-          600: '#d97e0a',
-          700: '#b45a0c',
-          800: '#924711',
-          900: '#783b12',
-          950: '#451d05',
-        },
+        signal: ramp('signal'),
         /* Seafoam teal — secondary status, positive signals */
-        sea: {
-          50:  '#eefbf7',
-          100: '#d4f5ec',
-          200: '#ade9da',
-          300: '#78d6c2',
-          400: '#43bba6',
-          500: '#239f8c',
-          600: '#178072',
-          700: '#16665c',
-          800: '#16514a',
-          900: '#16433e',
-          950: '#062724',
-        },
+        sea: ramp('sea'),
         /* Warm-cool neutral fog — backgrounds, hairlines, muted text */
-        fog: {
-          50:  '#f7f8fa',
-          100: '#eef1f4',
-          200: '#dfe4ea',
-          300: '#c7cfd8',
-          400: '#9aa6b4',
-          500: '#6f7d8d',
-          600: '#566270',
-          700: '#444e5a',
-          800: '#2e353e',
-          900: '#1b2027',
-        },
+        fog: ramp('fog'),
         /* Back-compat alias so any lingering brand-* class keeps working */
-        brand: {
-          50:  '#fff8ea',
-          100: '#ffedc6',
-          200: '#ffd989',
-          300: '#ffc04d',
-          400: '#ffab24',
-          500: '#f5a524',
-          600: '#d97e0a',
-          700: '#b45a0c',
-          800: '#924711',
-          900: '#783b12',
-          950: '#451d05',
-        },
+        brand: ramp('brand'),
       },
       fontFamily: {
-        display: ['"Bricolage Grotesque"', 'ui-serif', 'Georgia', 'serif'],
-        sans:    ['"Hanken Grotesk"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        mono:    ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        display: 'var(--font-display)',
+        sans: 'var(--font-sans)',
+        mono: 'var(--font-mono)',
       },
       letterSpacing: {
-        tightest: '-0.04em',
+        tightest: 'var(--tracking-display)',
+      },
+      borderRadius: {
+        lg: 'var(--radius-lg)',
+        xl: 'var(--radius-xl)',
+        '2xl': 'var(--radius-2xl)',
       },
       boxShadow: {
-        /* Soft layered depth for cards on light surfaces */
-        card:    '0 1px 2px rgba(11, 23, 38, 0.04), 0 8px 24px -12px rgba(11, 23, 38, 0.18)',
-        'card-hover': '0 2px 4px rgba(11, 23, 38, 0.06), 0 16px 40px -16px rgba(11, 23, 38, 0.28)',
-        /* Inset glow for the dark sidebar rail */
-        rail:    'inset -1px 0 0 rgba(255,255,255,0.04)',
-        signal:  '0 6px 20px -8px rgba(217, 126, 10, 0.6)',
+        card: 'var(--shadow-card)',
+        'card-hover': 'var(--shadow-card-hover)',
+        rail: 'var(--shadow-rail)',
+        signal: 'var(--shadow-signal)',
       },
       backgroundImage: {
-        /* Atmospheric navy gradient for dark surfaces */
-        'harbor-mesh':
-          'radial-gradient(110% 120% at 0% 0%, #1d3149 0%, #132236 45%, #0b1726 100%)',
-        /* Faint navigational grid — applied at low opacity over surfaces */
-        'chart-grid':
-          'linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px)',
+        'harbor-mesh': 'var(--bg-harbor-mesh)',
+        'chart-grid': 'var(--bg-chart-grid)',
+      },
+      transitionDuration: {
+        DEFAULT: 'var(--motion-fast)',
+        fast: 'var(--motion-fast)',
+        base: 'var(--motion-base)',
+        slow: 'var(--motion-slow)',
+      },
+      transitionTimingFunction: {
+        expo: 'var(--ease-out-expo)',
       },
       keyframes: {
         'rise-in': {
-          '0%':   { opacity: '0', transform: 'translateY(10px)' },
+          '0%': { opacity: '0', transform: 'translateY(10px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
-        'sweep': {
-          '0%':   { transform: 'translateX(-110%)' },
+        sweep: {
+          '0%': { transform: 'translateX(-110%)' },
           '100%': { transform: 'translateX(420%)' },
         },
         'pulse-soft': {
           '0%, 100%': { opacity: '1' },
-          '50%':      { opacity: '0.45' },
+          '50%': { opacity: '0.45' },
         },
       },
       animation: {
-        'rise-in': 'rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both',
-        'sweep': 'sweep 1.3s ease-in-out infinite',
+        // Duration and easing come from the skin, so pace is something a variant can change.
+        'rise-in': 'rise-in var(--motion-slow) var(--ease-out-expo) both',
+        sweep: 'sweep 1.3s ease-in-out infinite',
         'pulse-soft': 'pulse-soft 1.8s ease-in-out infinite',
       },
     },
