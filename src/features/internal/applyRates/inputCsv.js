@@ -1,33 +1,66 @@
 /*
   Apply Rates — parse the AIS "rates input" file (ratesInput.csv shape) into OFQ groups.
 
-  The file has a DUPLICATE "Port of Loading" header: the 1st occurrence is the OFQ's POL,
-  the 2nd is the applied rate's POL. That forces positional parsing (parseRateFile already
-  runs papaparse with header:false — header:true would silently clobber the duplicate).
+  The file is an OFR SEED: every OFQ appears, and an OFQ that already has rates applied
+  repeats once per applied rate, carrying that rate's OFRID and its columns. An OFQ with
+  nothing applied appears once with a blank OFRID. Rates are uploaded in waves, so this is
+  what stops each wave re-applying everything the previous one already did.
 
-  Rows with an OFRID describe a rate ALREADY applied to that OFQ; their rate fields are
-  hashed into appliedKeys so the matcher can skip re-applying identical rates.
+  FIVE headers are duplicated between the OFQ block and the applied-rate block — Port of
+  Loading, Port of Discharge, Last CY/CFS, Rate/Unit, Carrier. That forces positional parsing
+  (parseRateFile already runs papaparse with header:false — header:true would silently clobber
+  duplicates), and it is why buildApplyHeaderIndex resolves the second block relative to OFRID.
+
+  Rows with an OFRID hash their rate fields into appliedKeys, which outputCsv subtracts per OFQ.
 */
 
 import { norm, rateKey, laneKeyOf } from './matcher'
 
 export function buildApplyHeaderIndex(headerCells) {
   const headers = headerCells.map((h) => norm(h))
-  const polIdxs = headers.reduce((acc, h, i) => (h === 'port of loading' ? [...acc, i] : acc), [])
+  const occurrences = (name) => headers.reduce((acc, h, i) => (h === name ? [...acc, i] : acc), [])
   const idx = (name) => headers.indexOf(name) // exact match: 'carrier' ≠ 'forwarder/carrier'
+
+  /*
+    FIVE headers repeat, not one.
+
+    The file is two blocks side by side: the OFQ's own columns, then — to the right of OFRID —
+    the columns of a rate ALREADY applied to it. The second block repeats `Port of Loading`,
+    `Port of Discharge`, `Last CY/CFS`, `Rate/Unit` and `Carrier` verbatim.
+
+    `indexOf` returns the FIRST match, which is the OFQ-level column — and on an OFR row those
+    cells are blank. Only Port of Loading was being resolved positionally, so the applied-rate
+    key was built as `forwarder|pol|||||validUntil` and could never equal a real rate's key.
+    The already-applied skip therefore never skipped anything, and every wave of uploads
+    re-applied every rate the OFQ already had.
+
+    OFRID is the boundary: the applied rate's columns are the first occurrence to its right.
+    Files with a single block (no OFRID, or one Port of Loading) fall back to the only column
+    there is, which is what the previous `polIdxs[1] ?? polIdxs[0]` did for POL alone.
+  */
+  const ofrId = idx('ofrid')
+  const rateSide = (name) => {
+    const found = occurrences(name)
+    if (found.length === 0) return -1
+    if (ofrId >= 0) {
+      const after = found.find((i) => i > ofrId)
+      if (after !== undefined) return after
+    }
+    return found[found.length - 1]
+  }
 
   const index = {
     ofqId: idx('ofqid'),
-    ofqPol: polIdxs[0] ?? -1,
+    ofqPol: occurrences('port of loading')[0] ?? -1,
     fd: idx('final destination'),
-    ofrId: idx('ofrid'),
-    forwarder: idx('forwarder/carrier'),
-    rate: idx('rate/unit'),
-    ratePol: polIdxs[1] ?? polIdxs[0] ?? -1, // single-POL files: reuse the OFQ POL
-    pod: idx('port of discharge'),
-    lastCy: idx('last cy/cfs'),
-    validUntil: idx('valid until'),
-    carrier: idx('carrier'),
+    ofrId,
+    forwarder: idx('forwarder/carrier'), // unique header — no OFQ-level twin
+    rate: rateSide('rate/unit'),
+    ratePol: rateSide('port of loading'),
+    pod: rateSide('port of discharge'),
+    lastCy: rateSide('last cy/cfs'),
+    validUntil: rateSide('valid until'),
+    carrier: rateSide('carrier'),
   }
 
   const missing = []

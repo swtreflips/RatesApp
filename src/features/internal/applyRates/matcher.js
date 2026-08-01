@@ -15,6 +15,7 @@
   Identity: a rate is unique per (Forwarder, POL, POD, Last CY, Carrier, Rate, Valid Until).
   Both DB rates and the input file's already-applied rows are hashed through rateKey() so
   they compare equal despite formatting drift ($2,432.00 vs 2432; 7/29/2026 vs 2026-07-29).
+  Carrier is part of that identity: who moves the box is part of what was quoted.
 */
 
 import { getThresholds, MAX_STAGE2_ROUTES_PER_OFQ } from './config'
