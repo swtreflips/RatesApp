@@ -67,6 +67,7 @@
   --c-fog-700: 68 78 90;   /* #444e5a */
   --c-fog-800: 46 53 62;   /* #2e353e */
   --c-fog-900: 27 32 39;   /* #1b2027 */
+  --c-fog-950: 17 21 26;   /* #11151a — the original palette stopped at 900; the config exposes 950 */
 
   /* brand */
   --c-brand-50: 255 248 234;   /* #fff8ea */
