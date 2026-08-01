@@ -230,8 +230,8 @@ export function AutocompleteEditCell({ id, field, value, options, minChars = 3 }
         '& .MuiInput-root': {
           height: '100%',
           fontSize: '0.8rem',
-          fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
-          color: '#132236',
+          fontFamily: 'var(--font-sans)',
+          color: 'rgb(var(--c-harbor-900))',
         },
         '& .MuiInput-root:before, & .MuiInput-root:after': { borderBottom: 'none !important' },
         '& .MuiInput-input': { padding: '0 8px' },

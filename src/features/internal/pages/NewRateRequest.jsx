@@ -5,7 +5,7 @@ import Papa from 'papaparse'
 import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { gridScrollHeight, AutocompleteEditCell } from '../../rates/rateGrid'
+import { gridScrollHeight, AutocompleteEditCell, DATA_GRID_SX } from '../../rates/rateGrid'
 import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS, FINAL_DESTINATIONS } from '../../rates/locationOptions'
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
@@ -311,35 +311,24 @@ export default function NewRateRequest() {
           tabNavigation="content"
           disableRowSelectionOnClick
           hideFooter
+          /* Reuses the shared grid styling rather than restating it. This block was a
+             near-copy with its own hardcoded hexes, so it kept the old palette while every
+             themed surface around it changed — a second copy of a rule is a second thing to
+             remember, and this is what forgetting looks like. Only the genuine differences
+             stay: this grid is roomier than the dense ones. */
           sx={{
+            ...DATA_GRID_SX,
             height: gridScrollHeight(rows.length),
-            border: 'none',
-            fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif',
-            '& .MuiDataGrid-columnHeaders': {
-              backgroundColor: '#f7f8fa',
-              borderBottom: '1px solid #dfe4ea',
-            },
             '& .MuiDataGrid-columnHeader': {
-              fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+              ...DATA_GRID_SX['& .MuiDataGrid-columnHeader'],
               fontSize: '0.7rem',
-              fontWeight: 600,
               letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-              color: '#566270',
+              padding: undefined,
             },
-            '& .MuiDataGrid-columnSeparator': { color: '#eef1f4' },
             '& .MuiDataGrid-cell': {
+              ...DATA_GRID_SX['& .MuiDataGrid-cell'],
               fontSize: '0.875rem',
-              color: '#132236',
-              borderColor: '#eef1f4',
-            },
-            '& .MuiDataGrid-row:hover': { backgroundColor: '#f7f8fa' },
-            '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': {
-              outline: '2px solid rgba(245,165,36,0.5)',
-              outlineOffset: '-2px',
-            },
-            '& .MuiDataGrid-cell--editing': {
-              boxShadow: 'inset 0 0 0 2px rgba(245,165,36,0.5)',
+              padding: undefined,
             },
           }}
         />
