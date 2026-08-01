@@ -11,10 +11,11 @@
   (parseRateFile already runs papaparse with header:false — header:true would silently clobber
   duplicates), and it is why buildApplyHeaderIndex resolves the second block relative to OFRID.
 
-  Rows with an OFRID hash their rate fields into appliedKeys, which outputCsv subtracts per OFQ.
+  Rows with an OFRID hash their rate fields into appliedKeys — see appliedKey() in matcher.js
+  for which fields make a rate unique — which outputCsv then subtracts per OFQ.
 */
 
-import { norm, rateKey, laneKeyOf } from './matcher'
+import { norm, appliedKey, laneKeyOf } from './matcher'
 
 export function buildApplyHeaderIndex(headerCells) {
   const headers = headerCells.map((h) => norm(h))
@@ -57,7 +58,7 @@ export function buildApplyHeaderIndex(headerCells) {
     forwarder: idx('forwarder/carrier'), // unique header — no OFQ-level twin
     rate: rateSide('rate/unit'),
     ratePol: rateSide('port of loading'),
-    pod: rateSide('port of discharge'),
+    pod: rateSide('port of discharge'), // resolved for completeness; not part of appliedKey
     lastCy: rateSide('last cy/cfs'),
     validUntil: rateSide('valid until'),
     carrier: rateSide('carrier'),
@@ -97,10 +98,9 @@ export function groupByOfq(dataRows, index) {
     ofq.rowCount += 1
     if (cell(cells, index.ofrId)) {
       ofq.appliedCount += 1
-      ofq.appliedKeys.add(rateKey({
+      ofq.appliedKeys.add(appliedKey({
         forwarder: cell(cells, index.forwarder),
         pol: cell(cells, index.ratePol),
-        pod: cell(cells, index.pod),
         lastCy: cell(cells, index.lastCy),
         carrier: cell(cells, index.carrier),
         rate: cell(cells, index.rate),

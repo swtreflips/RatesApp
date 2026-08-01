@@ -63,6 +63,38 @@ export const keyFromDbRate = (r) => rateKey({
   validUntil: r.valid_until,
 })
 
+/*
+  "Does this OFQ already have this rate?" — the OFR-seed comparison, and a DIFFERENT question
+  from rateKey's "are these the same row?".
+
+  A rate is unique per FORWARDER, RATE/UNIT, CARRIER, PORT OF LOADING, LAST CY/CFS and
+  VALID UNTIL. That is the operational definition, and it is what the seed is checked against.
+
+  PORT OF DISCHARGE IS NOT PART OF IT. The same quote is routinely recorded against different
+  discharge ports — OFR6964 on OFQ1787 is Long Beach where the pool says Los Angeles — and
+  including POD made those look like two different rates, so the seed's copy never matched and
+  the rate was applied a second time. POD still defines the ROUTE the review matrix shows and
+  discards; it just does not make a rate a different rate.
+
+  CONTRACT is likewise absent: a different contract carries a different price by definition, so
+  Rate/Unit already separates them. Adding it would only let a blank contract column in the seed
+  fail to match a populated one in the pool.
+
+  rateKey keeps POD, because DB-side dedupe genuinely is asking about row identity and a route
+  must not lose a discharge port.
+*/
+export const appliedKey = ({ forwarder, pol, lastCy, carrier, rate, validUntil }) =>
+  [norm(forwarder), norm(pol), norm(lastCy), norm(carrier), normRate(rate), normDate(validUntil)].join('|')
+
+export const appliedKeyFromDbRate = (r) => appliedKey({
+  forwarder: r.forwarder?.name,
+  pol: r.pol,
+  lastCy: r.last_cy,
+  carrier: r.carrier,
+  rate: r.rate_amount,
+  validUntil: r.valid_until,
+})
+
 // Rows arrive created_at DESC, so keeping the first occurrence per key keeps the newest.
 export function dedupeRates(rates) {
   const seen = new Set()

@@ -4,7 +4,7 @@
 */
 
 import Papa from 'papaparse'
-import { laneKeyOf, keyFromDbRate } from './matcher'
+import { laneKeyOf, appliedKeyFromDbRate } from './matcher'
 
 export const OUTPUT_HEADERS = [
   '# of Free Days', 'Carrier', 'Contract Number', 'Contract Name', 'Date Received', 'External ID',
@@ -37,7 +37,7 @@ export function buildOutputRows(ofqs, laneResults, discarded) {
     for (const route of lane.qualified) {
       if (dropped.has(route.routeKey)) continue
       for (const r of route.rates) {
-        if (ofq.appliedKeys.has(keyFromDbRate(r))) continue
+        if (ofq.appliedKeys.has(appliedKeyFromDbRate(r))) continue
         rows.push([
           r.free_days ?? '',        // # of Free Days
           r.carrier ?? '',          // Carrier
