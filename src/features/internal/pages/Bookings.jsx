@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
   Upload, Search, Ship, Truck, Container, ArrowRight, ChevronRight, Loader2, Award,
-  PackageX, FileSpreadsheet, AlertTriangle, CalendarDays,
+  PackageX, FileSpreadsheet, AlertTriangle, CalendarDays, Clock, History, Check,
 } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 import { parseRateFile, Toast } from '../../rates/rateGrid'
@@ -9,6 +9,10 @@ import { money } from '../../drayage/drayageGrid'
 import { fetchDrayageRates } from '../../drayage/services/drayageService'
 import { buildBookingsHeaderIndex, groupByOfqWithOptions } from '../bookings/inputCsv'
 import { laneKey, toNum, indexDrayageByLane, grandTotal } from '../bookings/matching'
+import {
+  fetchLatestSnapshot, fetchSnapshotHistory, saveSnapshot, diffAgainst,
+  relativeDay, isStale,
+} from '../bookings/snapshotService'
 
 /*
   Internal "Bookings" — landed-cost scenario planner (BOOKINGS.md). Cross-service, so it lives
@@ -22,8 +26,18 @@ import { laneKey, toNum, indexDrayageByLane, grandTotal } from '../bookings/matc
        selectable options (cheapest preselected) and the landed total is the pinned hero numeral.
 
   Drayage coverage is fetched ONCE and indexed by normalized lane key (matching.js), so every
-  OFR click is an O(1) lookup — no round-trip. v1 decisions unchanged: no persistence, no geo
-  hint yet, internal-only.
+  OFR click is an O(1) lookup — no round-trip.
+
+  THE SHEET IS SHARED; THE EXPLORATION IS NOT.
+
+  §242's "no persistence" had folded two separate things into one decision. Choosing an ocean
+  rate and a drayage option is still pure exploration and still saves nothing — one person's
+  what-if has no business becoming another's. But the FILE was browser state too, so a reload
+  emptied the page and the export one person happened to have was invisible to everyone else.
+
+  The sheet is now a SNAPSHOT: uploaded once, seen by every internal user, stamped with who and
+  when. Only the universe is stored — OFQs and the ocean rates applied to them. Drayage is still
+  read live on every load, because a two-week-old sheet must not quote two-week-old trucking.
 */
 
 const ACCEPTED_EXTS = ['csv', 'xlsx', 'xls']
@@ -222,8 +236,17 @@ function ItineraryPanel({ ofq, ofr, ranked, selectedDrayageId, onSelectDrayage }
 /* ── main page ───────────────────────────────────────────────────────────── */
 
 export default function Bookings() {
-  const [ofqs, setOfqs] = useState([])
-  const [fileName, setFileName] = useState(null)
+  // The shared snapshot: metadata + the parsed universe. `ofqs` is read from it rather than held
+  // separately, so there is exactly one answer to "what is on screen" and it always carries its
+  // own provenance.
+  const [snapshot, setSnapshot] = useState(null)
+  const [snapLoading, setSnapLoading] = useState(true)
+  const [snapError, setSnapError] = useState(null)
+  const [history, setHistory] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [pending, setPending] = useState(null)   // parsed file awaiting confirmation
+
+  const ofqs = snapshot?.ofqs ?? []
   const [query, setQuery] = useState('')
   const [expandedOfqId, setExpandedOfqId] = useState(null)
   const [selectedOfrId, setSelectedOfrId] = useState(null)
@@ -258,8 +281,34 @@ export default function Bookings() {
 
   useEffect(() => { loadDrayage() }, [loadDrayage])
 
+  /* ── the shared snapshot ───────────────────────────────────────────────── */
+
+  const loadSnapshot = useCallback(async () => {
+    setSnapLoading(true)
+    const [{ snapshot: latest, error }, { history: rows }] = await Promise.all([
+      fetchLatestSnapshot(),
+      fetchSnapshotHistory(8),
+    ])
+    if (error) setSnapError(error.message)
+    else {
+      setSnapError(null)
+      setSnapshot(latest)
+      setHistory(rows)
+    }
+    setSnapLoading(false)
+  }, [])
+
+  useEffect(() => { loadSnapshot() }, [loadSnapshot])
+
   /* ── upload + parse (browse or drop) ───────────────────────────────────── */
 
+  /*
+    Parsing does NOT publish. A file lands in `pending` with a summary of what it would change,
+    and is only written when the user confirms — because this upload replaces what every other
+    internal user sees, and that deserves more than a drag gesture. The delta is also the honest
+    answer to "did I need to re-upload?": age says the sheet is old, the delta says whether
+    anything actually moved.
+  */
   const handleFile = (file) => {
     if (!file) return
     const ext = (file.name.split('.').pop() || '').toLowerCase()
@@ -274,15 +323,30 @@ export default function Bookings() {
         if (missing.length) return showToast('error', `Missing column(s): ${missing.join(', ')}`)
         const parsed = groupByOfqWithOptions(dataRows, index)
         if (!parsed.length) return showToast('warning', 'No OFQ rows found in the file.')
-        setOfqs(parsed)
-        setFileName(file.name)
-        setExpandedOfqId(null)
-        setSelectedOfrId(null)
-        setSelectedDrayageId(null)
-        setQuery('')
+        setPending({ ofqs: parsed, fileName: file.name, diff: diffAgainst(snapshot, parsed) })
       },
       error() { showToast('error', 'Failed to read file') },
     })
+  }
+
+  const publishPending = async () => {
+    if (!pending) return
+    setSaving(true)
+    const { snapshot: saved, error } = await saveSnapshot({
+      ofqs: pending.ofqs,
+      fileName: pending.fileName,
+    })
+    setSaving(false)
+    if (error) return showToast('error', `Couldn’t save the snapshot: ${error.message}`)
+
+    setSnapshot(saved)
+    setPending(null)
+    setExpandedOfqId(null)
+    setSelectedOfrId(null)
+    setSelectedDrayageId(null)
+    setQuery('')
+    fetchSnapshotHistory(8).then(({ history: rows }) => setHistory(rows))
+    showToast('success', 'Snapshot published — every internal user sees this now.')
   }
 
   const onFileInput = (e) => { handleFile(e.target.files?.[0]); e.target.value = '' }
@@ -372,7 +436,7 @@ export default function Bookings() {
         <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-signal-400 bg-signal-50/80">
           <div className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-harbor-900 shadow-card-hover">
             <Upload size={18} className="text-signal-600" />
-            Drop the OFQ file to {hasFile ? 'replace the current file' : 'upload'}
+            Drop the OFQ export to {hasFile ? 'stage a new snapshot' : 'upload'}
           </div>
         </div>
       )}
@@ -383,23 +447,34 @@ export default function Bookings() {
         subtitle="Open a quote to see its applied ocean rates, pick one, and assemble the door delivery from the drayage rates on file."
         actions={
           <div className="flex items-center gap-2">
-            {fileName && (
-              <span className="inline-flex items-center gap-1.5 rounded-lg border border-fog-200 bg-white px-3 py-1.5 shadow-card">
-                <FileSpreadsheet size={13} className="text-fog-400" />
-                <span className="font-mono text-xs text-harbor-900">{fileName}</span>
-              </span>
-            )}
+            {snapshot && <SnapshotStamp snapshot={snapshot} />}
             <button
               onClick={() => fileInputRef.current?.click()}
               className="inline-flex items-center gap-1.5 rounded-lg border border-fog-300 bg-white px-3 py-2 text-sm font-medium text-harbor-700 shadow-sm transition-all hover:border-harbor-300 hover:bg-fog-50 hover:text-harbor-900"
             >
               <Upload size={15} />
-              {hasFile ? 'Different File' : 'Upload OFQ File'}
+              {hasFile ? 'New Snapshot' : 'Upload OFQ File'}
             </button>
             <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" hidden onChange={onFileInput} />
           </div>
         }
       />
+
+      {snapError && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-card">
+          Couldn’t load the current snapshot: {snapError}
+        </div>
+      )}
+
+      {pending && (
+        <PendingSnapshot
+          pending={pending}
+          current={snapshot}
+          saving={saving}
+          onPublish={publishPending}
+          onDiscard={() => setPending(null)}
+        />
+      )}
 
       {drayError && (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-card">
@@ -407,7 +482,13 @@ export default function Bookings() {
         </div>
       )}
 
-      {!hasFile ? (
+      {snapLoading ? (
+        <div className="flex min-h-[46vh] w-full items-center justify-center rounded-2xl border border-fog-200 bg-white shadow-card">
+          <span className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.16em] text-fog-400">
+            <Loader2 size={14} className="animate-spin" /> loading the current snapshot…
+          </span>
+        </div>
+      ) : !hasFile ? (
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
@@ -415,8 +496,8 @@ export default function Bookings() {
         >
           <Container size={30} className="text-fog-300" />
           <div className="max-w-sm text-sm text-fog-500">
-            Drag & drop the OFQ export (.csv or .xlsx) here — or click to browse.<br />
-            Each quote opens into its applied ocean rates and the drayage options that complete the delivery.
+            No snapshot yet. Drag & drop the OFQ export (.csv or .xlsx) here — or click to browse.<br />
+            Whatever you upload becomes the shared view for every internal user.
           </div>
           {drayLoading && (
             <span className="mt-1 inline-flex items-center gap-1.5 font-mono text-[11px] text-fog-400">
@@ -572,10 +653,161 @@ export default function Bookings() {
               )}
             </div>
           </div>
+
+          {history.length > 1 && <SnapshotHistory history={history} currentId={snapshot?.id} />}
         </>
       )}
 
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
+  )
+}
+
+/* ── snapshot provenance ─────────────────────────────────────────────────── */
+
+/**
+ * Who uploaded the sheet on screen, and when.
+ *
+ * The stamp turns amber past `STALE_AFTER_DAYS` (snapshotService). It is a cue, never a gate — an old sheet is
+ * still the best available answer until someone posts a newer one, and blocking work on it would
+ * punish the reader for the uploader's silence. What it CANNOT know is whether new OFQs or newly
+ * applied rates exist upstream; age is the only proxy available from here, so the wording says
+ * "may be" rather than asserting the sheet is wrong.
+ */
+function SnapshotStamp({ snapshot }) {
+  const stale = isStale(snapshot.uploadedAt)
+  return (
+    <span
+      title={`${snapshot.fileName ?? 'snapshot'} · ${new Date(snapshot.uploadedAt).toLocaleString()}${
+        snapshot.uploadedBy ? ` · uploaded by ${snapshot.uploadedBy}` : ''
+      }`}
+      className={[
+        'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 shadow-card',
+        stale ? 'border-signal-300 bg-signal-50' : 'border-fog-200 bg-white',
+      ].join(' ')}
+    >
+      <Clock size={13} className={stale ? 'text-signal-600' : 'text-fog-400'} />
+      <span className="flex flex-col leading-tight">
+        <span className={`font-mono text-xs ${stale ? 'text-signal-900' : 'text-harbor-900'}`}>
+          {relativeDay(snapshot.uploadedAt)}
+        </span>
+        <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-fog-400">
+          {stale ? 'may be out of date' : 'current snapshot'}
+        </span>
+      </span>
+    </span>
+  )
+}
+
+/**
+ * A parsed file, not yet published.
+ *
+ * Publishing changes what every internal user sees, so it takes a deliberate click rather than
+ * following from a drag. The delta is the point of the pause: it answers whether the upload was
+ * worth making, and it answers it BEFORE the old snapshot is replaced.
+ */
+function PendingSnapshot({ pending, current, saving, onPublish, onDiscard }) {
+  const { diff, ofqs, fileName } = pending
+  const ofrCount = ofqs.reduce((n, o) => n + o.oceanOptions.length, 0)
+  const sign = (n) => (n > 0 ? `+${n}` : String(n))
+
+  return (
+    <div className="stagger rounded-2xl border border-signal-300 bg-signal-50/60 px-5 py-4 shadow-card">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-signal-700">
+            Ready to publish
+          </p>
+          <p className="mt-1 inline-flex items-center gap-1.5 text-sm font-semibold text-harbor-900">
+            <FileSpreadsheet size={14} className="shrink-0 text-fog-400" />
+            <span className="font-mono">{fileName}</span>
+          </p>
+          <p className="mt-1 text-xs text-fog-600">
+            {ofqs.length} OFQs · {ofrCount} applied ocean rates
+            {diff.isFirst
+              ? ' — this becomes the first shared snapshot.'
+              : diff.identical
+                ? ' — identical to the current snapshot. Nothing has been raised or applied since.'
+                : ` — ${sign(diff.ofqDelta)} OFQs, ${sign(diff.ofrDelta)} rates against what is on screen.`}
+          </p>
+          {!diff.isFirst && diff.newOfqIds.length > 0 && (
+            <p className="mt-1 font-mono text-[11px] text-fog-500">
+              new: {diff.newOfqIds.slice(0, 6).join(', ')}
+              {diff.newOfqIds.length > 6 && ` +${diff.newOfqIds.length - 6} more`}
+            </p>
+          )}
+          {current && (
+            <p className="mt-1.5 text-[11px] text-fog-500">
+              Replaces the snapshot from {relativeDay(current.uploadedAt)}
+              {current.uploadedBy ? ` by ${current.uploadedBy}` : ''} — which stays in history.
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            onClick={onDiscard}
+            disabled={saving}
+            className="rounded-lg px-3 py-2 text-sm font-medium text-harbor-700 transition-colors hover:bg-white/70 disabled:opacity-50"
+          >
+            Discard
+          </button>
+          <button
+            onClick={onPublish}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-harbor-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-harbor-800 disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+            Publish snapshot
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Earlier uploads. Metadata only — the counts are stored on the row so this costs no payloads. */
+function SnapshotHistory({ history, currentId }) {
+  return (
+    <details className="rounded-2xl border border-fog-200 bg-white shadow-card">
+      <summary className="cursor-pointer list-none px-5 py-3">
+        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-fog-500">
+          <History size={12} /> Snapshot history · {history.length}
+        </span>
+      </summary>
+      <div className="border-t border-fog-100 px-5 py-3">
+        <ul className="space-y-1.5">
+          {history.map((s) => {
+            const isCurrent = s.id === currentId
+            return (
+              <li
+                key={s.id}
+                className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[11px]"
+              >
+                <span className={isCurrent ? 'font-bold text-harbor-900' : 'text-fog-500'}>
+                  {new Date(s.uploadedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+                </span>
+                <span className="text-fog-500">
+                  {s.ofqCount} OFQs · {s.ofrCount} rates
+                </span>
+                {s.uploadedBy && <span className="text-fog-400">{s.uploadedBy}</span>}
+                {isCurrent && (
+                  <span className="rounded bg-sea-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-sea-700 ring-1 ring-inset ring-sea-200">
+                    on screen
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+        {/* Older snapshots are kept, not shown. Restoring one would mean publishing a stale
+            universe as current, which is the opposite of what this page is for — the record is
+            here to show how the universe grew, not to be reverted to. */}
+        <p className="mt-2.5 text-[11px] leading-snug text-fog-400">
+          Kept for reference. To change what is on screen, upload a newer export — snapshots are
+          never edited or rolled back.
+        </p>
+      </div>
+    </details>
   )
 }

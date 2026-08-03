@@ -7,8 +7,9 @@ read as unintuitive); v1.1 is the grid-first three-state model in §4: OFQ grid 
 OFRs → clicking an OFR opens the Booking Itinerary panel on the right. Shipped scope vs. this doc:
 **geo hint (§7) deferred**; no-coverage OFRs are **shown + badged** "no drayage on file"; drayage
 coverage is fetched **once** and indexed client-side by normalized lane key (refinement over §2b's
-per-selection query — reuses `drayageService.fetchDrayageRates({ scope:'current' })`). No
-persistence, internal-only, single-selection — all per the doc.
+per-selection query — reuses `drayageService.fetchDrayageRates({ scope:'current' })`).
+Internal-only and single-selection per the doc; **the uploaded sheet is now a shared snapshot**
+while the selection remains ephemeral — see §5.
 **Purpose:** given an OFQ (a real customer quote tracked in AIS) and the ocean rate(s) already
 applied to it, let an internal user explore which **real drayage rate** completes the door delivery
 for each ocean option, and compare the combined landed cost across combinations.
@@ -239,8 +240,42 @@ the grid-first model below matches how the user actually thinks about the data.)
 
 ## 5. Explicitly out of scope for v1
 
-- **No persistence.** Selecting a combo is pure exploration — nothing is written to the database.
-  No new `bookings` table, no "saved scenario" concept yet.
+- **No persistence of a SELECTION.** Choosing an ocean rate and a drayage option is pure
+  exploration — nothing is written. No "saved scenario" concept, no `bookings` table.
+
+  > ### ✅ Superseded in part — the SHEET is now persisted
+  >
+  > This bullet originally read *"No persistence"* and covered two different things at once. The
+  > half about selections still stands and always will: one person's what-if has no business
+  > becoming another's.
+  >
+  > The other half was wrong. The uploaded FILE was browser state too, so a reload emptied the
+  > page and the export one person happened to have was invisible to every other internal user.
+  > That is not exploration being ephemeral — that is the shared input being trapped in one tab.
+  >
+  > **`booking_snapshots`** (migration `20260803120000`) now holds it.
+  >
+  > | | |
+  > |---|---|
+  > | **Stored** | the OFQ universe and the ocean rates applied to it, as parsed |
+  > | **NOT stored** | the drayage options, the selection, the expanded row, any total |
+  > | **Shape** | one immutable JSONB document per upload — a photograph of a file |
+  > | **Who** | any internal user may publish; forwarders read nothing |
+  > | **History** | every upload kept, latest is what the page shows, ~3 KB each |
+  > | **Staleness** | the stamp turns amber after 7 days — a cue, never a gate |
+  >
+  > **Drayage is still read live from `drayage_rates` on every load**, and freezing it into a
+  > snapshot would be a bug: a two-week-old sheet must not quote two-week-old trucking. A
+  > snapshot ages in one dimension only — which OFQs and ocean rates existed when it was taken.
+  >
+  > **There is no UPDATE policy on the table**, deliberately. A snapshot is a photograph; you do
+  > not retouch a photograph, you take a new one. Correcting a bad upload means uploading the
+  > right file, and the wrong one stays in history where it can be seen for what it was.
+  >
+  > Publishing takes a deliberate click rather than following from the drag, because it changes
+  > what every internal user sees. The confirm step names the delta against the current snapshot
+  > — `+2 OFQs, +2 rates`, and which OFQIDs are new — which is the only honest answer to *"did I
+  > need to re-upload?"*. Age says the sheet is old; the delta says whether anything moved.
 - **No CSV export** (a natural follow-on mirroring `outputCsv.js`'s pattern, but not required to
   ship v1).
 - **No geo-QUALIFICATION reuse.** Bookings never calls `matcher.js`/`config.js`/`geoBatch.js`'s
