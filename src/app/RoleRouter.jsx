@@ -10,6 +10,9 @@ import { ROLES } from '../lib/roles'
 const InternalRoot = lazy(() => import('../features/internal/pages/InternalRoot'))
 const ForwarderRoot = lazy(() => import('../features/forwarder/pages/ForwarderRoot'))
 
+// Reachable by BOTH roles — see the route below.
+const Settings = lazy(() => import('../features/account/pages/Settings'))
+
 /** Lightweight fallback shown while a lazy domain chunk loads. */
 function RouteFallback() {
   return (
@@ -40,6 +43,16 @@ export default function RoleRouter() {
 
       {/* Forwarder feature domain — only mounted for forwarders */}
       {role === ROLES.FORWARDER && <Route path="/forwarder/*" element={<ForwarderRoot />} />}
+
+      {/*
+        Account settings — the ONE route not gated on role, and deliberately so.
+
+        Every other route here is a feature domain: internal plans, forwarders quote, and mounting
+        the wrong one would show somebody a workspace that is not theirs. This is your own
+        account. Changing your password is the same act whoever you are, so it lives outside both
+        domains rather than being built twice and drifting.
+      */}
+      <Route path="/settings" element={<Settings />} />
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />

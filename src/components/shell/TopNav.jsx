@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Menu,
   Bell,
@@ -97,14 +98,29 @@ export default function TopNav({ onMenuToggle }) {
                 <p className="text-xs text-fog-500">{ROLE_LABELS[role] ?? role}</p>
               </div>
 
-              <button className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-fog-600 transition-colors hover:bg-fog-50 hover:text-harbor-800">
+              {/* Inert, and now LOOKS inert. It used to be a live-styled button with no
+                  onClick — clicking it did nothing at all, which reads as a broken app rather
+                  than an unbuilt feature. */}
+              <button
+                type="button"
+                disabled
+                className="flex w-full cursor-not-allowed items-center gap-2.5 px-3.5 py-2 text-sm text-fog-400"
+              >
                 <User size={15} />
                 Profile
               </button>
-              <button className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-fog-600 transition-colors hover:bg-fog-50 hover:text-harbor-800">
+
+              {/* Real, and for BOTH roles — it is where anyone replaces the temporary password
+                  they were issued at onboarding. */}
+              <Link
+                to="/settings"
+                role="menuitem"
+                onClick={() => setAccountOpen(false)}
+                className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-fog-600 transition-colors hover:bg-fog-50 hover:text-harbor-800"
+              >
                 <Settings size={15} />
                 Settings
-              </button>
+              </Link>
 
               <div className="my-1 border-t border-fog-100" />
               <button

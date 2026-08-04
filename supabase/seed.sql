@@ -106,14 +106,12 @@ insert into public.profiles (id, role, forwarder_id, organization_id, full_name,
    '11111111-1111-1111-1111-111111111111', 'Acme Analyst', 'member'),
   ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'forwarder', '22222222-2222-2222-2222-222222222222',
    '22222222-2222-2222-2222-222222222222', 'Beta Analyst', 'member'),
-  -- factory users for the planner. role stays 'forwarder' only because profiles.role's
-  -- check has not been widened; organizations.type is what actually classifies them, and
-  -- my_org_type() reads that.
-  ('dddddddd-dddd-dddd-dddd-dddddddddddd', 'forwarder', null,
+  -- factory users for the planner
+  ('dddddddd-dddd-dddd-dddd-dddddddddddd', 'supplier', null,
    '33333333-3333-3333-3333-333333333333', 'Ditar Merchandiser', 'admin'),
-  ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'forwarder', null,
+  ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'supplier', null,
    '44444444-4444-4444-4444-444444444444', 'Tejaswi Merchandiser', 'member'),
-  ('ffffffff-ffff-ffff-ffff-ffffffffffff', 'forwarder', null,
+  ('ffffffff-ffff-ffff-ffff-ffffffffffff', 'supplier', null,
    '55555555-5555-5555-5555-555555555555', 'Manchester Merchandiser', 'member')
 on conflict do nothing;
 

@@ -76,7 +76,7 @@ export function AuthProvider({ children }) {
 
     supabase
       .from('profiles')
-      .select('id, role, org_role, full_name, company, organization_id, organizations(name, type)')
+      .select('id, role, org_role, full_name, company, organization_id, must_change_password, organizations(name, type)')
       .eq('id', uid)
       .maybeSingle()
       .then(({ data, error }) => {

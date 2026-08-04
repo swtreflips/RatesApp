@@ -20,11 +20,15 @@ comment on column public.profiles.must_change_password is
   'The user is still on a temporary password issued during onboarding. Drives a banner only — see 20260803160000. Cleared by mark_password_changed(), never by the client directly';
 
 /*
-  Clearing the flag is an RPC rather than a column the client may write.
+  Clearing the flag is an RPC because it HAS to be.
 
-  profiles has an UPDATE policy for self-service, and widening what a user may set on their own
-  row is how a role column eventually becomes writable by accident. One SECURITY DEFINER function
-  that touches exactly one boolean on exactly the caller's row cannot drift into that.
+  `profiles` carries exactly one policy — `profiles_directory_read`, a SELECT — and no UPDATE
+  policy at all. That is deliberate and load-bearing: it is what stops a signed-in user rewriting
+  their own `role` from the browser console, which RatesApp's AuthProvider calls out by name.
+
+  So the choice was never "RPC or a writable column". Adding an UPDATE policy to let someone
+  clear a banner would open the row that identity is read from, to buy a nag flag. This function
+  is SECURITY DEFINER and touches exactly one boolean on exactly the caller's row.
 */
 create or replace function public.mark_password_changed()
 returns void
