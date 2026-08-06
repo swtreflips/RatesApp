@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
   Upload, Search, Ship, Truck, Container, ArrowRight, ChevronRight, Loader2, Award,
-  PackageX, FileSpreadsheet, AlertTriangle, CalendarDays, Clock, History, Check,
+  PackageX, FileSpreadsheet, AlertTriangle, CalendarDays, CalendarX2, Clock, History, Check,
 } from 'lucide-react'
 import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives'
 import { parseRateFile, Toast } from '../../rates/rateGrid'
@@ -9,6 +9,7 @@ import { money } from '../../drayage/drayageGrid'
 import { fetchDrayageRates } from '../../drayage/services/drayageService'
 import { buildBookingsHeaderIndex, groupByOfqWithOptions } from '../bookings/inputCsv'
 import { laneKey, toNum, indexDrayageByLane, grandTotal } from '../bookings/matching'
+import { dateVal, startOfToday, applyValidity } from '../bookings/rateValidity'
 import {
   fetchLatestSnapshot, fetchSnapshotHistory, saveSnapshot, diffAgainst,
   relativeDay, isStale,
@@ -41,21 +42,6 @@ import {
 */
 
 const ACCEPTED_EXTS = ['csv', 'xlsx', 'xls']
-
-/** 'M/D/YYYY' or 'YYYY-MM-DD' → sortable number; blank/unparseable sorts LAST.
-    Explicit formats only (string `Date.parse` on non-ISO dates is engine-defined). */
-const dateVal = (s) => {
-  const str = String(s ?? '').trim()
-  if (!str) return Infinity
-  let m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
-  if (m) {
-    const year = m[3].length === 2 ? `20${m[3]}` : m[3]
-    return new Date(Number(year), Number(m[1]) - 1, Number(m[2])).getTime()
-  }
-  m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime()
-  return Infinity
-}
 
 /* ── small pieces ────────────────────────────────────────────────────────── */
 
@@ -246,7 +232,19 @@ export default function Bookings() {
   const [saving, setSaving] = useState(false)
   const [pending, setPending] = useState(null)   // parsed file awaiting confirmation
 
-  const ofqs = snapshot?.ofqs ?? []
+  // Today, fixed once per mount so the memo below has a stable input. Re-reading the clock on
+  // every render would make "is this expired" a different question each pass; a session left
+  // open across midnight is the acceptable cost, and a reload settles it.
+  const [asOf] = useState(() => startOfToday())
+
+  // What is on screen = the published snapshot MINUS anything past its Valid Until. The raw
+  // snapshot is kept intact (`snapshot.ofqs`) — this is a view of it, not a replacement, so the
+  // same stored file answers differently tomorrow without being re-uploaded.
+  const { ofqs, expiredTotal } = useMemo(
+    () => applyValidity(snapshot?.ofqs ?? [], asOf),
+    [snapshot, asOf],
+  )
+
   const [query, setQuery] = useState('')
   const [expandedOfqId, setExpandedOfqId] = useState(null)
   const [selectedOfrId, setSelectedOfrId] = useState(null)
@@ -510,7 +508,18 @@ export default function Bookings() {
           {/* summary */}
           <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-3">
             <StatCard label="OFQs loaded" value={String(ofqs.length)} icon={FileSpreadsheet} accent="harbor" index={0} />
-            <StatCard label="Ocean rates in file" value={String(totalOfrs)} icon={Ship} accent="sea" index={1} />
+            {/* Counts what is BOOKABLE, not what the file held — and says so when those differ,
+                because "9 rates" quietly becoming "7" overnight needs a reason on screen. */}
+            <StatCard
+              label="Bookable ocean rates"
+              value={String(totalOfrs)}
+              icon={Ship}
+              accent="sea"
+              index={1}
+              hint={expiredTotal > 0
+                ? `${expiredTotal} expired, hidden`
+                : 'all rates in the file are still valid'}
+            />
             <StatCard label="Best landed total" value={bestGrand != null ? money(bestGrand) : '—'} icon={Award} accent="signal" index={2} hint={selectedOfr ? 'cheapest drayage on this routing' : 'pick an ocean rate'} />
           </div>
 
@@ -549,6 +558,8 @@ export default function Bookings() {
                   {filteredOfqs.map((ofq) => {
                     const isOpen = ofq.ofqId === expandedOfqId
                     const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
+                    // had rates, all of them expired — real demand with nothing bookable on it
+                    const allLapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
                     // ocean rates cheapest-first (rate ascending; rate-less options last)
                     const sortedOfrs = isOpen
                       ? [...ofq.oceanOptions].sort((a, b) => (toNum(a.rate) ?? Infinity) - (toNum(b.rate) ?? Infinity))
@@ -565,10 +576,15 @@ export default function Bookings() {
                           <span className="truncate text-sm text-harbor-800">{ofq.pol || '—'}</span>
                           <span className="truncate text-sm text-harbor-800">{ofq.fd || '—'}</span>
                           <span className="truncate font-mono text-xs text-harbor-700">{ofq.cargoReadyDate || '—'}</span>
-                          <span className="truncate text-right font-mono text-[11px] text-fog-500">
-                            {ofq.oceanOptions.length === 0
-                              ? 'none applied'
-                              : `${ofq.oceanOptions.length} rate${ofq.oceanOptions.length === 1 ? '' : 's'} · ${covered} covered`}
+                          {/* Three distinct states, not two: a quote nobody has quoted yet and a
+                              quote whose rates have all lapsed look identical if both read
+                              "none applied", and only the second one needs chasing. */}
+                          <span className={`truncate text-right font-mono text-[11px] ${allLapsed ? 'font-semibold text-signal-600' : 'text-fog-500'}`}>
+                            {ofq.oceanOptions.length > 0
+                              ? `${ofq.oceanOptions.length} rate${ofq.oceanOptions.length === 1 ? '' : 's'} · ${covered} covered`
+                              : allLapsed
+                                ? 'no valid rates'
+                                : 'none applied'}
                           </span>
                         </button>
 
@@ -578,7 +594,9 @@ export default function Bookings() {
                             {ofq.oceanOptions.length === 0 ? (
                               <p className="flex items-center gap-1.5 py-1.5 text-xs text-fog-500">
                                 <Ship size={13} className="text-fog-400" />
-                                No ocean rate applied to this OFQ yet — apply one first, then plan the delivery here.
+                                {allLapsed
+                                  ? `All ${ofq.expiredCount} ocean rate${ofq.expiredCount === 1 ? '' : 's'} on this OFQ have expired — go back out for fresh ones before planning delivery.`
+                                  : 'No ocean rate applied to this OFQ yet — apply one first, then plan the delivery here.'}
                               </p>
                             ) : (
                               sortedOfrs.map((ofr) => {
@@ -616,6 +634,16 @@ export default function Bookings() {
                                   </button>
                                 )
                               })
+                            )}
+
+                            {/* Says why the list is shorter than the file. Without this, a rate a
+                                colleague quoted yesterday simply is not there and nobody can tell
+                                whether it lapsed or was never applied. */}
+                            {ofq.oceanOptions.length > 0 && ofq.expiredCount > 0 && (
+                              <p className="flex items-center gap-1.5 pt-1 font-mono text-[10px] text-fog-400">
+                                <CalendarX2 size={11} className="shrink-0" />
+                                {ofq.expiredCount} expired rate{ofq.expiredCount === 1 ? '' : 's'} hidden
+                              </p>
                             )}
                           </div>
                         )}
@@ -711,6 +739,12 @@ function PendingSnapshot({ pending, current, saving, onPublish, onDiscard }) {
   const ofrCount = ofqs.reduce((n, o) => n + o.oceanOptions.length, 0)
   const sign = (n) => (n > 0 ? `+${n}` : String(n))
 
+  // Counts against the file as a whole, because that is what is being published — the snapshot
+  // stores every rate. Surfacing it HERE is the point: a file that arrives already part-expired
+  // means the rates were pulled too long ago, and that is worth knowing before it becomes the
+  // shared view rather than after someone wonders where the rows went.
+  const { expiredTotal } = applyValidity(ofqs)
+
   return (
     <div className="stagger rounded-2xl border border-signal-300 bg-signal-50/60 px-5 py-4 shadow-card">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -730,6 +764,12 @@ function PendingSnapshot({ pending, current, saving, onPublish, onDiscard }) {
                 ? ' — identical to the current snapshot. Nothing has been raised or applied since.'
                 : ` — ${sign(diff.ofqDelta)} OFQs, ${sign(diff.ofrDelta)} rates against what is on screen.`}
           </p>
+          {expiredTotal > 0 && (
+            <p className="mt-1 inline-flex items-center gap-1.5 font-mono text-[11px] text-fog-500">
+              <CalendarX2 size={11} className="shrink-0 text-fog-400" />
+              {expiredTotal} of {ofrCount} already past their Valid Until — stored, but hidden from the board.
+            </p>
+          )}
           {!diff.isFirst && diff.newOfqIds.length > 0 && (
             <p className="mt-1 font-mono text-[11px] text-fog-500">
               new: {diff.newOfqIds.slice(0, 6).join(', ')}
