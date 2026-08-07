@@ -31,8 +31,10 @@ function NoAccess({ email }) {
                  'This account has no profile in this workspace.'}
         {' '}Ask an administrator to set one up.
       </p>
+      {/* scope:'local' — this app only; see TopNav. The global default would sign the user out of
+          Schedules and the Stuffer Planner too, which share this Supabase project. */}
       <button
-        onClick={() => supabase.auth.signOut()}
+        onClick={() => supabase.auth.signOut({ scope: 'local' })}
         className="rounded-lg border border-fog-300 px-4 py-2 text-sm text-fog-700 hover:bg-fog-100"
       >
         Sign out

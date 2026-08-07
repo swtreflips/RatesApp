@@ -123,8 +123,14 @@ export default function TopNav({ onMenuToggle }) {
               </Link>
 
               <div className="my-1 border-t border-fog-100" />
+              {/* scope:'local' — signs out of THIS app only.
+                  supabase-js defaults to `{ scope: 'global' }`, which revokes every refresh token
+                  the user holds. Rates, Schedules and the Stuffer Planner all sit on the same
+                  Supabase project, so the default meant signing out here silently killed the other
+                  two in whatever tabs they were open in — and on other devices. Three separate
+                  origins already means three separate sessions; sign-out should match. */}
               <button
-                onClick={() => supabase.auth.signOut()}
+                onClick={() => supabase.auth.signOut({ scope: 'local' })}
                 className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-red-600 transition-colors hover:bg-red-50"
               >
                 <LogOut size={15} />
