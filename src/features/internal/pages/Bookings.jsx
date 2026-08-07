@@ -11,6 +11,9 @@ import { buildBookingsHeaderIndex, groupByOfqWithOptions } from '../bookings/inp
 import { laneKey, toNum, indexDrayageByLane, grandTotal } from '../bookings/matching'
 import { dateVal, startOfToday, applyValidity } from '../bookings/rateValidity'
 import {
+  findSailings, fetchPicks, savePick, clearPick, pickKey, hasSailed, shortDate, tidyPlace,
+} from '../bookings/schedulesService'
+import {
   fetchLatestSnapshot, fetchSnapshotHistory, saveSnapshot, diffAgainst,
   relativeDay, isStale,
 } from '../bookings/snapshotService'
@@ -87,9 +90,159 @@ function TimelineStop({ label, place, accent = 'bg-harbor-400', last = false, ch
   )
 }
 
+/* ── sailings (SAILINGS.md) ──────────────────────────────────────────────── */
+
+/** ETD → POD ETA → ETA, transit, type, vessel. Six facts; the rest lives in the Schedules app. */
+function SailingLine({ s }) {
+  return (
+    <>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex flex-wrap items-center gap-x-1.5 text-xs font-semibold text-harbor-900">
+          <span>{shortDate(s.etd)}</span>
+          <ArrowRight size={10} className="text-fog-400" />
+          <span>{shortDate(s.pod_eta)}</span>
+          <ArrowRight size={10} className="text-fog-400" />
+          <span className="text-sea-700">{shortDate(s.eta)}</span>
+        </span>
+        <span className="mt-0.5 truncate font-mono text-[10px] text-fog-500">
+          {s.mother_vessel || 'vessel n/a'}
+        </span>
+      </span>
+      <span className="shrink-0 text-right font-mono text-[10px] leading-tight text-fog-500">
+        <span className="block font-semibold text-harbor-900">
+          {s.transit_time_days == null ? '—' : `${s.transit_time_days}d`}
+        </span>
+        {s.transport_type || '—'}
+      </span>
+    </>
+  )
+}
+
+/**
+ * The sailings that could carry this booking, and the one chosen.
+ *
+ * Opens only when asked: the ocean card is a click target, and nothing is fetched until someone
+ * wants it. An OFQ list can be long, and a schedule query per visible rate would spend requests
+ * on cards nobody looked at.
+ */
+function SailingsSection({ ofq, ofr, pick, onPick, onClear }) {
+  const [open, setOpen] = useState(false)
+  const [sailings, setSailings] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const pol = ofr.pol || ofq.pol
+  const sailed = hasSailed(pick)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    findSailings({ carrier: ofr.carrier, pol, lastCy: ofr.lastCy, cargoReadyDate: ofq.cargoReadyDate })
+      .then(({ sailings, error }) => {
+        if (cancelled) return
+        if (error) setError(error.message)
+        else setSailings(sailings)
+        setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [open, ofr.carrier, pol, ofr.lastCy, ofq.cargoReadyDate])
+
+  // Re-opening after a pick would be busywork; close once the choice is made.
+  const choose = async (s) => {
+    setSaving(true)
+    await onPick(s)
+    setSaving(false)
+    setOpen(false)
+  }
+
+  return (
+    <div className="mt-2 border-t border-sea-200/70 pt-2">
+      {/* the chosen sailing, or the invitation to choose one */}
+      {pick ? (
+        <div className={sailed ? 'rounded-lg bg-signal-50 px-2 py-1.5 ring-1 ring-inset ring-signal-200' : ''}>
+          {sailed && (
+            <p className="mb-1 flex items-center gap-1 font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-signal-700">
+              <AlertTriangle size={10} className="shrink-0" />
+              sailed {shortDate(pick.etd)} — expired
+            </p>
+          )}
+          <div className="flex items-center gap-3">
+            <SailingLine s={pick} />
+          </div>
+          <p className="mt-1 truncate font-mono text-[9px] uppercase tracking-[0.14em] text-fog-400">
+            {tidyPlace(pick.port_of_discharge)} discharge
+          </p>
+        </div>
+      ) : null}
+
+      <div className="mt-1.5 flex items-center gap-2">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="inline-flex items-center gap-1 rounded font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-sea-700 transition-colors hover:text-sea-900"
+        >
+          <CalendarDays size={11} />
+          {pick ? (sailed ? 'pick another sailing' : 'change sailing') : 'find sailings'}
+          <ChevronRight size={11} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
+        </button>
+        {pick && (
+          <button
+            onClick={onClear}
+            className="font-mono text-[10px] uppercase tracking-[0.14em] text-fog-400 transition-colors hover:text-red-600"
+          >
+            clear
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-2 space-y-1">
+          {loading ? (
+            <div className="flex items-center gap-1.5 py-2 font-mono text-[10px] text-fog-400">
+              <Loader2 size={11} className="animate-spin" /> loading sailings…
+            </div>
+          ) : error ? (
+            <p className="py-1.5 text-[11px] leading-snug text-red-700">{error}</p>
+          ) : sailings.length === 0 ? (
+            /* Not an error. The feed genuinely does not cover every lane Rates quotes, and it
+               only holds the last 5 days of scrapes — so silence here is information, and it
+               must not be dressed up as a failure. SAILINGS.md §2c / §3b. */
+            <p className="py-1.5 text-[11px] leading-snug text-fog-500">
+              No sailings on file for {ofr.carrier || '—'} · {tidyPlace(pol)} → {tidyPlace(ofr.lastCy)}
+              {ofq.cargoReadyDate ? ` departing after ${ofq.cargoReadyDate}` : ''}. The schedule feed
+              may not cover this lane.
+            </p>
+          ) : (
+            sailings.map((s) => {
+              const active = pick?.schedule_hash === s.schedule_hash
+              return (
+                <button
+                  key={s.schedule_hash}
+                  onClick={() => choose(s)}
+                  disabled={saving}
+                  className={[
+                    'flex w-full items-center gap-3 rounded-lg border bg-white px-2.5 py-1.5 text-left transition-all disabled:opacity-50',
+                    active
+                      ? 'border-sea-400 ring-1 ring-sea-300'
+                      : 'border-fog-200 hover:border-sea-300 hover:shadow-card',
+                  ].join(' ')}
+                >
+                  <SailingLine s={s} />
+                </button>
+              )
+            })
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ── booking itinerary panel (right) ─────────────────────────────────────── */
 
-function ItineraryPanel({ ofq, ofr, ranked, selectedDrayageId, onSelectDrayage }) {
+function ItineraryPanel({ ofq, ofr, ranked, selectedDrayageId, onSelectDrayage, pick, onPick, onClearPick }) {
   const selectedDrayage = ranked.find((d) => d.id === selectedDrayageId) ?? null
   const oceanRate = toNum(ofr.rate)
   const total = grandTotal(ofr.rate, selectedDrayage)
@@ -135,6 +288,15 @@ function ItineraryPanel({ ofq, ofr, ranked, selectedDrayageId, onSelectDrayage }
             {ofr.validUntil && (
               <p className="mt-0.5 font-mono text-[10px] text-fog-500">valid until {ofr.validUntil}</p>
             )}
+            {/* Sailings hang off the ocean card, inside the same stop — the panel above and the
+                drayage below are untouched. SAILINGS.md §5. */}
+            <SailingsSection
+              ofq={ofq}
+              ofr={ofr}
+              pick={pick}
+              onPick={onPick}
+              onClear={onClearPick}
+            />
           </div>
         </TimelineStop>
 
@@ -250,6 +412,10 @@ export default function Bookings() {
   const [selectedOfrId, setSelectedOfrId] = useState(null)
   const [selectedDrayageId, setSelectedDrayageId] = useState(null)
 
+  // Chosen sailings, keyed `${ofqId}|${ofrId}`. Loaded once for the whole board — the panel shows
+  // one at a time, but a request per expansion would slow down opening quotes for no gain.
+  const [picks, setPicks] = useState(() => new Map())
+
   const [drayByLane, setDrayByLane] = useState(() => new Map())
   const [drayLoading, setDrayLoading] = useState(true)
   const [drayError, setDrayError] = useState(null)
@@ -278,6 +444,32 @@ export default function Bookings() {
   }, [])
 
   useEffect(() => { loadDrayage() }, [loadDrayage])
+
+  /* ── chosen sailings (SAILINGS.md) ─────────────────────────────────────── */
+
+  // A failed read leaves the map empty and says nothing: sailings are an add-on, and the cost
+  // work this page exists for must not be blocked by the schedules feed being unavailable.
+  useEffect(() => {
+    let cancelled = false
+    fetchPicks().then(({ picks }) => { if (!cancelled) setPicks(picks) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handlePick = useCallback(async (ofqId, ofrId, sailing) => {
+    const { pick, error } = await savePick({ ofqId, ofrId, sailing })
+    if (error) return showToast('error', `Couldn’t save the sailing: ${error.message}`)
+    setPicks((prev) => new Map(prev).set(pickKey(ofqId, ofrId), pick))
+  }, [])
+
+  const handleClearPick = useCallback(async (ofqId, ofrId) => {
+    const { error } = await clearPick({ ofqId, ofrId })
+    if (error) return showToast('error', `Couldn’t clear the sailing: ${error.message}`)
+    setPicks((prev) => {
+      const next = new Map(prev)
+      next.delete(pickKey(ofqId, ofrId))
+      return next
+    })
+  }, [])
 
   /* ── the shared snapshot ───────────────────────────────────────────────── */
 
@@ -668,6 +860,9 @@ export default function Bookings() {
                     ranked={ranked}
                     selectedDrayageId={selectedDrayageId}
                     onSelectDrayage={setSelectedDrayageId}
+                    pick={picks.get(pickKey(expandedOfq.ofqId, selectedOfr.ofrId)) ?? null}
+                    onPick={(s) => handlePick(expandedOfq.ofqId, selectedOfr.ofrId, s)}
+                    onClearPick={() => handleClearPick(expandedOfq.ofqId, selectedOfr.ofrId)}
                   />
                 )
               ) : (

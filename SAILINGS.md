@@ -1,8 +1,11 @@
 # SAILINGS.md — Sailing schedules on the Bookings ocean card
 
-**Status:** **Planned, not implemented** (August 2026). Design settled — the five open questions
-were resolved and are recorded in §8; nothing here has been built yet. One live dependency on the
-Schedules project is tracked in §9.
+**Status:** **Implemented** (August 2026) — `features/internal/bookings/schedulesService.js` +
+`SailingsSection` in `Bookings.jsx`, table `booking_schedule_picks` applied. Several sections were
+**corrected against the live database during implementation** and say so inline: §3 (there is no
+second project), §2b (no case variants exist here), §2c and §9 (the limit is scrape recency, not
+geography). The pre-implementation text came partly from `Schedules/schedules_rows.csv`, which is a
+stale export of the pre-migration project — treat that file as historical.
 **Purpose:** let an internal user click the ocean card in the Bookings itinerary panel and see the
 **real sailings** that could carry that booking — pulled live from the Schedules project's
 `schedules_latest` materialized view — then pick one, so the panel reports transit time and route
@@ -50,37 +53,48 @@ HPL, MSC, MSK, ONE, WHL) exists on both sides.
 
 Matson and Sinokor simply have no schedule coverage. That is **a gap to display, not an error**.
 
-### 2b. Case-insensitivity is mandatory, not defensive
+### 2b. Case-insensitive matching — insurance, not a current necessity
 
-The scraped schedule data genuinely contains both spellings of the same port:
+**Corrected against live data.** This section originally claimed the warehouse holds both
+`Houston, TX` and `Houston, Tx` and that a case-sensitive match would therefore lose half the
+sailings. That came from `Schedules/schedules_rows.csv`, which turns out to be a **stale export of
+the old project** taken before the Phase 3 migration. Checked against the live database, no port
+has more than one spelling — in the MV or in the full history:
 
+```sql
+select lower(last_cy), count(distinct last_cy) from schedules
+ group by 1 having count(distinct last_cy) > 1;   -- 0 rows
 ```
-Houston, TX      and   Houston, Tx
-Los Angeles, CA  and   Los Angeles, Ca
-Charleston, SC   and   Charleston, Sc
-Miami, FL        and   Miami, Fl
-Mobile, AL       and   Mobile, Al
-New Orleans, LA  and   New Orleans, La
-```
 
-A case-sensitive `.eq()` would return roughly half the sailings for those lanes — the worst class
-of bug, because a short list looks like an answer rather than a failure. Both port columns must be
-matched with `ilike`.
+`ilike` is kept anyway. The old export is proof the ingest **has** produced mixed casing before, it
+costs nothing here, and the failure it prevents is the quiet kind — a short list that reads as an
+answer. But it is belt-and-braces, not the load-bearing decision this section first described.
 
-Normalised, the two projects use an identical `City, Region` convention, so nothing else is needed:
-`Nhava Sheva, India` on one side is `nhava sheva, india` on the other.
+Both sides use an identical `City, Region` convention, so nothing further is needed.
 
-### 2c. Coverage is partial, and "no sailings" is a correct outcome
+### 2c. Coverage is limited by scrape recency, and "no sailings" is a correct outcome
 
-Measured against the current OFR seed and the current schedules data:
+**Corrected against live data.** The original version of this section claimed Vietnam had no
+coverage. It does — `Hai Phong → Los Angeles` (19 sailings) and `Hai Phong → Salt Lake City` (27)
+are both live. That claim also came from the stale CSV.
 
-| | Rates has | Schedules has | Overlap |
+The real constraint is **recency, not geography**. `schedules_latest` only considers scrapes from
+the last five days (§3b), and only one carrier has been scraped that recently:
+
+| Carrier | Rows in history | Last scraped | In the MV today |
 |---|---|---|---|
-| Port of Loading | 5 | 10 | **3** — no **Hai Phong**, no **Ho Chi Minh** (no Vietnam coverage at all) |
-| Last CY | 4 | 17 | **3** — no **Baltimore, MD** |
+| **ONE** | 366 | 2026-08-07 | **243 rows** |
+| WHL | 230 | 2026-07-29 | none — outside the window |
+| COS | 472 | 2026-07-28 | none |
+| HPL | 331 | 2026-07-28 | none |
 
-So an empty result will be common and legitimate. The empty state must name the lane and say the
-**schedule feed does not cover it** — never imply that nothing sails, and never look like an error.
+So today this feature finds sailings **for ONE and nothing else** — not because the other carriers
+are unsupported, but because their last scrape aged out. That is an ingest-cadence problem (§9),
+and it is invisible from the read side: a lane with no recent scrape and a lane that does not exist
+look identical.
+
+An empty result is therefore common and legitimate. The empty state names the lane and says the
+feed may not cover it — never implying nothing sails, never looking like an error.
 
 ### 2d. Why the match is POL + Last CY + carrier, and never POD
 
@@ -111,40 +125,52 @@ POD is therefore **display-only** — useful to read on the card, never part of 
 
 ---
 
-## 3. Reading across projects
+## 3. Reading the schedules — there is no cross-project problem
 
-Rates and Schedules are **separate Supabase projects** (`sfozxpibfpqsdlxoheyl` and
-`jnuigkggmynerrbxvkzy`). A RatesApp user has no session on Schedules and never will.
+**Corrected at implementation time.** This section originally planned a second Supabase client
+against a separate Schedules project, with its own env vars and a `persistSession: false` guard.
+That was wrong: `MIGRATION.md` Phase 3 already moved `schedules`, `ports`, `vessels`, `sea_routes`
+and the `schedules_latest` MV **into the Rates project**, and the Schedules React app was repointed
+at it in Phase 5. Both apps have been reading the same database for weeks.
 
-That turns out not to matter. Schedules' `SUPA.md` §5 already ends with:
+So there is **no second client, no new env var, and no cross-project concern**. The existing
+`src/lib/supabase.js` client already reaches the data.
+
+### 3a. Query `schedules_latest_secure`, never `schedules_latest`
+
+This is the one thing that would silently fail. Postgres **refuses RLS policies on a materialized
+view**, so grants are the only guard available, and grants cannot express "internal only". The
+migration therefore locks the MV outright:
 
 ```sql
-GRANT SELECT ON schedules_latest TO anon, authenticated;
+revoke all on public.schedules_latest from anon, authenticated;
 ```
 
-RLS is off on `schedules` (internal-only app, every user sees every row), and the Schedules React
-app itself reads the MV straight from the browser with its anon key. **A second read-only client in
-RatesApp adds no exposure that isn't already public** — it is the same key against the same grant.
+and exposes it through a plain, owner-rights view whose `WHERE` evaluates the **caller's** identity:
 
-So: no Edge Function, no service-role key, no proxy, and no SQL on the Schedules side. This also
-keeps faith with the project rule against inventing backend layers.
-
-### 3a. `persistSession: false` is load-bearing
-
-```js
-createClient(URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+```sql
+create view public.schedules_latest_secure as
+  select * from public.schedules_latest where my_org_type() = 'internal';
+grant select on public.schedules_latest_secure to authenticated;
 ```
 
-Two supabase-js clients on one origin share the same localStorage keys by default and will fight
-over the stored session. Without this flag, adding the Schedules client can **log users out of
-Rates** — a failure that would look completely unrelated to sailings. This client never
-authenticates; it only reads a view granted to `anon`.
+Querying the MV directly raises `permission denied` — a 500, not an empty list. Bookings is
+internal-only, so every caller here passes the check.
 
-### 3b. Environment
+A view rather than an RPC was a deliberate choice in that migration precisely so callers keep every
+PostgREST filter and sort — which is what makes §4a's `.eq / .ilike / .gt / .order` work unchanged.
 
-`VITE_SCHEDULES_SUPABASE_URL` and `VITE_SCHEDULES_SUPABASE_ANON_KEY`, in `.env.local` **and**
-Vercel. When unset, the feature hides itself and the ocean card behaves exactly as it does today —
-the same degradation pattern `ApplyRates.jsx` already uses for `VITE_GEO_API_URL`.
+### 3b. The MV carries a 5-day freshness window
+
+Unlike the source project, this one's MV only considers recent scrapes:
+
+```sql
+where query_date >= (now() - '5 days'::interval)
+```
+
+So a lane not scraped in the last five days has **no rows at all** — not stale rows, none. This
+matters for §9: some of the observed coverage gaps may be scrape recency rather than missing
+coverage, and the two are indistinguishable from the read side.
 
 ---
 
@@ -152,9 +178,10 @@ the same degradation pattern `ApplyRates.jsx` already uses for `VITE_GEO_API_URL
 
 | Path | Role |
 |---|---|
-| `src/lib/schedulesSupabase.js` | the second read-only client (~12 lines) |
-| `src/features/internal/bookings/schedulesService.js` | `findSailings()` — the query and its date handling |
+| `src/features/internal/bookings/schedulesService.js` | `findSailings()` + pick read/write |
 | `supabase/migrations/<ts>_booking_schedule_picks.sql` | where a chosen sailing is recorded |
+
+(No client file — see §3. The existing `src/lib/supabase.js` is used.)
 
 ### 4a. The query
 
@@ -163,8 +190,8 @@ findSailings({ carrier, pol, lastCy, notBefore })   // → { sailings, error }
 ```
 
 ```
-.from('schedules_latest')
-.select('carrier_code, port_of_loading, last_cy, port_of_discharge,
+.from('schedules_latest_secure')        // NOT schedules_latest — see §3a
+.select('schedule_hash, carrier_code, port_of_loading, last_cy, port_of_discharge,
          etd, pod_eta, eta, transit_time_days, transport_type, mother_vessel')
 .eq('carrier_code', carrier)
 .ilike('port_of_loading', pol)
@@ -296,8 +323,9 @@ rates surface — the fact is stated, the row is not silently dropped.
    `Houston, Tx` are included. This is the one that would silently half-work.
 3. **Coverage gaps read correctly** — a Hai Phong or Baltimore OFQ says the feed doesn't cover the
    lane; not an error, not a spinner.
-4. **The Rates session survives** — load Bookings, hard-reload, navigate away and back, stay logged
-   in. This is what §3a protects and the most likely way this breaks something unrelated.
+4. **The secure view is what's queried** — confirm rows come back for an internal user. If this
+   returns `permission denied` rather than an empty list, the code is hitting `schedules_latest`
+   instead of `schedules_latest_secure` (§3a).
 5. **A pick persists and is shared** — choose, reload, confirm; confirm a second internal user sees
    it; change it and confirm upsert replaces rather than duplicates.
 6. **Re-upload doesn't wipe picks** — publish a new OFR seed and confirm picks still attach.
@@ -308,7 +336,8 @@ rates surface — the fact is stated, the row is not silently dropped.
 8. **Both routing shapes match** — a lane where Last CY = POD (box stays at Los Angeles) and one
    where Last CY ≠ POD (rails on to Salt Lake City) each return their own sailings, and neither
    picks up the other's.
-9. **Missing env degrades quietly** — unset the URL, confirm the ocean card behaves as today.
+9. **A forwarder sees nothing** — the secure view filters on `my_org_type() = 'internal'`, and
+   Bookings is internal-only anyway, but confirm the pick table's RLS agrees.
 10. `npm run build` clean; ocean and drayage cost math unchanged.
 
 ---
@@ -339,24 +368,34 @@ Resolved August 2026, recorded here because each one closed a real fork in the d
 
 ---
 
-## 9. Known gaps — to be fixed
+## 9. Known gap — scraper cadence, to be fixed on the ingest side
 
-**The schedule feed does not cover every lane Rates quotes.** Measured against the current data
-(§2c):
+**Three of the four carriers have aged out of the view.** Established against the live database
+at implementation time (§2c):
 
-| Missing | Side | Effect |
-|---|---|---|
-| **Hai Phong, Vietnam** | Port of Loading | no sailings for any OFQ on that origin |
-| **Ho Chi Minh, Vietnam** | Port of Loading | as above — Vietnam has no coverage at all |
-| **Baltimore, MD** | Last CY | no sailings for that discharge/ramp |
+```
+ONE   last scraped 2026-08-07   → 243 rows in schedules_latest
+WHL   last scraped 2026-07-29   → none
+COS   last scraped 2026-07-28   → none
+HPL   last scraped 2026-07-28   → none
+```
 
-Cause not yet established — scraper backlog, carrier coverage, or a port-naming mismatch upstream
-have not been ruled apart. **This needs fixing on the Schedules side**, not worked around here: the
-feature is correct to show nothing when the feed knows nothing, and papering over it in RatesApp
-would hide the real problem.
+The MV's 5-day window (§3b) drops anything older, so WHL, COS and HPL vanish **entirely** rather
+than going stale. Their data is still in `schedules` — 1,033 rows between them — it simply cannot
+be seen through the door the app reads from.
 
-Until then the empty state must read as a **coverage gap, not an error** (§2c), so the difference
-between "we have no data for this lane" and "something broke" stays visible.
+**Consequence:** today the feature answers only for ONE. Every other carrier shows the empty state,
+which is honest but indistinguishable from "this lane does not exist".
+
+**This is an ingest problem, not a Bookings problem.** The scrapers need to run on a cadence
+shorter than the window they feed, or the window needs to widen. The Schedules `SUPA.md` already
+proposes the fix — move the refresh out of the individual scrapers into `pg_cron` on a fixed
+cadence — and notes that 12 scrapers each firing their own refresh is 12 redundant recomputes that
+contend with one another.
+
+Deliberately **not** worked around in RatesApp: widening or bypassing the window from the read side
+would paper over a stale feed and quote sailings that nobody has confirmed in over a week.
 
 Also parked, from §8.2: whether the panel should eventually show how old a lane's snapshot is, the
-way `SnapshotStamp` does for the OFR seed.
+way `SnapshotStamp` does for the OFR seed. §2c makes the case stronger than it was — with a window
+this tight, "no sailings" and "not scraped lately" are the same picture.
