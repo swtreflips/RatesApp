@@ -122,13 +122,19 @@ export default function SendModal({ mode, service = 'ocean', onClose, onResult }
       return
     }
     const sent = data.sent?.length ?? 0
-    const failed = data.failed?.length ?? 0
-    onResult?.(
-      failed > 0 ? 'warning' : 'success',
-      failed > 0
-        ? `Sent to ${sent} forwarder(s); ${failed} failed`
-        : `Sent to ${sent} forwarder(s)`,
-    )
+    const failures = data.failed ?? []
+    // The function catches per-company errors into `failed[]` rather than throwing, so a bare
+    // count told you something broke and nothing about what — which turned a one-glance problem
+    // into a diagnosis. Name the reason; if companies failed differently, say how many ways.
+    if (failures.length > 0) {
+      const reasons = [...new Set(failures.map((f) => f.error).filter(Boolean))]
+      const detail = reasons.length === 0
+        ? ''
+        : `: ${reasons[0]}${reasons.length > 1 ? ` (+${reasons.length - 1} other reason${reasons.length > 2 ? 's' : ''})` : ''}`
+      onResult?.('warning', `Sent to ${sent} forwarder(s); ${failures.length} failed${detail}`)
+    } else {
+      onResult?.('success', `Sent to ${sent} forwarder(s)`)
+    }
     onClose()
   }
 

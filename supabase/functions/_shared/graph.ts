@@ -86,7 +86,13 @@ export async function getAccessToken(
   return { accessToken: data.access_token as string, rotated }
 }
 
-/** POST /v1.0/me/sendMail with HTML body + .xlsx attachment. `to` may be one or many addresses. */
+/**
+ * POST /v1.0/me/sendMail with an HTML body + one attachment. `to` may be one or many addresses.
+ *
+ * `contentType` defaults to xlsx so ocean and send-template are unaffected; drayage sends CSV.
+ * It has to travel with the bytes — Outlook and Excel trust the declared MIME type over the file
+ * extension, so a .csv announced as a spreadsheet opens as a corrupt workbook.
+ */
 export async function sendMail(
   accessToken: string,
   to: string | string[],
@@ -94,6 +100,7 @@ export async function sendMail(
   html: string,
   attachmentBytes: Uint8Array,
   attachmentName: string,
+  contentType: string = XLSX_CONTENT_TYPE,
 ): Promise<void> {
   const recipients = (Array.isArray(to) ? to : [to])
     .filter(Boolean)
@@ -112,7 +119,7 @@ export async function sendMail(
           {
             '@odata.type': '#microsoft.graph.fileAttachment',
             name: attachmentName,
-            contentType: XLSX_CONTENT_TYPE,
+            contentType,
             contentBytes: toBase64(attachmentBytes),
           },
         ],

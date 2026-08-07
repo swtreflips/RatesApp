@@ -13,8 +13,9 @@
   Audit: notifications.service + ONE notification_recipients row PER ANALYST (analyst_id) — these
   rows ARE next time's prefill memory.
 
-  Each service sends its own template: ocean = PTP OFQ Rates (fillTemplate), drayage = the
-  drayage template (fillDrayageTemplate — routing prefilled, money columns blank).
+  Each service sends its own template: ocean = PTP OFQ Rates .xlsx (fillTemplate — XML surgery, to
+  keep its dropdowns), drayage = a plain .csv (buildDrayageCsv). Both prefill the routing and leave
+  the money columns blank; drayage needs no xlsx because its template has no dropdowns to preserve.
 
   Security (ALERTS.md §16): deploy WITH jwt verification. Caller must be an `internal` profile.
   Emails never reach the browser. Request shape: { kind, service?, forwarderIds?, analystIds?, period? }.
@@ -26,9 +27,8 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { fillTemplate } from '../_shared/fillTemplate.ts'
 import { TEMPLATE_BYTES } from '../_shared/templateBytes.ts'
-import { fillDrayageTemplate } from '../_shared/fillDrayageTemplate.ts'
-import { DRAYAGE_TEMPLATE_BYTES } from '../_shared/drayageTemplateBytes.ts'
-import { getAccessToken, invitationHtml, sendMail } from '../_shared/graph.ts'
+import { buildDrayageCsv } from '../_shared/buildDrayageCsv.ts'
+import { getAccessToken, invitationHtml, sendMail, XLSX_CONTENT_TYPE } from '../_shared/graph.ts'
 
 type Kind = 'request' | 'reminder' | 'preview'
 type Service = 'ocean' | 'drayage'
@@ -37,13 +37,16 @@ type Lane = Record<string, unknown> & { id: string; period?: number | null }
 
 /* Per-service pipeline config — mirrors the app's serviceConfig (DRAY.md §3).
    Ocean keeps the original table names; drayage points at the drayage_* mirrors.
-   `fill` builds the attachment from that service's template + column map. */
+   `fill` builds the attachment from that service's template + column map; `attachmentExt` and
+   `contentType` travel with it, because the two services no longer send the same file format. */
 const SERVICES: Record<Service, {
   lanesTable: string
   subsTable: string
   laneSelect: string
   hasPeriod: boolean
   attachmentPrefix: string
+  attachmentExt: string
+  contentType: string
   fill: (lanes: Lane[], forwarderName: string) => Uint8Array
 }> = {
   ocean: {
@@ -52,6 +55,8 @@ const SERVICES: Record<Service, {
     laneSelect: 'id, pol, pod, last_cy, fd, container_type, container_count, period',
     hasPeriod: true,
     attachmentPrefix: 'PTP OFQ Rates',
+    attachmentExt: 'xlsx',
+    contentType: XLSX_CONTENT_TYPE,
     fill: (lanes, forwarderName) => fillTemplate(
       TEMPLATE_BYTES,
       lanes.map((l) => ({
@@ -69,8 +74,9 @@ const SERVICES: Record<Service, {
     laneSelect: 'id, last_cy_cfs, final_destination, dest_zip, notes',
     hasPeriod: false,
     attachmentPrefix: 'PTP Drayage Rates',
-    fill: (lanes) => fillDrayageTemplate(
-      DRAYAGE_TEMPLATE_BYTES,
+    attachmentExt: 'csv',
+    contentType: 'text/csv',
+    fill: (lanes) => buildDrayageCsv(
       lanes.map((l) => ({
         last_cy_cfs: l.last_cy_cfs as string | null,
         final_destination: l.final_destination as string | null,
@@ -318,14 +324,15 @@ Deno.serve(async (req) => {
       let errorMsg: string | null = null
       let sentAt: string | null = null
       try {
-        const xlsx = cfg.fill(forwarderLanes, f.name)
+        const attachment = cfg.fill(forwarderLanes, f.name)
         await sendMail(
           accessToken,
           emails,
           subject,
           invitationHtml({ senderName, appUrl, isReminder }),
-          xlsx,
-          `${cfg.attachmentPrefix} - ${String(f.name).replace(/\//g, '-')} - ${today}.xlsx`,
+          attachment,
+          `${cfg.attachmentPrefix} - ${String(f.name).replace(/\//g, '-')} - ${today}.${cfg.attachmentExt}`,
+          cfg.contentType,
         )
         sentAt = new Date().toISOString()
         sent.push({ forwarderId: f.id, lanes: forwarderLanes.length, emails: emails.length })
