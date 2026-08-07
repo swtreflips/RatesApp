@@ -2,8 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
 import { Trash2, Plus, Send, Loader2 } from 'lucide-react'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { AutocompleteEditCell, DATA_GRID_SX, gridScrollHeight, Toast } from '../../rates/rateGrid'
-import { LAST_CY_OPTIONS } from '../../rates/locationOptions'
+import { DATA_GRID_SX, gridScrollHeight, Toast } from '../../rates/rateGrid'
 import { postDrayageRequestBatch } from '../services/drayageService'
 import { useAuth } from '../../../app/providers/AuthProvider'
 
@@ -44,8 +43,7 @@ export default function DrayageNewRequest() {
       cellClassName: 'font-mono text-fog-400',
       renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
     },
-    { field: 'origin', headerName: 'Last CY/CFS (origin)', flex: 1.2, minWidth: 150, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} /> },
+    { field: 'origin', headerName: 'Last CY/CFS (origin)', flex: 1.2, minWidth: 150, editable: true },
     { field: 'destination', headerName: 'Final Destination', flex: 1.2, minWidth: 150, editable: true },
     { field: 'zip', headerName: 'Zip Code', width: 96, editable: true, cellClassName: 'font-mono' },
     { field: 'notes', headerName: 'Notes', flex: 1.4, minWidth: 140, editable: true },

@@ -5,8 +5,7 @@ import Papa from 'papaparse'
 import { useAuth } from '../../../app/providers/AuthProvider'
 import { postRateRequestBatch } from '../services/rateRequestService'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { gridScrollHeight, AutocompleteEditCell, DATA_GRID_SX } from '../../rates/rateGrid'
-import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS, FINAL_DESTINATIONS } from '../../rates/locationOptions'
+import { gridScrollHeight, DATA_GRID_SX } from '../../rates/rateGrid'
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
@@ -82,33 +81,25 @@ export default function NewRateRequest() {
       headerName: 'Port of Loading',
       flex: 1,
       minWidth: 180,
-      editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} />,
-    },
+      editable: true },
     {
       field: 'pod',
       headerName: 'Port of Discharge',
       flex: 1,
       minWidth: 170,
-      editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_DISCHARGE} />,
-    },
+      editable: true },
     {
       field: 'lastCy',
       headerName: 'Last CY',
       flex: 0.8,
       minWidth: 140,
-      editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} />,
-    },
+      editable: true },
     {
       field: 'fd',
       headerName: 'Final Destination',
       flex: 1,
       minWidth: 180,
-      editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={FINAL_DESTINATIONS} />,
-    },
+      editable: true },
     {
       field: 'containerType',
       headerName: 'Container Type',

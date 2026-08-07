@@ -9,11 +9,10 @@
   `forwarderId` + `contract`/`contractName` (used only by the internal grid; ignored by the forwarder grid).
 */
 
-import React, { useState, useRef } from 'react'
+import React, { useState } from 'react'
 import { X } from 'lucide-react'
 import Papa from 'papaparse'
 import { useGridApiContext } from '@mui/x-data-grid'
-import { Autocomplete, TextField } from '@mui/material'
 
 /* ── file upload (CSV or XLSX) ─────────────────────────────────────────────
    Turn an uploaded .csv OR .xlsx/.xls file into Papa results, then hand them to the caller's
@@ -79,26 +78,16 @@ export const normalizeCarrier = (v) => String(v ?? '').trim().toUpperCase()
 export const splitCarriers = (text) =>
   [...new Set(String(text ?? '').split(',').map(normalizeCarrier).filter((c) => CARRIER_CODES.has(c)))]
 
-/* Inline ghost-completion edit cell for the multi-value Carrier column — same UX as the
-   Forwarder field. Suggestions appear after the FIRST character, completing the last
-   comma-separated token against the known SCAC codes; Tab / → accepts. Input is uppercased
-   (codes are uppercase) and the committed value is the validated code array (splitCarriers). */
-const CARRIER_MIN_CHARS = 1
-const CARRIER_LIST = [...CARRIER_CODES]
-
-export function CarrierGhostInput({ id, field, value }) {
+/* Edit cell for the multi-value Carrier column.
+   This one is NOT a plain text field, even though it looks like one: the Carrier column stores a
+   validated ARRAY of SCAC codes, not the typed string, so the editor has to keep committing
+   splitCarriers(). Deleting it in favour of the DataGrid default would silently start storing raw
+   text in a column the rest of the app reads as string[]. Input is uppercased because codes are.
+   No completion — you type the codes. */
+export function CarrierCodesInput({ id, field, value }) {
   const apiRef = useGridApiContext()
-  const inputRef = useRef(null)
   const [text, setText] = useState(() =>
     (Array.isArray(value) ? value.join(', ') : String(value ?? '')).toUpperCase())
-
-  // complete the current (last comma-separated) token
-  const lastComma = text.lastIndexOf(',')
-  const token = (lastComma === -1 ? text : text.slice(lastComma + 1)).trim()
-  const suggestion = token.length >= CARRIER_MIN_CHARS
-    ? (CARRIER_LIST.find((c) => c.startsWith(token)) ?? '')
-    : ''
-  const ghost = suggestion.length > token.length ? suggestion.slice(token.length) : ''
 
   const commit = (t) => {
     const up = t.toUpperCase()
@@ -106,140 +95,22 @@ export function CarrierGhostInput({ id, field, value }) {
     apiRef.current.setEditCellValue({ id, field, value: splitCarriers(up) })
   }
 
-  const onKeyDown = (e) => {
-    if (!ghost) return
-    const atEnd = inputRef.current && inputRef.current.selectionStart === text.length
-    if (e.key === 'Tab' || (e.key === 'ArrowRight' && atEnd)) {
-      e.preventDefault()
-      commit(text + ghost)
-    }
-  }
-
   return (
-    <div className="relative flex h-full w-full items-center px-2">
-      <div className="pointer-events-none absolute inset-0 flex items-center px-2 font-sans text-[0.8rem]">
-        <span className="invisible whitespace-pre">{text}</span>
-        <span className="whitespace-pre text-fog-400">{ghost}</span>
-      </div>
-      <input
-        ref={inputRef}
-        autoFocus
-        className="relative z-10 h-full w-full border-0 bg-transparent p-0 font-sans text-[0.8rem] text-harbor-900 outline-none"
-        value={text}
-        onChange={(e) => commit(e.target.value)}
-        onKeyDown={onKeyDown}
-      />
-    </div>
-  )
-}
-
-/* ── forwarder ghost-completion edit cell ──────────────────────────────────
-   Shared by both internal "Upload Rates" pages (ocean + drayage): a plain text input (accepts
-   ANY value) that, once ≥ minChars are typed, shows the best prefix match over `forwarders` as
-   faint inline "ghost" text; Tab / → accepts it. The cell stores the typed NAME — resolved to a
-   forwarder id at submit time by the page (unknown names are rejected there, not here). No
-   dropdown, no arrow — this is what lets a CSV's own Forwarder/Carrier column pre-fill the row
-   instead of forcing a per-row manual re-pick. */
-const FORWARDER_MIN_CHARS = 3
-
-export function ForwarderGhostInput({ id, field, value, forwarders }) {
-  const apiRef = useGridApiContext()
-  const inputRef = useRef(null)
-  const text = value ?? ''
-
-  const suggestion = text.trim().length >= FORWARDER_MIN_CHARS
-    ? (forwarders.find((f) => f.name.toLowerCase().startsWith(text.toLowerCase()))?.name ?? '')
-    : ''
-  const ghost = suggestion.length > text.length ? suggestion.slice(text.length) : ''
-
-  const setValue = (v) => apiRef.current.setEditCellValue({ id, field, value: v })
-
-  const onKeyDown = (e) => {
-    if (!ghost) return
-    const atEnd = inputRef.current && inputRef.current.selectionStart === text.length
-    if (e.key === 'Tab' || (e.key === 'ArrowRight' && atEnd)) {
-      e.preventDefault()
-      setValue(suggestion)
-    }
-  }
-
-  return (
-    <div className="relative flex h-full w-full items-center px-2">
-      {/* ghost overlay: invisible typed text reserves width, then the faint completion */}
-      <div className="pointer-events-none absolute inset-0 flex items-center px-2 font-sans text-[0.8rem]">
-        <span className="invisible whitespace-pre">{text}</span>
-        <span className="whitespace-pre text-fog-400">{ghost}</span>
-      </div>
-      <input
-        ref={inputRef}
-        autoFocus
-        className="relative z-10 h-full w-full border-0 bg-transparent p-0 font-sans text-[0.8rem] text-harbor-900 outline-none"
-        value={text}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={onKeyDown}
-      />
-    </div>
-  )
-}
-
-/* ── predictive (Google-style) edit cell ───────────────────────────────────
-   A DataGrid edit cell that shows a dropdown of matching suggestions once `minChars` are typed
-   (default 3), prefix matches first then substring, capped at 8. `freeSolo` keeps typed values
-   that aren't in the list (locations evolve). Used for POL / POD / Last CY; parameterized by
-   `options` (see locationOptions.js). Commits on every keystroke (so free text persists) and
-   closes the editor on select. */
-export function AutocompleteEditCell({ id, field, value, options, minChars = 3 }) {
-  const apiRef = useGridApiContext()
-  const [input, setInput] = useState(value ?? '')
-
-  const q = input.trim().toLowerCase()
-  let matches = []
-  if (q.length >= minChars) {
-    const starts = []
-    const has = []
-    for (const o of options) {
-      const lo = o.toLowerCase()
-      if (lo.startsWith(q)) starts.push(o)
-      else if (lo.includes(q)) has.push(o)
-    }
-    matches = [...starts, ...has].slice(0, 8)
-  }
-
-  const commit = (v) => apiRef.current.setEditCellValue({ id, field, value: v ?? '' })
-
-  return (
-    <Autocomplete
-      open={matches.length > 0}
-      freeSolo
-      autoHighlight
-      fullWidth
-      disableClearable
-      options={matches}
-      filterOptions={(o) => o}   // already filtered above (keeps prefix-first ordering)
-      inputValue={input}
-      onInputChange={(_, v) => { setInput(v); commit(v) }}
-      onChange={(_, v) => {
-        const val = v ?? ''
-        setInput(val)
-        commit(val)
-        apiRef.current.stopCellEditMode({ id, field })
-      }}
-      slotProps={{ paper: { sx: { fontSize: '0.8rem', fontFamily: '"Hanken Grotesk", ui-sans-serif, sans-serif' } } }}
-      sx={{
-        width: '100%',
-        '& .MuiInput-root': {
-          height: '100%',
-          fontSize: '0.8rem',
-          fontFamily: 'var(--font-sans)',
-          color: 'rgb(var(--c-harbor-900))',
-        },
-        '& .MuiInput-root:before, & .MuiInput-root:after': { borderBottom: 'none !important' },
-        '& .MuiInput-input': { padding: '0 8px' },
-      }}
-      renderInput={(params) => <TextField {...params} autoFocus variant="standard" />}
+    <input
+      autoFocus
+      className="h-full w-full border-0 bg-transparent px-2 font-sans text-[0.8rem] text-harbor-900 outline-none"
+      value={text}
+      onChange={(e) => commit(e.target.value)}
     />
   )
 }
+
+/* The Forwarder column used to have a ghost-completion editor here, and POL / POD / Last CY /
+   Final Destination had a suggestion dropdown (AutocompleteEditCell, fed by locationOptions.js).
+   Both are gone: every one of those columns is now the DataGrid's own text editor. They were
+   suggestion-only — freeSolo, free text always accepted, resolved/validated at submit — so
+   nothing that was enforced moved. Only the prediction went. */
+
 
 /* ── row factories ────────────────────────────────────────────────────────
    Temp ids are string-prefixed so they never collide with a lane's uuid id. */

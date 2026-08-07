@@ -1,6 +1,4 @@
 import React from 'react'
-import { AutocompleteEditCell, ForwarderGhostInput } from '../rates/rateGrid'
-import { LAST_CY_OPTIONS } from '../rates/locationOptions'
 
 /*
   Drayage grid building blocks — row factories, column defs, and the CSV header map for the
@@ -163,8 +161,7 @@ export function drayColumns({ renderActions, extraLeading = [] }) {
       renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
     },
     ...extraLeading,
-    { field: 'origin', headerName: 'Last CY/CFS', flex: 1.1, minWidth: 120, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} /> },
+    { field: 'origin', headerName: 'Last CY/CFS', flex: 1.1, minWidth: 120, editable: true },
     { field: 'destination', headerName: 'Final Destination', flex: 1.1, minWidth: 120, editable: true },
     { field: 'zip', headerName: 'Zip', width: 72, editable: true, cellClassName: 'font-mono' },
     numCol('rate', 'Rate', 84),

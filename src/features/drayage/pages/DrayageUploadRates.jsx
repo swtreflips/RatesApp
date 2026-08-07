@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { DataGrid } from '@mui/x-data-grid'
 import { Trash2, Copy, Plus, Upload, Send, Loader2 } from 'lucide-react'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
-import { parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast, ForwarderGhostInput } from '../../rates/rateGrid'
+import { parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast } from '../../rates/rateGrid'
 import {
   makeDrayEmptyRow, makeDrayCopyRow, isDrayBlankRow,
   buildDrayHeaderIndex, makeDrayRowFromCsv, drayColumns,
@@ -15,8 +15,8 @@ const norm = (s) => String(s ?? '').trim().toLowerCase()
 /*
   Internal "Upload Drayage Rates" — record rates ON BEHALF of a forwarder (the returned
   template lands with us, we key it in). Same columns as the forwarder grid plus a Forwarder
-  column: free-text with ghost-completion (mirrors ocean's Upload Rates), so a CSV/ERP export
-  that already names the forwarder per row pre-fills it — no forced per-row manual re-pick.
+  column: plain free text (mirrors ocean's Upload Rates), so a CSV/ERP export that already names
+  the forwarder per row pre-fills it — no forced per-row manual re-pick.
   The typed name is resolved to a forwarder id at submit; unknown names are rejected there.
   Supersession applies exactly as if the forwarder submitted it themselves (§6b): the company's
   live rate on that lane is replaced by the uploaded one.
@@ -67,9 +67,7 @@ export default function DrayageUploadRates() {
     headerName: 'Forwarder',
     width: 180,
     editable: true,
-    // free-text with inline ghost completion; resolved to an id at submit
     renderCell: (params) => params.value ?? '',
-    renderEditCell: (params) => <ForwarderGhostInput {...params} forwarders={forwarders} />,
   }
 
   const columns = drayColumns({

@@ -5,18 +5,16 @@ import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchOpenRequests } from '../services/rateRequestService'
 import { fetchForwarders, submitRatesOnBehalf } from '../services/recordRatesService'
 import {
-  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, ForwarderGhostInput, AutocompleteEditCell,
-  buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
-  CONTAINER_TYPE_OPTIONS,
+  makeEmptyRow, makeRowFromLane, makeCopyRow, buildHeaderIndex, makeRowFromCsv, isBlankRow,
+  parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast, CONTAINER_TYPE_OPTIONS, CarrierCodesInput,
 } from '../../rates/rateGrid'
-import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS, FINAL_DESTINATIONS } from '../../rates/locationOptions'
 
 /*
   Internal "Upload Rates" — record rates on behalf of a forwarder.
 
   Same grid as the forwarder Submit Rates page, with ONE extra required column: Forwarder (who
-  the rate belongs to) — a type-ahead autocomplete over the forwarders list, bound to the
-  forwarder id (restricted to the list). The open request lanes preload as guide rows; the
+  the rate belongs to) — plain free text, resolved to a forwarder id at submit, where an unknown
+  name is rejected. The open request lanes preload as guide rows; the
   internal user picks a forwarder + fills the rate, or uploads the filled template / a CSV.
 
   One lane carries rates from SEVERAL forwarders: add each forwarder's quote with copy-row (or
@@ -94,9 +92,7 @@ export default function UploadRates() {
       headerName: 'Forwarder',
       width: 180,
       editable: true,
-      // free-text with inline ghost completion; resolved to an id at submit
       renderCell: (params) => params.value ?? '',
-      renderEditCell: (params) => <ForwarderGhostInput {...params} forwarders={forwarders} />,
     },
     {
       field: 'contract',
@@ -113,20 +109,16 @@ export default function UploadRates() {
       editable: true,
       // free text; pairs with Contract — blank for non-contract rates
     },
-    { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} /> },
+    { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true },
     // template guides (request-side; preloaded from the lane)
-    { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={FINAL_DESTINATIONS} /> },
+    { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86, editable: true },
     // Editable: part of the ocean rate's identity (BIDDING.md §6). Blank = the 40' HC standard.
     { field: 'containerType', headerName: 'Cont. Type', width: 96, cellClassName: 'font-mono',
       editable: true, type: 'singleSelect', valueOptions: CONTAINER_TYPE_OPTIONS },
     { field: 'containerCount', headerName: '# Cont.', width: 70, type: 'number', cellClassName: 'font-mono' },
     // rate fields
-    { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_DISCHARGE} /> },
-    { field: 'lastCy', headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} /> },
+    { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true },
+    { field: 'lastCy', headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true },
     {
       field: 'rate',
       headerName: 'Rate/Unit',
@@ -149,9 +141,9 @@ export default function UploadRates() {
       flex: 1,
       minWidth: 96,
       editable: true,
-      // multi-value codes; inline ghost completion after the 1st char
+      // stores a validated string[] of SCAC codes, so it needs its own editor — see rateGrid
       renderCell: (params) => (params.value ?? []).join(', '),
-      renderEditCell: (params) => <CarrierGhostInput {...params} />,
+      renderEditCell: (params) => <CarrierCodesInput {...params} />,
     },
     {
       field: 'validUntil',

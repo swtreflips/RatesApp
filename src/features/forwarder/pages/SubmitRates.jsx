@@ -4,11 +4,9 @@ import { Trash2, Copy, Plus, Upload, Send, Loader2 } from 'lucide-react'
 import { PageHeader } from '../../../components/ui/DashboardPrimitives'
 import { fetchActiveLanes, submitRates, skipLane, unskipLane } from '../services/submissionService'
 import {
-  makeEmptyRow, makeRowFromLane, makeCopyRow, CarrierGhostInput, AutocompleteEditCell,
-  buildHeaderIndex, makeRowFromCsv, isBlankRow, parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast,
-  CONTAINER_TYPE_OPTIONS,
+  makeEmptyRow, makeRowFromLane, makeCopyRow, buildHeaderIndex, makeRowFromCsv, isBlankRow,
+  parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast, CONTAINER_TYPE_OPTIONS, CarrierCodesInput,
 } from '../../rates/rateGrid'
-import { PORTS_OF_LOADING, PORTS_OF_DISCHARGE, LAST_CY_OPTIONS } from '../../rates/locationOptions'
 
 /*
   Forwarder rate-entry grid — unified (request-driven + free entry). Shared grid primitives
@@ -65,8 +63,7 @@ export default function SubmitRates() {
       cellClassName: 'font-mono text-fog-400',
       renderCell: (params) => params.api.getRowIndexRelativeToVisibleRows(params.row.id) + 1,
     },
-    { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_LOADING} /> },
+    { field: 'pol',    headerName: 'Port of Loading',   flex: 1.1, minWidth: 86, editable: true },
     // template guides (request-side only; blank for free rows)
     { field: 'fd',     headerName: 'Final Destination', flex: 1.1, minWidth: 86 },
     // Editable: container type is part of the ocean rate's identity (BIDDING.md §6), so a
@@ -75,10 +72,8 @@ export default function SubmitRates() {
       editable: true, type: 'singleSelect', valueOptions: CONTAINER_TYPE_OPTIONS },
     { field: 'containerCount', headerName: '# Cont.', width: 70, type: 'number', cellClassName: 'font-mono' },
     // rate fields
-    { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={PORTS_OF_DISCHARGE} /> },
-    { field: 'lastCy', headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true,
-      renderEditCell: (p) => <AutocompleteEditCell {...p} options={LAST_CY_OPTIONS} /> },
+    { field: 'pod',    headerName: 'Port of Discharge', flex: 1.1, minWidth: 86, editable: true },
+    { field: 'lastCy', headerName: 'Last CY',           flex: 0.9, minWidth: 80, editable: true },
     {
       field: 'rate',
       headerName: 'Rate/Unit',
@@ -101,9 +96,9 @@ export default function SubmitRates() {
       flex: 1,
       minWidth: 96,
       editable: true,
-      // multi-value codes; inline ghost completion after the 1st char
+      // stores a validated string[] of SCAC codes, so it needs its own editor — see rateGrid
       renderCell: (params) => (params.value ?? []).join(', '),
-      renderEditCell: (params) => <CarrierGhostInput {...params} />,
+      renderEditCell: (params) => <CarrierCodesInput {...params} />,
     },
     {
       field: 'validUntil',
