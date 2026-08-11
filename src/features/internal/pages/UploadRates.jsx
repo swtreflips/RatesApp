@@ -28,6 +28,14 @@ import {
 
 const norm = (s) => String(s ?? '').trim().toLowerCase()
 
+/** Names the Valid Until cells that could not be read, so a blank date is never silent. */
+function unreadableDateNote(parsed) {
+  const bad = parsed.map((r) => r.validUnparsed).filter(Boolean)
+  if (bad.length === 0) return ''
+  const sample = [...new Set(bad)].slice(0, 3).join(', ')
+  return ` ${bad.length} Valid Until cell(s) could not be read (${sample}) and were left blank.`
+}
+
 export default function UploadRates() {
   const [rows, setRows] = useState([])
   const [forwarders, setForwarders] = useState([])
@@ -234,7 +242,9 @@ export default function UploadRates() {
         }
         setRows((prev) => [...prev.filter((r) => !isBlankRow(r)), ...parsed])
         const matched = parsed.filter((r) => r.laneId).length
-        showToast('success', `Loaded ${parsed.length} rate(s) — ${matched} matched to open lanes`)
+        const note = unreadableDateNote(parsed)
+        showToast(note ? 'warning' : 'success',
+          `Loaded ${parsed.length} rate(s) — ${matched} matched to open lanes.${note}`)
       },
       error() {
         showToast('error', 'Failed to read file')

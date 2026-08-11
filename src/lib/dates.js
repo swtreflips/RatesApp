@@ -47,6 +47,63 @@ export function parseDbDate(v) {
   return isNaN(d.getTime()) ? null : d
 }
 
+/**
+ * Parse a date typed or pasted by a human — a CSV cell, a spreadsheet column.
+ *
+ * `new Date(string)` is the wrong tool here and was the reason Valid Until arrived blank. It is
+ * locale-guessy and fails in two different ways on the same column:
+ *
+ *   '15/08/2026'  Invalid Date  → stored NULL, the cell just goes blank
+ *   '08/09/2026'  Aug 9         → SILENTLY wrong when the author meant 8 September
+ *
+ * The forwarders filling these sheets are in India, Vietnam, Thailand and Colombia — all
+ * day-first locales — so both cases are routine rather than exotic.
+ *
+ * The rules here are explicit and ordered:
+ *   1. ISO `YYYY-MM-DD` — unambiguous, built from parts so it stays local (never UTC).
+ *   2. Slash/dash/dot dates — month-first, matching the template's own `m/d/yy` format and every
+ *      date this app emits.
+ *   3. If the FIRST number is > 12 it cannot be a month, so read it day-first. That is the one
+ *      unambiguous rescue available, and it turns a silent blank into the right date.
+ *
+ * Genuinely ambiguous values (`08/09/2026`) resolve month-first by convention. Anything else —
+ * 'n/a', 'TBD', a note someone typed in the date column — returns null, which callers should
+ * REPORT rather than swallow.
+ *
+ * @returns {Date|null} local-midnight Date, or null if it is not a date at all.
+ */
+export function parseInputDate(raw) {
+  if (raw === null || raw === undefined) return null
+  if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw
+  const s = String(raw).trim()
+  if (!s) return null
+
+  const mk = (y, m, d) => {
+    if (m < 1 || m > 12 || d < 1 || d > 31) return null
+    const dt = new Date(y, m - 1, d)
+    // Rejects impossible days that would otherwise roll over — 31 Feb becoming 3 March.
+    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d ? dt : null
+  }
+
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (m) return mk(+m[1], +m[2], +m[3])
+
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/)
+  if (m) {
+    const a = +m[1], b = +m[2]
+    const year = m[3].length === 2 ? 2000 + +m[3] : +m[3]
+    if (a > 12 && b <= 12) return mk(year, b, a)   // first number cannot be a month → day-first
+    return mk(year, a, b)                          // month-first, the template's own format
+  }
+
+  // Named months ('8-Aug-2026', 'Aug 8, 2026') are unambiguous, so Date can have those.
+  if (/[A-Za-z]{3}/.test(s)) {
+    const d = new Date(s)
+    return isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  }
+  return null
+}
+
 /** DB value → local date string for display. Handles DATE and TIMESTAMP correctly. */
 export function fmtDate(v, opts) {
   const d = parseDbDate(v)

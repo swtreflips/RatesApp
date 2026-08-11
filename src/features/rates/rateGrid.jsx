@@ -13,6 +13,7 @@ import React, { useState } from 'react'
 import { X } from 'lucide-react'
 import Papa from 'papaparse'
 import { useGridApiContext } from '@mui/x-data-grid'
+import { parseInputDate } from '../../lib/dates'
 
 /* ── file upload (CSV or XLSX) ─────────────────────────────────────────────
    Turn an uploaded .csv OR .xlsx/.xls file into Papa results, then hand them to the caller's
@@ -209,8 +210,13 @@ export const buildHeaderIndex = (headerCells) => {
 const cellAt = (cells, idx) => (idx == null ? '' : String(cells[idx] ?? '').trim())
 
 export const makeRowFromCsv = (cells, headerIndex) => {
+  // parseInputDate, not new Date(): the latter returns Invalid Date for day-first cells
+  // ('15/08/2026') which then stored as a blank Valid Until, and silently mis-read '08/09/2026'
+  // as 9 August. `validUnparsed` lets the page report what it could not read instead of the row
+  // quietly arriving with an empty date. See lib/dates.js.
   const validRaw = cellAt(cells, headerIndex.validUntil)
-  const valid = validRaw ? new Date(validRaw) : null
+  const valid = parseInputDate(validRaw)
+  const validUnparsed = validRaw && !valid ? validRaw : null
 
   // Carriers + trailing comments: scan from the Carrier column to the end of the row.
   const carriers = new Set()
@@ -231,6 +237,7 @@ export const makeRowFromCsv = (cells, headerIndex) => {
     id: `new-${nextTempId++}`,
     laneId: null,
     period: null,
+    validUnparsed,   // non-null when the Valid Until cell was present but unreadable
     forwarderName: cellAt(cells, headerIndex.forwarder), // raw; resolved → id at submit
     contract: cellAt(cells, headerIndex.contract),       // internal only; blank for most rates
     contractName: cellAt(cells, headerIndex.contractName), // internal only; pairs with contract

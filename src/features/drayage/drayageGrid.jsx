@@ -1,4 +1,5 @@
 import React from 'react'
+import { parseInputDate } from '../../lib/dates'
 
 /*
   Drayage grid building blocks — row factories, column defs, and the CSV header map for the
@@ -96,7 +97,7 @@ export const makeDrayRowFromCsv = (cells, headerIndex) => {
   // Date Received, if the file has it — blank/unparseable falls through to null, same as a
   // blank manual-entry cell, so the DB's default-to-today applies either way (drayageService).
   const receivedRaw = val('providedAt')
-  const received = receivedRaw ? new Date(receivedRaw) : null
+  const received = parseInputDate(receivedRaw)   // see lib/dates.js — new Date() blanked day-first cells
   return {
     ...makeDrayEmptyRow(),
     forwarderName: val('forwarderName'),
@@ -118,7 +119,7 @@ export const makeDrayRowFromCsv = (cells, headerIndex) => {
     portCongestionFee: val('portCongestionFee'),
     demurrageFee: val('demurrageFee'),
     storagePerDay: val('storagePerDay'),
-    providedAt: received && !isNaN(received.getTime()) ? received : null,
+    providedAt: received,
     notes: val('notes'),
   }
 }

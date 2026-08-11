@@ -20,6 +20,14 @@ import {
   A rate = POL · POD · Last CY · Rate/Unit · Free Days · Carrier · Valid Until · Remarks.
 */
 
+/** Names the Valid Until cells that could not be read, so a blank date is never silent. */
+function unreadableDateNote(parsed) {
+  const bad = parsed.map((r) => r.validUnparsed).filter(Boolean)
+  if (bad.length === 0) return ''
+  const sample = [...new Set(bad)].slice(0, 3).join(', ')
+  return ` ${bad.length} Valid Until cell(s) could not be read (${sample}) and were left blank.`
+}
+
 export default function SubmitRates() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -212,7 +220,8 @@ export default function SubmitRates() {
         }
         // drop the blank placeholder row(s), then append the parsed rates
         setRows((prev) => [...prev.filter((r) => !isBlankRow(r)), ...parsed])
-        showToast('success', `Loaded ${parsed.length} rate(s)`)
+        const note = unreadableDateNote(parsed)
+        showToast(note ? 'warning' : 'success', `Loaded ${parsed.length} rate(s).${note}`)
       },
       error() {
         showToast('error', 'Failed to read file')
