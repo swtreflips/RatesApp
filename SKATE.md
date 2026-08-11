@@ -1,6 +1,12 @@
 # SKATE.md — three layouts for the Bookings OFQ table
 
-**Status:** Proposal. Nothing implemented. Pick one and it gets built.
+**Status:** **1 and 2 are both built, behind a toggle** in the table toolbar — *By shipment* and
+*All rates*. They share one header and one row component (`OfrHeader` / `OfrRow` in
+`Bookings.jsx`), so the columns cannot drift between them. Option 3 is not built.
+
+Keeping both was not the original plan — §6 anticipated it, and it turned out to be the honest
+way to choose: the two answer different questions, and reading them side by side settles it faster
+than describing them does. Dropping the loser later is deleting one branch and one constant.
 **Scope:** The **initial table only** — the grid where every OFQ is listed. The right-hand
 itinerary panel (sailings, drayage options, landed total) is explicitly out of scope and does not
 change in any of these.
