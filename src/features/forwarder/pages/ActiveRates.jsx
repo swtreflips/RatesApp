@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import { Loader2, FileText, RefreshCw } from 'lucide-react'
+import { Loader2, FileText, RefreshCw, PencilLine } from 'lucide-react'
 import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
 import { fetchActiveRates } from '../services/submissionService'
+import EditRateDialog from '../../rates/EditRateDialog'
+import { Toast } from '../../rates/rateGrid'
 
 /*
   Provider View 2 — "Active Rates" (STEP 0 follow-on / PROVIDER_VIEW_MODEL §4).
@@ -24,6 +26,9 @@ export default function ActiveRates() {
   const [rates, setRates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  // Correcting a mistyped rate. RLS limits this to our own rates — nothing is checked here.
+  const [editing, setEditing] = useState(null)
+  const [toast, setToast] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -82,6 +87,7 @@ export default function ActiveRates() {
                 <th className="px-3 py-2.5 text-right font-semibold"># of Free Days</th>
                 <th className="px-3 py-2.5 font-semibold">Valid Until</th>
                 <th className="px-3 py-2.5 font-semibold">Notes</th>
+                <th className="px-3 py-2.5 font-semibold" />
               </tr>
             </thead>
             <tbody>
@@ -96,11 +102,37 @@ export default function ActiveRates() {
                   <td className="px-3 py-2.5 text-right font-mono text-harbor-700">{r.free_days ?? '—'}</td>
                   <td className="px-3 py-2.5 font-mono text-harbor-700">{fmtDate(r.valid_until)}</td>
                   <td className="px-3 py-2.5 text-fog-500">{r.notes ?? '—'}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    <button
+                      onClick={() => setEditing(r)}
+                      title="Correct this rate"
+                      className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
+                    >
+                      <PencilLine size={14} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
         </ScrollTable>
       )}
+
+      {editing && (
+        <EditRateDialog
+          table="rates"
+          rate={editing}
+          label={`${editing.pol ?? '—'} → ${editing.fd ?? editing.pod ?? '—'}`}
+          onClose={() => setEditing(null)}
+          onSaved={(changes, warning) => {
+            setToast({
+              severity: warning ? 'warning' : 'success',
+              message: warning ?? `Saved ${changes.length} change${changes.length === 1 ? '' : 's'}.`,
+            })
+            load()
+          }}
+        />
+      )}
+      <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   )
 }

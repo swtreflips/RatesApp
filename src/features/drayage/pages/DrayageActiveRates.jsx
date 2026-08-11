@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { Loader2, FileText, RefreshCw, BadgeCheck, PencilLine, X } from 'lucide-react'
+import { Loader2, FileText, RefreshCw, BadgeCheck, PencilLine, Wrench, X } from 'lucide-react'
 import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
 import { Toast } from '../../rates/rateGrid'
 import {
   fetchMyDrayageRates, confirmDrayageRate, updateDrayageRate, stalenessOf, isInQuestion,
 } from '../services/drayageService'
 import { StalenessBadge, money, pct, fmtDate } from '../drayageGrid'
+import EditRateDialog from '../../rates/EditRateDialog'
 
 /*
   Forwarder "Active Drayage Rates" — the company's CURRENT rates (§6b: open-ended, no
@@ -27,7 +28,13 @@ export default function DrayageActiveRates() {
   const [error, setError] = useState(null)
   const [confirming, setConfirming] = useState(null)
   const [askConfirm, setAskConfirm] = useState(null) // rate awaiting "is it still $X?"
-  const [editing, setEditing] = useState(null)       // rate open in the Update modal
+  const [editing, setEditing] = useState(null)       // rate open in the Update modal (supersede)
+  // Two different operations, deliberately kept apart:
+  //   Update    my price CHANGED  -> supersede: new row, old kept as history (DRAY.md 6b)
+  //   Correct   we TYPED IT WRONG -> edit in place, audited; the old value was never true
+  // Collapsing them would either fabricate price-change history for typos, or destroy the
+  // record of a real price change.
+  const [correcting, setCorrecting] = useState(null)
   const [toast, setToast] = useState(null)
 
   const showToast = (severity, message) => {
@@ -161,6 +168,14 @@ export default function DrayageActiveRates() {
                         <PencilLine size={11} />
                         Update
                       </button>
+                      <button
+                        onClick={() => setCorrecting(r)}
+                        title="Fix a mistyped value — corrects this rate in place, no new rate"
+                        className="inline-flex items-center gap-1 rounded-md border border-fog-200 px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-fog-500 transition-colors hover:border-harbor-300 hover:text-harbor-700"
+                      >
+                        <Wrench size={11} />
+                        Correct
+                      </button>
                     </div>
                   )}
                 </td>
@@ -168,6 +183,20 @@ export default function DrayageActiveRates() {
             ))}
           </tbody>
         </ScrollTable>
+      )}
+
+      {correcting && (
+        <EditRateDialog
+          table="drayage_rates"
+          rate={correcting}
+          label={correcting.drayage_lane ?? 'Drayage rate'}
+          onClose={() => setCorrecting(null)}
+          onSaved={(changes, warning) => {
+            showToast(warning ? 'warning' : 'success',
+              warning ?? `Corrected ${changes.length} field${changes.length === 1 ? '' : 's'}.`)
+            load()
+          }}
+        />
       )}
 
       {askConfirm && (

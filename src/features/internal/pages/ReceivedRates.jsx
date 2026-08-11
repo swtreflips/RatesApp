@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Loader2, Inbox, RefreshCw, FilterX } from 'lucide-react'
+import { Loader2, Inbox, RefreshCw, FilterX, PencilLine } from 'lucide-react'
 import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
 import ColumnFilter from '../../../components/ui/ColumnFilter'
 import { fetchReceivedRates } from '../services/rateRequestService'
+import EditRateDialog from '../../rates/EditRateDialog'
+import { Toast } from '../../rates/rateGrid'
 
 /*
   Internal "Rates" — rates the team can see (lane-linked AND independent), with an
@@ -63,6 +65,9 @@ export default function ReceivedRates() {
   const [error, setError] = useState(null)
   const [filters, setFilters] = useState({}) // { [colId]: string[] }
   const [scope, setScope] = useState('active') // 'active' | 'historic'
+  // Correcting a mistyped rate — distinct from a price CHANGE, which is a new rate, not an edit.
+  const [editing, setEditing] = useState(null)
+  const [toast, setToast] = useState(null)
 
   const historic = scope === 'historic'
   // Status facet only in Historic (in Active everything is active).
@@ -101,7 +106,7 @@ export default function ReceivedRates() {
 
   const hasFilters = filterCols.some((col) => (filters[col.id] ?? []).length > 0)
   const clearFilters = () => setFilters({})
-  const colSpan = filterCols.length + 4 // facet cols + Rate, Free Days, Valid Until, Notes
+  const colSpan = filterCols.length + 5 // facet cols + Rate, Free Days, Valid Until, Notes, edit
 
   return (
     <div className="space-y-6">
@@ -189,6 +194,7 @@ export default function ReceivedRates() {
                 <th className="px-3 py-2.5 text-right font-semibold"># of Free Days</th>
                 <th className="px-3 py-2.5 font-semibold">Valid Until</th>
                 <th className="px-3 py-2.5 font-semibold">Notes</th>
+                <th className="px-3 py-2.5 font-semibold" />
               </tr>
             </thead>
             <tbody>
@@ -216,12 +222,38 @@ export default function ReceivedRates() {
                     <td className="px-3 py-2.5 text-right font-mono text-harbor-700">{r.free_days ?? '—'}</td>
                     <td className="px-3 py-2.5 font-mono text-harbor-700">{fmtDate(r.valid_until)}</td>
                     <td className="px-3 py-2.5 text-fog-500">{r.notes ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <button
+                        onClick={() => setEditing(r)}
+                        title="Correct this rate"
+                        className="rounded-md p-1 text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
+                      >
+                        <PencilLine size={14} />
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
         </ScrollTable>
       )}
+
+      {editing && (
+        <EditRateDialog
+          table="rates"
+          rate={editing}
+          label={`${editing.forwarder?.name ?? 'Rate'} · ${editing.pol ?? '—'} → ${editing.fd ?? editing.pod ?? '—'}`}
+          onClose={() => setEditing(null)}
+          onSaved={(changes, warning) => {
+            setToast({
+              severity: warning ? 'warning' : 'success',
+              message: warning ?? `Saved ${changes.length} change${changes.length === 1 ? '' : 's'}.`,
+            })
+            load()
+          }}
+        />
+      )}
+      <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   )
 }

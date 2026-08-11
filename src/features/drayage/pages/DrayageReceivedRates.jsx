@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { Loader2, LineChart, RefreshCw, History, RotateCcw } from 'lucide-react'
+import { Loader2, LineChart, RefreshCw, History, RotateCcw, PencilLine } from 'lucide-react'
 import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimitives'
 import { Toast } from '../../rates/rateGrid'
 import { fetchDrayageRates, requestDrayageRefresh, stalenessOf } from '../services/drayageService'
 import { StalenessBadge, money, pct, fmtDate } from '../drayageGrid'
+import EditRateDialog from '../../rates/EditRateDialog'
 import { useAuth } from '../../../app/providers/AuthProvider'
 
 /*
@@ -21,6 +22,9 @@ export default function DrayageReceivedRates() {
   const [error, setError] = useState(null)
   const [refreshing, setRefreshing] = useState(null)
   const [toast, setToast] = useState(null)
+  // Correcting a mistyped rate IN PLACE. Distinct from Refresh, which asks the forwarder for a
+  // new price and creates a new rate — a typo is not a price change and must not look like one.
+  const [editing, setEditing] = useState(null)
 
   const showToast = (severity, message) => {
     setToast({ severity, message })
@@ -136,11 +140,32 @@ export default function DrayageReceivedRates() {
                       Refresh
                     </button>
                   )}
+                  <button
+                    onClick={() => setEditing(r)}
+                    title="Correct a mistyped value on this rate"
+                    className="ml-1 rounded-md p-1 align-middle text-fog-400 transition-colors hover:bg-harbor-50 hover:text-harbor-700"
+                  >
+                    <PencilLine size={13} />
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </ScrollTable>
+      )}
+
+      {editing && (
+        <EditRateDialog
+          table="drayage_rates"
+          rate={editing}
+          label={`${editing.forwarder?.name ?? 'Rate'} · ${editing.drayage_lane ?? '—'}`}
+          onClose={() => setEditing(null)}
+          onSaved={(changes, warning) => {
+            showToast(warning ? 'warning' : 'success',
+              warning ?? `Saved ${changes.length} change${changes.length === 1 ? '' : 's'}.`)
+            load()
+          }}
+        />
       )}
 
       <Toast toast={toast} onClose={() => setToast(null)} />
