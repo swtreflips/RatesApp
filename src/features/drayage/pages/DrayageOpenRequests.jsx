@@ -5,6 +5,7 @@ import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimiti
 import { Toast } from '../../rates/rateGrid'
 import { fetchDrayageOpenRequests } from '../services/drayageService'
 import SendModal from '../../internal/components/SendModal'
+import { fmtDate } from '../../../lib/dates'
 
 /*
   Internal "Open Drayage Requests" — active drayage lanes still within their request TTL,
@@ -17,7 +18,6 @@ function daysLeft(expiresAt) {
   return Math.max(0, Math.ceil(ms / 86_400_000))
 }
 
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—')
 const rateCount = (lane) => lane.drayage_rates?.[0]?.count ?? 0
 
 export default function DrayageOpenRequests() {

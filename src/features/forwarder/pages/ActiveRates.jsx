@@ -4,6 +4,7 @@ import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimiti
 import { fetchActiveRates } from '../services/submissionService'
 import EditRateDialog from '../../rates/EditRateDialog'
 import { Toast } from '../../rates/rateGrid'
+import { fmtDate } from '../../../lib/dates'
 
 /*
   Provider View 2 — "Active Rates" (STEP 0 follow-on / PROVIDER_VIEW_MODEL §4).
@@ -16,10 +17,6 @@ import { Toast } from '../../rates/rateGrid'
 function fmtMoney(amount, currency) {
   if (amount == null) return '—'
   return `${currency || 'USD'} ${Number(amount).toLocaleString()}`
-}
-
-function fmtDate(d) {
-  return d ? new Date(d).toLocaleDateString() : '—'
 }
 
 export default function ActiveRates() {

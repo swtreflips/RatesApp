@@ -143,7 +143,7 @@ export function previewTotal(row) {
    Hoisted here (next to StalenessBadge) so there's one definition, not a copy per page. */
 export const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 export const pct = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(2)}%`)
-export const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—')
+export { fmtDate } from '../../lib/dates'   // DATE columns must not round-trip through UTC
 
 const numCol = (field, headerName, width = 92) => ({
   field, headerName, width, editable: true, type: 'number', cellClassName: 'font-mono',

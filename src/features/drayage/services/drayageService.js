@@ -1,4 +1,5 @@
 import { supabase } from '../../../lib/supabase'
+import { toDateString as toLocalDateString } from '../../../lib/dates'
 
 /*
   Drayage data access (DRAY.md §6). Differs from ocean in three structural ways:
@@ -66,11 +67,9 @@ function toNumber(v) {
 // toDateString). Kept OUT of the insert object entirely when null (see buildRate) rather than
 // passed as null, since provided_at is NOT NULL DEFAULT current_date: an explicit null would
 // violate the constraint, while an omitted key lets the default apply.
-function toDateString(v) {
-  if (!v) return null
-  const d = v instanceof Date ? v : new Date(v)
-  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
-}
+// Local calendar parts, never toISOString(): a picked day has no timezone, and converting it
+// to an instant shifted it back a day for anyone east of UTC. See lib/dates.js.
+const toDateString = toLocalDateString
 
 /** Fuel % as typed → fraction. Forwarders think "34", the DB stores 0.34 (§6d). */
 function toPctFraction(v) {

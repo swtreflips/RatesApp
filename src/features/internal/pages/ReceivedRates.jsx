@@ -5,6 +5,7 @@ import ColumnFilter from '../../../components/ui/ColumnFilter'
 import { fetchReceivedRates } from '../services/rateRequestService'
 import EditRateDialog from '../../rates/EditRateDialog'
 import { Toast } from '../../rates/rateGrid'
+import { fmtDate } from '../../../lib/dates'
 
 /*
   Internal "Rates" — rates the team can see (lane-linked AND independent), with an
@@ -22,10 +23,6 @@ const isExpired = (r) => Boolean(r.valid_until) && r.valid_until < TODAY
 function fmtMoney(amount, currency) {
   if (amount == null) return '—'
   return `${currency || 'USD'} ${Number(amount).toLocaleString()}`
-}
-
-function fmtDate(d) {
-  return d ? new Date(d).toLocaleDateString() : '—'
 }
 
 function StatusBadge({ expired }) {

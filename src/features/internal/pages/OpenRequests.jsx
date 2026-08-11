@@ -5,6 +5,7 @@ import { PageHeader, ScrollTable } from '../../../components/ui/DashboardPrimiti
 import { Toast } from '../../rates/rateGrid'
 import { fetchOpenRequests } from '../services/rateRequestService'
 import SendModal from '../components/SendModal'
+import { fmtDate } from '../../../lib/dates'
 
 /*
   Requester "Open Requests" — active rate-request lanes still within their 10-day
@@ -16,10 +17,6 @@ import SendModal from '../components/SendModal'
 function daysLeft(expiresAt) {
   const ms = new Date(expiresAt).getTime() - Date.now()
   return Math.max(0, Math.ceil(ms / 86_400_000))
-}
-
-function fmtDate(d) {
-  return d ? new Date(d).toLocaleDateString() : '—'
 }
 
 function rateCount(lane) {

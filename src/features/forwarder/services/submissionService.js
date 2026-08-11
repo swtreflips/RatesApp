@@ -1,5 +1,6 @@
 import { supabase } from '../../../lib/supabase'
 import { normalizeContainerType } from '../../rates/rateGrid'
+import { toDateString as toLocalDateString } from '../../../lib/dates'
 
 /*
   Provider supply-side writes/reads (STEP 0 / S0.5 — the minimal loop).
@@ -76,11 +77,9 @@ async function getIdentity() {
   return { providerId: user.id, forwarderId: profile.forwarder_id }
 }
 
-function toDateString(v) {
-  if (!v) return null
-  const d = v instanceof Date ? v : new Date(v)
-  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
-}
+// Local calendar parts, never toISOString(): a picked day has no timezone, and converting it
+// to an instant shifted it back a day for anyone east of UTC. See lib/dates.js.
+const toDateString = toLocalDateString
 
 function toNumber(v) {
   return v === '' || v == null ? null : Number(v)
