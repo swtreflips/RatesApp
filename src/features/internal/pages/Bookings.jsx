@@ -74,20 +74,25 @@ function CarrierChip({ code }) {
 const OFR_GRID = 'grid grid-cols-[14px_minmax(0,1.5fr)_minmax(0,1.1fr)_58px_54px_58px_88px] items-center gap-2'
 
 /*
-  ── the two views ──────────────────────────────────────────────────────────────────────────
-  Both show the SAME columns; only the grouping differs, which is why the header and row below
-  are one definition used by both. Splitting them would let the views drift, and a rate that
-  reads $3,200 in one and lines up differently in the other is the exact problem this replaced.
+  ── the three views (SKATE.md) ─────────────────────────────────────────────────────────────
+  All three show the SAME columns through the same header and row components below, and the same
+  `renderOfrRows`. Only the GROUPING differs. That is deliberate: three copies of the row would
+  drift, and a rate that reads $3,200 in one view and lines up differently in another is the exact
+  problem the table replaced.
 
-    shipment  one OFQ at a time, expanded on click.   "I have this shipment — what came back?"
-    flat      every rate at once, OFQ as a band.      "Who is cheapest out of here, on anything?"
+    accordion  one OFQ at a time, expanded on click   "this shipment — what came back for it?"
+    flat       every rate at once, OFQ as a band      "who is cheapest out of here, on anything?"
+    cards      every OFQ as its own block             "walk me through the whole list"
+
+  Labels name the SHAPE rather than the job, because the point of the toggle is to compare shapes.
 */
 const VIEWS = [
-  { id: 'shipment', label: 'By shipment' },
-  { id: 'flat', label: 'All rates' },
+  { id: 'accordion', label: 'Accordion' },
+  { id: 'flat', label: 'Flat' },
+  { id: 'cards', label: 'Cards' },
 ]
 
-/** The rate table's header. One definition, so the two views cannot disagree about a column. */
+/** The rate table's header. One definition, so the views cannot disagree about a column. */
 function OfrHeader({ className = '' }) {
   return (
     <div className={`${OFR_GRID} border-b border-fog-200/80 px-2 pb-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-fog-400 ${className}`}>
@@ -490,7 +495,7 @@ export default function Bookings() {
   const [query, setQuery] = useState('')
   // 'shipment' — one OFQ at a time, expanded on click.  'flat' — every rate at once.
   // Same columns either way; only the grouping changes.
-  const [view, setView] = useState('shipment')
+  const [view, setView] = useState('accordion')
   const [expandedOfqId, setExpandedOfqId] = useState(null)
   const [selectedOfrId, setSelectedOfrId] = useState(null)
   const [selectedDrayageId, setSelectedDrayageId] = useState(null)
@@ -676,6 +681,34 @@ export default function Bookings() {
     [expandedOfq, selectedOfr, rankFor],
   )
 
+  /**
+   * One OFQ's rates, cheapest first, as rows — shared by all three views.
+   *
+   * Written once because three copies of the same seven props is three chances for one view to
+   * mark a different row cheapest, or read transit from somewhere else. The views differ in how
+   * they GROUP rates; the rates themselves are the same rates.
+   */
+  const renderOfrRows = useCallback((ofq) => {
+    const sorted = [...ofq.oceanOptions]
+      .sort((a, b) => (toNum(a.rate) ?? Infinity) - (toNum(b.rate) ?? Infinity))
+    // First row with an actual price — not simply the first row. A rate-less option sorts last,
+    // but where every option is rate-less the first row has no price and marking it cheapest
+    // would be a claim about nothing.
+    const cheapestId = sorted.find((o) => toNum(o.rate) != null)?.ofrId ?? null
+    return sorted.map((ofr) => (
+      <OfrRow
+        key={ofr.ofrId}
+        ofr={ofr}
+        rate={toNum(ofr.rate)}
+        drayCount={drayageFor(ofq, ofr).length}
+        transitDays={picks.get(pickKey(ofq.ofqId, ofr.ofrId))?.transit_time_days}
+        cheapest={ofr.ofrId === cheapestId}
+        active={ofr.ofrId === selectedOfrId}
+        onSelect={() => selectOfr(ofq, ofr)}
+      />
+    ))
+  }, [drayageFor, picks, selectedOfrId, rankFor]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const bestGrand = ranked.length ? grandTotal(selectedOfr?.rate, ranked[0]) : null
   const totalOfrs = useMemo(() => ofqs.reduce((n, o) => n + o.oceanOptions.length, 0), [ofqs])
 
@@ -839,8 +872,63 @@ export default function Bookings() {
 
               <div className="overflow-x-auto">
                 <div className="min-w-[720px]">
-                  {/* ── flat: every rate at once, the OFQ demoted to a band ── */}
-                  {view === 'flat' ? (
+                  {/* ── cards: each OFQ its own block, nothing collapsed ──
+                       The OFQ becomes a HEADING rather than a row, which is what it actually is —
+                       a shipment, with the offers against it underneath. Costs vertical space,
+                       so search carries more weight here than in the other two. */}
+                  {view === 'cards' ? (
+                    <div className="space-y-2 p-2.5">
+                      {filteredOfqs.length === 0 && (
+                        <p className="px-4 py-8 text-center text-xs text-fog-400">No OFQs match “{query}”.</p>
+                      )}
+
+                      {filteredOfqs.map((ofq) => {
+                        const lapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
+                        const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
+                        return (
+                          <div key={ofq.ofqId} className="overflow-hidden rounded-xl border border-fog-200">
+                            <div className="border-b border-fog-100 bg-fog-50/70 px-3 py-2">
+                              <div className="flex flex-wrap items-baseline gap-x-2">
+                                <span className="font-mono text-xs font-bold text-harbor-900">{ofq.ofqId}</span>
+                                <span className={`ml-auto font-mono text-[10px] ${lapsed ? 'font-semibold text-signal-600' : 'text-fog-500'}`}>
+                                  {ofq.oceanOptions.length > 0
+                                    ? `${ofq.oceanOptions.length} rate${ofq.oceanOptions.length === 1 ? '' : 's'} · ${covered} covered`
+                                    : lapsed ? 'no valid rates' : 'none applied'}
+                                </span>
+                              </div>
+                              <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-sm font-semibold text-harbor-900">
+                                <span>{ofq.pol || '—'}</span>
+                                <ArrowRight size={12} className="shrink-0 text-fog-400" />
+                                <span>{ofq.fd || '—'}</span>
+                              </p>
+                              <p className="mt-0.5 font-mono text-[10px] text-fog-500">
+                                {ofq.cargoReadyDate ? `ready ${ofq.cargoReadyDate}` : 'no ready date'}
+                                {ofq.containerType || ofq.containerCount
+                                  ? ` · ${ofq.containerCount ? `${ofq.containerCount} × ` : ''}${ofq.containerType || 'container'}`
+                                  : ''}
+                                {ofq.expiredCount > 0 ? ` · ${ofq.expiredCount} expired hidden` : ''}
+                              </p>
+                            </div>
+
+                            <div className="px-3 py-2">
+                              {ofq.oceanOptions.length === 0 ? (
+                                <p className="px-2 py-1 text-[11px] text-fog-500">
+                                  {lapsed
+                                    ? `All ${ofq.expiredCount} rate${ofq.expiredCount === 1 ? '' : 's'} expired — go back out for fresh ones.`
+                                    : 'No ocean rate applied to this OFQ yet.'}
+                                </p>
+                              ) : (
+                                <>
+                                  <OfrHeader />
+                                  {renderOfrRows(ofq)}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : view === 'flat' ? (
                     <>
                       <OfrHeader className="px-3 pt-2.5" />
 
@@ -849,9 +937,6 @@ export default function Bookings() {
                       )}
 
                       {filteredOfqs.map((ofq) => {
-                        const sorted = [...ofq.oceanOptions]
-                          .sort((a, b) => (toNum(a.rate) ?? Infinity) - (toNum(b.rate) ?? Infinity))
-                        const cheapest = sorted.find((o) => toNum(o.rate) != null)?.ofrId ?? null
                         const lapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
                         return (
                           <div key={ofq.ofqId} className="border-b border-fog-100 last:border-0">
@@ -879,24 +964,13 @@ export default function Bookings() {
                             </div>
 
                             <div className="px-3 py-1">
-                              {sorted.length === 0 ? (
+                              {ofq.oceanOptions.length === 0 ? (
                                 <p className="px-2 py-1.5 text-[11px] text-fog-500">
                                   {lapsed
                                     ? `All ${ofq.expiredCount} rate${ofq.expiredCount === 1 ? '' : 's'} expired — go back out for fresh ones.`
                                     : 'No ocean rate applied to this OFQ yet.'}
                                 </p>
-                              ) : sorted.map((ofr) => (
-                                <OfrRow
-                                  key={ofr.ofrId}
-                                  ofr={ofr}
-                                  rate={toNum(ofr.rate)}
-                                  drayCount={drayageFor(ofq, ofr).length}
-                                  transitDays={picks.get(pickKey(ofq.ofqId, ofr.ofrId))?.transit_time_days}
-                                  cheapest={ofr.ofrId === cheapest}
-                                  active={ofr.ofrId === selectedOfrId}
-                                  onSelect={() => selectOfr(ofq, ofr)}
-                                />
-                              ))}
+                              ) : renderOfrRows(ofq)}
                             </div>
                           </div>
                         )
@@ -923,14 +997,8 @@ export default function Bookings() {
                     const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
                     // had rates, all of them expired — real demand with nothing bookable on it
                     const allLapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
-                    // ocean rates cheapest-first (rate ascending; rate-less options last)
-                    const sortedOfrs = isOpen
-                      ? [...ofq.oceanOptions].sort((a, b) => (toNum(a.rate) ?? Infinity) - (toNum(b.rate) ?? Infinity))
-                      : ofq.oceanOptions
-                    // The first row with an actual price. Not simply sortedOfrs[0]: a rate-less
-                    // option sorts last, but if EVERY option is rate-less the first row has no
-                    // price and marking it cheapest would be a claim about nothing.
-                    const cheapestOfrId = sortedOfrs.find((o) => toNum(o.rate) != null)?.ofrId ?? null
+                    // sorting + the cheapest marker live in renderOfrRows, so all three views
+                    // agree about which row is cheapest
                     return (
                       <div key={ofq.ofqId} className="border-b border-fog-100 last:border-0">
                         {/* OFQ row */}
@@ -968,18 +1036,7 @@ export default function Bookings() {
                             ) : (
                               <>
                                 <OfrHeader />
-                                {sortedOfrs.map((ofr) => (
-                                  <OfrRow
-                                    key={ofr.ofrId}
-                                    ofr={ofr}
-                                    rate={toNum(ofr.rate)}
-                                    drayCount={drayageFor(ofq, ofr).length}
-                                    transitDays={picks.get(pickKey(ofq.ofqId, ofr.ofrId))?.transit_time_days}
-                                    cheapest={ofr.ofrId === cheapestOfrId}
-                                    active={ofr.ofrId === selectedOfrId}
-                                    onSelect={() => selectOfr(ofq, ofr)}
-                                  />
-                                ))}
+                                {renderOfrRows(ofq)}
                               </>
                             )}
 

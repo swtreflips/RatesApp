@@ -1,12 +1,16 @@
 # SKATE.md — three layouts for the Bookings OFQ table
 
-**Status:** **1 and 2 are both built, behind a toggle** in the table toolbar — *By shipment* and
-*All rates*. They share one header and one row component (`OfrHeader` / `OfrRow` in
-`Bookings.jsx`), so the columns cannot drift between them. Option 3 is not built.
+**Status:** **All three are built**, behind a toggle in the table toolbar — **Accordion · Flat ·
+Cards**. Pick one by using them; dropping the other two is deleting two branches and two entries
+in `VIEWS`.
 
-Keeping both was not the original plan — §6 anticipated it, and it turned out to be the honest
-way to choose: the two answer different questions, and reading them side by side settles it faster
-than describing them does. Dropping the loser later is deleting one branch and one constant.
+They share one header (`OfrHeader`), one row (`OfrRow`) and one row-builder (`renderOfrRows`) in
+`Bookings.jsx`, so the columns, the sort and the cheapest marker are identical in all three by
+construction. Three copies would have drifted, and a rate that lines up in one view and not
+another is the exact problem this whole change set out to fix.
+
+The toggle labels name the **shape** rather than the job, because comparing shapes is what the
+toggle is for.
 **Scope:** The **initial table only** — the grid where every OFQ is listed. The right-hand
 itinerary panel (sailings, drayage options, landed total) is explicitly out of scope and does not
 change in any of these.
