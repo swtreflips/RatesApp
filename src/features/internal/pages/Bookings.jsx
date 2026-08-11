@@ -59,20 +59,19 @@ function CarrierChip({ code }) {
   )
 }
 
-function CoverageChip({ count }) {
-  if (count > 0) {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1 rounded bg-sea-50 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-sea-700 ring-1 ring-inset ring-sea-200">
-        <Truck size={10} /> {count} drayage
-      </span>
-    )
-  }
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-fog-100 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-fog-500">
-      <PackageX size={10} /> no drayage on file
-    </span>
-  )
-}
+/* CoverageChip lived here and rendered "3 drayage" / "no drayage on file" beside each rate card.
+   It does not survive the move to a table: the empty state alone is 18 characters, which is wider
+   than the column it would sit in and wider than the number it is qualifying. The Drayage column
+   now carries the count itself, with the header supplying the noun the chip used to repeat. */
+
+/*
+  Column track for the rate sub-table, shared by its header and its rows so they cannot drift.
+  A single definition is the whole point: the previous cards were a flex row, so the rate column
+  only lined up by accident, and stopped lining up the moment a forwarder name got longer.
+
+    marker · routing · forwarder · carrier · transit · drayage · rate
+*/
+const OFR_GRID = 'grid grid-cols-[14px_minmax(0,1.5fr)_minmax(0,1.1fr)_58px_54px_58px_88px] items-center gap-2'
 
 /** One stop on the itinerary. `accent` colors the dot; children render the leg BELOW the stop. */
 function TimelineStop({ label, place, accent = 'bg-harbor-400', last = false, children }) {
@@ -756,6 +755,10 @@ export default function Bookings() {
                     const sortedOfrs = isOpen
                       ? [...ofq.oceanOptions].sort((a, b) => (toNum(a.rate) ?? Infinity) - (toNum(b.rate) ?? Infinity))
                       : ofq.oceanOptions
+                    // The first row with an actual price. Not simply sortedOfrs[0]: a rate-less
+                    // option sorts last, but if EVERY option is rate-less the first row has no
+                    // price and marking it cheapest would be a claim about nothing.
+                    const cheapestOfrId = sortedOfrs.find((o) => toNum(o.rate) != null)?.ofrId ?? null
                     return (
                       <div key={ofq.ofqId} className="border-b border-fog-100 last:border-0">
                         {/* OFQ row */}
@@ -791,41 +794,74 @@ export default function Bookings() {
                                   : 'No ocean rate applied to this OFQ yet — apply one first, then plan the delivery here.'}
                               </p>
                             ) : (
-                              sortedOfrs.map((ofr) => {
-                                const active = ofr.ofrId === selectedOfrId
-                                const drayCount = drayageFor(ofq, ofr).length
-                                return (
-                                  <button
-                                    key={ofr.ofrId}
-                                    onClick={() => selectOfr(ofq, ofr)}
-                                    className={[
-                                      'flex w-full items-center gap-3 rounded-lg border bg-white px-3 py-2 text-left transition-all',
-                                      active
-                                        ? 'border-signal-400 shadow-signal ring-1 ring-signal-300'
-                                        : 'border-fog-200 hover:border-harbor-300 hover:shadow-card',
-                                    ].join(' ')}
-                                  >
-                                    <Ship size={14} className={`shrink-0 ${active ? 'text-sea-600' : 'text-sea-500'}`} />
-                                    <span className="flex min-w-0 flex-1 flex-col">
-                                      <span className="flex flex-wrap items-center gap-x-1 text-xs font-semibold text-harbor-900">
-                                        <span className="truncate">{ofr.pol || ofq.pol || '—'}</span>
-                                        <ArrowRight size={10} className="text-fog-400" />
+                              <>
+                                {/* The rates are a TABLE, not cards. Rate is the value being
+                                    compared, and in a flex card it landed wherever the content
+                                    before it pushed it — so the one number you are reading did
+                                    not line up between two rates on the same quote. */}
+                                <div className={`${OFR_GRID} border-b border-fog-200/80 px-2 pb-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-fog-400`}>
+                                  <span />
+                                  <span>Routing</span>
+                                  <span>Forwarder</span>
+                                  <span>Carrier</span>
+                                  <span className="text-right">Transit</span>
+                                  <span className="text-right">Drayage</span>
+                                  <span className="text-right">Rate</span>
+                                </div>
+
+                                {sortedOfrs.map((ofr) => {
+                                  const active = ofr.ofrId === selectedOfrId
+                                  const drayCount = drayageFor(ofq, ofr).length
+                                  const rate = toNum(ofr.rate)
+                                  const pick = picks.get(pickKey(ofq.ofqId, ofr.ofrId))
+                                  return (
+                                    <button
+                                      key={ofr.ofrId}
+                                      onClick={() => selectOfr(ofq, ofr)}
+                                      title={ofr.validUntil ? `valid until ${ofr.validUntil}` : undefined}
+                                      className={[
+                                        OFR_GRID,
+                                        'w-full rounded px-2 py-1.5 text-left transition-colors',
+                                        active ? 'bg-signal-50 ring-1 ring-inset ring-signal-300' : 'hover:bg-white',
+                                      ].join(' ')}
+                                    >
+                                      {/* cheapest, marked rather than merely sorted first — the
+                                          answer should be readable without trusting the order */}
+                                      <span className="text-center text-[10px] leading-none text-signal-600">
+                                        {ofr.ofrId === cheapestOfrId ? '◆' : ''}
+                                      </span>
+
+                                      <span className="flex min-w-0 items-center gap-1 text-xs text-harbor-900">
                                         <span className="truncate">{ofr.pod || '—'}</span>
-                                        <ArrowRight size={10} className="text-fog-400" />
+                                        <ArrowRight size={9} className="shrink-0 text-fog-400" />
                                         <span className="truncate text-sea-700">{ofr.lastCy || '—'}</span>
                                       </span>
-                                      <span className="mt-0.5 truncate font-mono text-[10px] text-fog-500">
-                                        {ofr.forwarder || '—'}{ofr.validUntil ? ` · until ${ofr.validUntil}` : ''}
+
+                                      <span className="truncate text-xs text-harbor-800">{ofr.forwarder || '—'}</span>
+
+                                      <span className="min-w-0">
+                                        <CarrierChip code={ofr.carrier} />
                                       </span>
-                                    </span>
-                                    <CarrierChip code={ofr.carrier} />
-                                    <CoverageChip count={drayCount} />
-                                    <span className="w-20 shrink-0 text-right font-mono text-sm font-bold text-harbor-900">
-                                      {toNum(ofr.rate) == null ? '—' : money(toNum(ofr.rate))}
-                                    </span>
-                                  </button>
-                                )
-                              })
+
+                                      {/* Empty until a sailing is picked. The dash marks a rate
+                                          whose timing is still unknown — a prompt, not a gap. */}
+                                      <span className="text-right font-mono text-[11px] text-harbor-700">
+                                        {pick?.transit_time_days != null ? `${pick.transit_time_days}d` : '—'}
+                                      </span>
+
+                                      <span className="text-right font-mono text-[11px]">
+                                        {drayCount > 0
+                                          ? <span className="text-sea-700">{drayCount}</span>
+                                          : <span className="text-fog-400">none</span>}
+                                      </span>
+
+                                      <span className="text-right font-mono text-sm font-bold tabular-nums text-harbor-900">
+                                        {rate == null ? '—' : money(rate)}
+                                      </span>
+                                    </button>
+                                  )
+                                })}
+                              </>
                             )}
 
                             {/* Says why the list is shorter than the file. Without this, a rate a
