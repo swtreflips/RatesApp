@@ -28,6 +28,9 @@ import { buildOutputRows, downloadCsv } from '../applyRates/outputCsv'
 // decide) and summarized in one line instead; these are their display labels.
 const HIDDEN_STATUS_LABELS = {
   no_pol_match: 'no POL match',
+  // Rates exist out of this port, just not for this box size — a different problem with a
+  // different fix (ask the forwarders already quoting the lane for this size).
+  no_container_match: 'no rate for this box size',
   no_cy_in_range: 'no CY in range',
   no_last_cy: 'no Last CY on rates',
   no_destination: 'no destination',

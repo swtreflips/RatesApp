@@ -2,8 +2,10 @@
   Apply Rates — pure matching engine. No I/O: geo calls are injected (see geoBatch.js),
   Supabase rows come in as plain data, so every rule here is unit-testable.
 
-  The matching unit is the LANE — a unique (POL, Final Destination) pair shared by one
-  or more OFQs. A lane's result is EVERY qualifying ROUTE — a (Port of Discharge, Last CY)
+  The matching unit is the LANE — a unique (POL, Final Destination, CONTAINER SIZE) triple shared
+  by one or more OFQs. Box size is part of the lane rather than a filter on it: a 20' move and a
+  40' HC move out of the same port to the same door are different products at different prices,
+  so they must not share a lane or the routes qualified for it. A lane's result is EVERY qualifying ROUTE — a (Port of Discharge, Last CY)
   pair — sorted by drayage miles ascending; the user picks which ones to apply in the review
   matrix, and the per-OFQ already-applied skip happens at output build (outputCsv.js).
 
@@ -12,13 +14,15 @@
   they can never change which yards qualify. That's why one Last CY serving three PODs yields
   three routes with identical miles, instead of one chip that hides the ocean routing.
 
-  Identity: a rate is unique per (Forwarder, POL, POD, Last CY, Carrier, Rate, Valid Until).
+  Identity: a rate is unique per (Forwarder, POL, POD, Last CY, Carrier, CONTAINER SIZE, Rate,
+  Valid Until).
   Both DB rates and the input file's already-applied rows are hashed through rateKey() so
   they compare equal despite formatting drift ($2,432.00 vs 2432; 7/29/2026 vs 2026-07-29).
   Carrier is part of that identity: who moves the box is part of what was quoted.
 */
 
 import { getThresholds, MAX_STAGE2_ROUTES_PER_OFQ } from './config'
+import { canonicalContainer, DEFAULT_CONTAINER_CODE } from '../../../lib/containerType'
 
 export const norm = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 
@@ -49,8 +53,18 @@ export const normDate = (v) => {
   return s.toLowerCase() // unknown format — key it as-is rather than dropping it
 }
 
-export const rateKey = ({ forwarder, pol, pod, lastCy, carrier, rate, validUntil }) =>
-  [norm(forwarder), norm(pol), norm(pod), norm(lastCy), norm(carrier), normRate(rate), normDate(validUntil)].join('|')
+/*
+  CONTAINER TYPE IS PART OF THIS KEY. It was missing, and its absence was a silent data loss:
+  two rates identical but for box size hashed the same, so dedupeRates() kept whichever came
+  first and dropped the other. A 20' quote could disappear because a 40' HC quote from the same
+  forwarder on the same routing at the same price happened to sort ahead of it.
+
+  That is exactly what BIDDING.md §6 means by box size being part of a rate's identity — the
+  smaller box occupies less slot space and is priced separately.
+*/
+export const rateKey = ({ forwarder, pol, pod, lastCy, carrier, container, rate, validUntil }) =>
+  [norm(forwarder), norm(pol), norm(pod), norm(lastCy), norm(carrier),
+   canonicalContainer(container) ?? '', normRate(rate), normDate(validUntil)].join('|')
 
 // DB rate row (fetchActiveRates shape) → uniqueness key
 export const keyFromDbRate = (r) => rateKey({
@@ -59,6 +73,7 @@ export const keyFromDbRate = (r) => rateKey({
   pod: r.pod,
   lastCy: r.last_cy,
   carrier: r.carrier,
+  container: r.container_type,
   rate: r.rate_amount,
   validUntil: r.valid_until,
 })
@@ -108,12 +123,22 @@ export function dedupeRates(rates) {
   return out
 }
 
-// Deduped rates → Map<normalized POL, rates[]> for candidate lookup.
+/*
+  Deduped rates → Map<`${POL}|${containerCode}`, rates[]>.
+
+  Box size is in the lookup key rather than filtered afterwards so a lane can never see a rate for
+  a different box: a 20' OFQ asks for 20' candidates and simply gets none if there are none, which
+  is the honest answer. A rate whose container_type is unreadable is indexed under the 40' HC
+  standard, matching how a blank column has always been resolved on write.
+*/
+export const ratesIndexKey = (pol, container) =>
+  `${norm(pol)}|${canonicalContainer(container) ?? DEFAULT_CONTAINER_CODE}`
+
 export function indexRatesByPol(rates) {
   const byPol = new Map()
   for (const r of rates) {
-    const k = norm(r.pol)
-    if (!k) continue
+    if (!norm(r.pol)) continue
+    const k = ratesIndexKey(r.pol, r.container_type)
     if (!byPol.has(k)) byPol.set(k, [])
     byPol.get(k).push(r)
   }
@@ -124,7 +149,8 @@ export const metersToMiles = (m) => m / 1609.344
 
 // Lane identity — THE key shared by inputCsv (deriveLanes), outputCsv (buildOutputRows)
 // and the review matrix, so a lane never means two different things.
-export const laneKeyOf = (pol, fd) => `${norm(pol)}|${norm(fd)}`
+export const laneKeyOf = (pol, fd, container) =>
+  `${norm(pol)}|${norm(fd)}|${canonicalContainer(container) ?? ''}`
 
 /*
   Match ALL lanes with exactly two geo round trips (batch endpoints):
@@ -140,10 +166,20 @@ export const laneKeyOf = (pol, fd) => `${norm(pol)}|${norm(fd)}`
 export async function matchLanesBatch(lanes, ratesByPol, geo) {
   // Phase 0 — pure per-lane prep; lanes that can't be geo-checked resolve immediately.
   const prep = lanes.map((lane) => {
-    const base = { laneKey: lane.laneKey, pol: lane.pol, fd: lane.fd, ofqIds: lane.ofqIds, qualified: [], errors: [] }
+    const base = {
+      laneKey: lane.laneKey, pol: lane.pol, fd: lane.fd,
+      container: lane.container, containerLabel: lane.containerLabel,
+      ofqIds: lane.ofqIds, qualified: [], errors: [],
+    }
     if (!norm(lane.fd)) return { done: { ...base, status: 'no_destination' } }
-    const candidates = ratesByPol.get(norm(lane.pol)) ?? []
-    if (candidates.length === 0) return { done: { ...base, status: 'no_pol_match' } }
+    const candidates = ratesByPol.get(ratesIndexKey(lane.pol, lane.container)) ?? []
+    if (candidates.length === 0) {
+      // Distinguish "we have nothing from this port" from "we have rates but not for this box".
+      // They call for different actions: find a forwarder, versus request this size from the ones
+      // already quoting the lane.
+      const anyBox = [...ratesByPol.keys()].some((k) => k.startsWith(`${norm(lane.pol)}|`))
+      return { done: { ...base, status: anyBox ? 'no_container_match' : 'no_pol_match' } }
+    }
 
     // Two views of the same candidates:
     //   byCy    — distinct Last CYs. GEO USES ONLY THIS (distance is CY→FD; the POD plays no

@@ -16,6 +16,7 @@
 */
 
 import { norm, appliedKey, laneKeyOf } from './matcher'
+import { canonicalContainer, containerLabel } from '../../../lib/containerType'
 
 export function buildApplyHeaderIndex(headerCells) {
   const headers = headerCells.map((h) => norm(h))
@@ -52,6 +53,8 @@ export function buildApplyHeaderIndex(headerCells) {
 
   const index = {
     ofqId: idx('ofqid'),
+    // OFQ-level: the box the customer is quoting for. Rates are filtered to match it.
+    containerType: idx('container type'),
     ofqPol: occurrences('port of loading')[0] ?? -1,
     fd: idx('final destination'),
     ofrId,
@@ -88,7 +91,11 @@ export function groupByOfq(dataRows, index) {
     const fd = cell(cells, index.fd)
     let ofq = map.get(ofqId)
     if (!ofq) {
-      ofq = { ofqId, pol, fd, appliedKeys: new Set(), appliedCount: 0, rowCount: 0 }
+      ofq = {
+        ofqId, pol, fd,
+        containerType: cell(cells, index.containerType),   // '' resolves to the 40' HC standard
+        appliedKeys: new Set(), appliedCount: 0, rowCount: 0,
+      }
       map.set(ofqId, ofq)
     } else if (!warned.has(ofqId) && ((pol && norm(pol) !== norm(ofq.pol)) || (fd && norm(fd) !== norm(ofq.fd)))) {
       warned.add(ofqId)
@@ -117,10 +124,13 @@ export function groupByOfq(dataRows, index) {
 export function deriveLanes(ofqs) {
   const map = new Map()
   for (const o of ofqs) {
-    const key = laneKeyOf(o.pol, o.fd)
+    // Box size is part of the lane, not a detail of it: a 20' move and a 40' HC move on the same
+    // routing need different rates, so they must not share a lane and its qualified routes.
+    const container = canonicalContainer(o.containerType)
+    const key = laneKeyOf(o.pol, o.fd, container)
     let lane = map.get(key)
     if (!lane) {
-      lane = { laneKey: key, pol: o.pol, fd: o.fd, ofqIds: [] }
+      lane = { laneKey: key, pol: o.pol, fd: o.fd, container, containerLabel: containerLabel(o.containerType), ofqIds: [] }
       map.set(key, lane)
     }
     lane.ofqIds.push(o.ofqId)

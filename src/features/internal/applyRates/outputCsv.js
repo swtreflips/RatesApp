@@ -31,7 +31,9 @@ export function buildOutputRows(ofqs, laneResults, discarded) {
   const byLane = new Map(laneResults.map((r) => [r.laneKey, r]))
   const rows = []
   for (const ofq of ofqs) {
-    const lane = byLane.get(laneKeyOf(ofq.pol, ofq.fd))
+    // Box size is part of the lane key, so it has to be supplied here too — without it this
+    // lookup silently matches nothing and every OFQ is skipped.
+    const lane = byLane.get(laneKeyOf(ofq.pol, ofq.fd, ofq.containerType))
     if (!lane || lane.status !== 'matched') continue
     const dropped = discarded.get(lane.laneKey) ?? EMPTY_SET
     for (const route of lane.qualified) {
