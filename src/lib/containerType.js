@@ -21,19 +21,32 @@
   loosely does not produce an approximate answer, it produces a wrong one.
 */
 
-/** The canonical codes. Order is display order. */
+/** The canonical codes used for MATCHING. Internal — never shown, never stored. */
 export const CONTAINER_CODES = ['20GP', '40GP', '40HC', '45HC']
 
 /** The standard box when nothing is stated at all. */
 export const DEFAULT_CONTAINER_CODE = '40HC'
 
-/** Human labels, in the shorthand actually used: GP implied, HC explicit. */
+/**
+ * The four spellings that are STORED and SHOWN — the same strings the database already holds.
+ *
+ * One vocabulary everywhere: what a dropdown offers, what gets written to `container_type`, and
+ * what the UI prints are the same four strings. GP is written out here even though it is implied
+ * in speech, because a stored value that varies by who typed it is what made this need a
+ * normaliser in the first place.
+ */
 export const CONTAINER_LABELS = {
-  '20GP': "20'",
-  '40GP': "40'",
+  '20GP': "20' GP",
+  '40GP': "40' GP",
   '40HC': "40' HC",
   '45HC': "45' HC",
 }
+
+/** The four options, in display order. */
+export const CONTAINER_TYPES = CONTAINER_CODES.map((c) => CONTAINER_LABELS[c])
+
+/** What a blank resolves to, as a stored label. */
+export const DEFAULT_CONTAINER_TYPE = CONTAINER_LABELS[DEFAULT_CONTAINER_CODE]
 
 /**
  * Any spelling → a canonical code.
@@ -71,6 +84,31 @@ export const containerLabel = (value) => {
   const code = canonicalContainer(value)
   return code ? CONTAINER_LABELS[code] : String(value ?? '').trim() || '—'
 }
+
+/**
+ * Any spelling → the string to STORE. This is what goes into `container_type`.
+ *
+ * A blank resolves to the standard rather than being stored as NULL: Postgres treats NULLs as
+ * distinct in a unique index, so two rates for the same box could coexist under different keys if
+ * one left it empty. The stored value is always total.
+ *
+ * A shorthand a forwarder typed — `20'`, `40hc` — is normalised on the way in, so the column never
+ * accumulates variants of the same box that then have to be reconciled on the way out.
+ * Unrecognised text is passed through unchanged rather than forced to a default, so a genuinely
+ * new box type is visible in the data instead of being silently filed as a 40' HC.
+ */
+export function normalizeContainerType(value) {
+  const s = String(value ?? '').trim()
+  if (s === '') return DEFAULT_CONTAINER_TYPE
+  const code = canonicalContainer(s)
+  return code ? CONTAINER_LABELS[code] : s
+}
+
+/** Grid dropdown options. The blank entry is explicit so the default stays visible and reversible. */
+export const CONTAINER_TYPE_OPTIONS = [
+  { value: '', label: `— ${DEFAULT_CONTAINER_TYPE} (default)` },
+  ...CONTAINER_TYPES.map((t) => ({ value: t, label: t })),
+]
 
 /** Do these two spellings mean the same box? Unrecognised never equals anything, including itself. */
 export function sameContainer(a, b) {
