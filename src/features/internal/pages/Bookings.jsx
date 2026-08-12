@@ -60,18 +60,27 @@ function CarrierChip({ code }) {
 }
 
 /* CoverageChip lived here and rendered "3 drayage" / "no drayage on file" beside each rate card.
-   It does not survive the move to a table: the empty state alone is 18 characters, which is wider
-   than the column it would sit in and wider than the number it is qualifying. The Drayage column
-   now carries the count itself, with the header supplying the noun the chip used to repeat. */
+   Drayage coverage is a property of the LANE, so it was identical for every rate sharing a Last CY
+   and repeated itself all the way down. It now appears once per OFQ in the summary line ("9 rates
+   · 3 covered"), in all three views, and the itinerary panel still lists the actual options. */
 
 /*
   Column track for the rate sub-table, shared by its header and its rows so they cannot drift.
   A single definition is the whole point: the previous cards were a flex row, so the rate column
   only lined up by accident, and stopped lining up the moment a forwarder name got longer.
 
-    marker · routing · forwarder · carrier · transit · drayage · rate
+    marker · routing · forwarder · carrier · vessel · ETD · ETA · transit · rate
+
+  THE DRAYAGE COUNT IS GONE from the row. It was answering "can this be trucked at all", which is
+  a property of the LANE and therefore identical for every rate sharing a Last CY — so it repeated
+  itself down the column while the per-OFQ "3 covered" summary already said the same thing once.
+  The itinerary panel is where drayage is actually chosen, and it still lists every option.
+
+  Its width went to the sailing instead: vessel, ETD, ETA and transit are properties of THIS rate's
+  chosen schedule and differ row to row, which is what a column is for.
 */
-const OFR_GRID = 'grid grid-cols-[14px_minmax(0,1.5fr)_minmax(0,1.1fr)_58px_54px_58px_88px] items-center gap-2'
+const OFR_GRID =
+  'grid grid-cols-[14px_minmax(0,1.3fr)_minmax(0,1fr)_52px_minmax(0,1.1fr)_56px_56px_44px_84px] items-center gap-2'
 
 /*
   ── the three views (SKATE.md) ─────────────────────────────────────────────────────────────
@@ -100,8 +109,10 @@ function OfrHeader({ className = '' }) {
       <span>Routing</span>
       <span>Forwarder</span>
       <span>Carrier</span>
+      <span>Vessel</span>
+      <span className="text-right">ETD</span>
+      <span className="text-right">ETA</span>
       <span className="text-right">Transit</span>
-      <span className="text-right">Drayage</span>
       <span className="text-right">Rate</span>
     </div>
   )
@@ -115,7 +126,10 @@ function OfrHeader({ className = '' }) {
  * OFQ's (0 of 128 in the live snapshot), so including it would repeat a value already on screen
  * on every row. What varies between rates is the discharge port and the ramp.
  */
-function OfrRow({ ofr, rate, drayCount, transitDays, cheapest, active, onSelect }) {
+function OfrRow({ ofr, rate, pick, cheapest, active, onSelect }) {
+  // A pinned sailing whose ETD has passed cannot carry the booking any more. Same derive-on-render
+  // rule as everywhere else (schedulesService.hasSailed) — nothing stored, nothing to go stale.
+  const sailed = hasSailed(pick)
   return (
     <button
       onClick={onSelect}
@@ -140,16 +154,26 @@ function OfrRow({ ofr, rate, drayCount, transitDays, cheapest, active, onSelect 
 
       <span className="min-w-0"><CarrierChip code={ofr.carrier} /></span>
 
-      {/* Empty until a sailing is picked. The dash marks a rate whose timing is still unknown —
-          a prompt, not a gap. */}
-      <span className="text-right font-mono text-[11px] text-harbor-700">
-        {transitDays != null ? `${transitDays}d` : '—'}
+      {/* ── the pinned sailing (SAILINGS.md) ──
+          All four are empty until someone picks a sailing in the itinerary panel. The dashes mark
+          rates whose timing is still unknown, which is a prompt rather than a gap — a rate with no
+          schedule is a rate you cannot yet judge on speed. */}
+      <span className="truncate font-mono text-[10px] text-fog-600" title={pick?.mother_vessel || undefined}>
+        {pick?.mother_vessel || <span className="text-fog-300">—</span>}
       </span>
 
-      <span className="text-right font-mono text-[11px]">
-        {drayCount > 0
-          ? <span className="text-sea-700">{drayCount}</span>
-          : <span className="text-fog-400">none</span>}
+      {/* A pinned sailing that has already left is worth seeing, not hiding: it is why this
+          booking has no live plan. */}
+      <span className={`text-right font-mono text-[11px] ${sailed ? 'font-semibold text-signal-600' : 'text-harbor-700'}`}>
+        {pick?.etd ? shortDate(pick.etd) : <span className="text-fog-300">—</span>}
+      </span>
+
+      <span className="text-right font-mono text-[11px] text-harbor-700">
+        {pick?.eta ? shortDate(pick.eta) : <span className="text-fog-300">—</span>}
+      </span>
+
+      <span className="text-right font-mono text-[11px] text-harbor-700">
+        {pick?.transit_time_days != null ? `${pick.transit_time_days}d` : <span className="text-fog-300">—</span>}
       </span>
 
       <span className="text-right font-mono text-sm font-bold tabular-nums text-harbor-900">
@@ -700,8 +724,7 @@ export default function Bookings() {
         key={ofr.ofrId}
         ofr={ofr}
         rate={toNum(ofr.rate)}
-        drayCount={drayageFor(ofq, ofr).length}
-        transitDays={picks.get(pickKey(ofq.ofqId, ofr.ofrId))?.transit_time_days}
+        pick={picks.get(pickKey(ofq.ofqId, ofr.ofrId))}
         cheapest={ofr.ofrId === cheapestId}
         active={ofr.ofrId === selectedOfrId}
         onSelect={() => selectOfr(ofq, ofr)}
@@ -871,7 +894,9 @@ export default function Bookings() {
               </div>
 
               <div className="overflow-x-auto">
-                <div className="min-w-[720px]">
+                {/* Wider than before: the sailing columns earned their space, and this container
+                    already scrolls horizontally rather than squeezing the columns. */}
+                <div className="min-w-[980px]">
                   {/* ── cards: each OFQ its own block, nothing collapsed ──
                        The OFQ becomes a HEADING rather than a row, which is what it actually is —
                        a shipment, with the offers against it underneath. Costs vertical space,
@@ -938,6 +963,9 @@ export default function Bookings() {
 
                       {filteredOfqs.map((ofq) => {
                         const lapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
+                        // Drayage left the rate rows, so the band carries it here exactly as the
+                        // other two views do — coverage is a property of the lane, said once.
+                        const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
                         return (
                           <div key={ofq.ofqId} className="border-b border-fog-100 last:border-0">
                             {/* The band carries everything the OFQ columns carried in the other
@@ -956,7 +984,7 @@ export default function Bookings() {
                               </span>
                               <span className={`ml-auto font-mono text-[10px] ${lapsed ? 'font-semibold text-signal-600' : 'text-fog-500'}`}>
                                 {ofq.oceanOptions.length > 0
-                                  ? `${ofq.oceanOptions.length} rate${ofq.oceanOptions.length === 1 ? '' : 's'}`
+                                  ? `${ofq.oceanOptions.length} rate${ofq.oceanOptions.length === 1 ? '' : 's'} · ${covered} covered`
                                   : lapsed ? 'no valid rates' : 'none applied'}
                                 {ofq.expiredCount > 0 && ofq.oceanOptions.length > 0
                                   ? ` · ${ofq.expiredCount} expired hidden` : ''}
