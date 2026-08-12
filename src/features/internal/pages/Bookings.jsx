@@ -69,18 +69,22 @@ function CarrierChip({ code }) {
   A single definition is the whole point: the previous cards were a flex row, so the rate column
   only lined up by accident, and stopped lining up the moment a forwarder name got longer.
 
-    marker · routing · forwarder · carrier · vessel · ETD · ETA · transit · rate
+    marker · routing · forwarder · carrier · vessel · type · ETD · ETA · transit · rate
+    └────────────── text, left ──────────────┘  └──── numbers + dates, right ────┘
+
+  Text columns first, then everything right-aligned, so the numeric block runs unbroken to Rate.
+  Putting the transport type between Transit and Rate would have split that block with a word.
 
   THE DRAYAGE COUNT IS GONE from the row. It was answering "can this be trucked at all", which is
   a property of the LANE and therefore identical for every rate sharing a Last CY — so it repeated
   itself down the column while the per-OFQ "3 covered" summary already said the same thing once.
   The itinerary panel is where drayage is actually chosen, and it still lists every option.
 
-  Its width went to the sailing instead: vessel, ETD, ETA and transit are properties of THIS rate's
-  chosen schedule and differ row to row, which is what a column is for.
+  Its width went to the sailing instead: vessel, type, ETD, ETA and transit are properties of THIS
+  rate's chosen schedule and differ row to row, which is what a column is for.
 */
 const OFR_GRID =
-  'grid grid-cols-[14px_minmax(0,1.3fr)_minmax(0,1fr)_52px_minmax(0,1.1fr)_56px_56px_44px_84px] items-center gap-2'
+  'grid grid-cols-[14px_minmax(0,1.3fr)_minmax(0,1fr)_52px_minmax(0,1.1fr)_52px_56px_56px_44px_84px] items-center gap-2'
 
 /*
   ── the three views (SKATE.md) ─────────────────────────────────────────────────────────────
@@ -110,6 +114,7 @@ function OfrHeader({ className = '' }) {
       <span>Forwarder</span>
       <span>Carrier</span>
       <span>Vessel</span>
+      <span>Type</span>
       <span className="text-right">ETD</span>
       <span className="text-right">ETA</span>
       <span className="text-right">Transit</span>
@@ -160,6 +165,17 @@ function OfrRow({ ofr, rate, pick, cheapest, active, onSelect }) {
           schedule is a rate you cannot yet judge on speed. */}
       <span className="truncate font-mono text-[10px] text-fog-600" title={pick?.mother_vessel || undefined}>
         {pick?.mother_vessel || <span className="text-fog-300">—</span>}
+      </span>
+
+      {/* Direct vs 1/2/3/4 TS. Coloured because it is a risk read, not just a label — every
+          transhipment is another chance to roll, and it is usually what explains a long transit
+          sitting next to it. Values come from the feed as free text (it already ships 3 TS and
+          4 TS despite the Schedules type declaring only three), so anything unrecognised prints
+          as-is rather than being forced into a bucket. */}
+      <span className={`truncate font-mono text-[10px] ${
+        pick?.transport_type === 'Direct' ? 'font-semibold text-sea-700' : 'text-fog-600'
+      }`}>
+        {pick?.transport_type || <span className="text-fog-300">—</span>}
       </span>
 
       {/* A pinned sailing that has already left is worth seeing, not hiding: it is why this
@@ -895,8 +911,10 @@ export default function Bookings() {
 
               <div className="overflow-x-auto">
                 {/* Wider than before: the sailing columns earned their space, and this container
-                    already scrolls horizontally rather than squeezing the columns. */}
-                <div className="min-w-[980px]">
+                    already scrolls horizontally rather than squeezing the columns. At 1040 the
+                    three flexible columns still get 212 / 163 / 179px — enough for
+                    "Los Angeles → Los Angeles" and a full vessel name without truncating. */}
+                <div className="min-w-[1040px]">
                   {/* ── cards: each OFQ its own block, nothing collapsed ──
                        The OFQ becomes a HEADING rather than a row, which is what it actually is —
                        a shipment, with the offers against it underneath. Costs vertical space,
