@@ -23,6 +23,7 @@
 
 import { getThresholds, MAX_STAGE2_ROUTES_PER_OFQ } from './config'
 import { canonicalContainer, DEFAULT_CONTAINER_CODE } from '../../../lib/containerType'
+import { daysUntil } from '../../../lib/dates'
 
 export const norm = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 
@@ -143,6 +144,41 @@ export function indexRatesByPol(rates) {
     byPol.get(k).push(r)
   }
   return byPol
+}
+
+/*
+  ── runway: how much validity a rate must have left to be worth applying ────────────────────
+
+  "Still valid" and "worth applying" are not the same question, and the pool only answered the
+  first. Mid-period there are rates expiring tomorrow: technically live, and applying one commits
+  a customer to a price that dies before the booking can realistically be made.
+
+  Four days is the default because that is roughly what booking against a rate takes once the
+  quote goes out, is read, and comes back. It is a judgement, not a law — hence the control.
+
+  OPEN-ENDED RATES ALWAYS PASS. A null valid_until means no stated expiry, so it has infinite
+  runway, not zero. Filtering those out would remove the most durable rates in the pool, which is
+  the exact opposite of what a minimum-runway filter is for.
+*/
+export const DEFAULT_MIN_VALID_DAYS = 4
+
+/** Days of validity left; null for open-ended (never expires). */
+export const runwayOf = (rate, from) =>
+  rate.valid_until ? daysUntil(rate.valid_until, from) : null
+
+/**
+ * Rates with at least `minDays` of validity left.
+ *
+ * `minDays <= 0` returns the pool untouched — "no minimum" has to mean no filtering at all, not
+ * a filter that happens to admit everything, so the setting can be switched off cleanly.
+ */
+export function filterByRunway(rates, minDays, from = new Date()) {
+  if (!minDays || minDays <= 0) return rates
+  return rates.filter((r) => {
+    if (!r.valid_until) return true
+    const left = daysUntil(r.valid_until, from)
+    return left != null && left >= minDays
+  })
 }
 
 export const metersToMiles = (m) => m / 1609.344

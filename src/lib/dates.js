@@ -104,6 +104,24 @@ export function parseInputDate(raw) {
   return null
 }
 
+/**
+ * Whole days from today until `v`. Negative when it has passed, 0 when it is today.
+ *
+ * Compared as CALENDAR DAYS, not as elapsed time: a rate valid until tomorrow has one day left
+ * whether it is now 9am or 11pm, because what expires is a date and not a moment. Subtracting the
+ * two dates through Date.UTC does that and sidesteps DST — a naive millisecond difference across a
+ * clock change is 23 or 25 hours and rounds to the wrong day roughly twice a year.
+ *
+ * @returns {number|null} null when there is no date to measure.
+ */
+export function daysUntil(v, from = new Date()) {
+  const target = parseDbDate(v)
+  if (!target) return null
+  const a = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate())
+  const b = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())
+  return Math.round((a - b) / 86400000)
+}
+
 /** DB value → local date string for display. Handles DATE and TIMESTAMP correctly. */
 export function fmtDate(v, opts) {
   const d = parseDbDate(v)

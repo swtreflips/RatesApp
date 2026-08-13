@@ -5,7 +5,9 @@ import { PageHeader, StatCard } from '../../../components/ui/DashboardPrimitives
 import { parseRateFile, DATA_GRID_SX, gridScrollHeight, Toast } from '../../rates/rateGrid'
 import { fetchActiveRates } from '../services/applyRatesService'
 import { buildApplyHeaderIndex, groupByOfq, deriveLanes } from '../applyRates/inputCsv'
-import { dedupeRates, indexRatesByPol, matchLanesBatch } from '../applyRates/matcher'
+import {
+  dedupeRates, indexRatesByPol, matchLanesBatch, filterByRunway, DEFAULT_MIN_VALID_DAYS,
+} from '../applyRates/matcher'
 import { createBatchGeo } from '../applyRates/geoBatch'
 import { buildOutputRows, downloadCsv } from '../applyRates/outputCsv'
 
@@ -87,6 +89,12 @@ export default function ApplyRates() {
   const [discarded, setDiscarded] = useState(() => new Map()) // laneKey → Set<routeKey>
   const [geoStats, setGeoStats] = useState(null)
   const [toast, setToast] = useState(null)
+  // Minimum days of validity a rate must have left to be worth applying. See matcher.js — this
+  // is "worth applying", which is a different question from "still valid".
+  const [minValidDays, setMinValidDays] = useState(DEFAULT_MIN_VALID_DAYS)
+  // What the results on screen were actually matched with. Results computed at 4 days must not
+  // sit under a control reading 7 as though they agreed.
+  const [ranWithMinDays, setRanWithMinDays] = useState(null)
   const fileInputRef = useRef(null)
   const cancelRef = useRef(false)
 
@@ -104,6 +112,13 @@ export default function ApplyRates() {
   }, [])
 
   useEffect(() => { loadRates() }, [loadRates])
+
+  // Filtered here rather than in the query: the pool is already loaded, so changing the threshold
+  // is instant and costs no round trip. The count it produces is the control's own feedback.
+  const eligibleRates = useMemo(
+    () => filterByRunway(activeRates, minValidDays),
+    [activeRates, minValidDays],
+  )
 
   // stop an in-flight run if the page unmounts
   useEffect(() => () => { cancelRef.current = true }, [])
@@ -125,7 +140,7 @@ export default function ApplyRates() {
     setPhase('running')
     setProgress({ pct: 0, label: 'Preparing…' })
 
-    const ratesByPol = indexRatesByPol(dedupeRates(activeRates))
+    const ratesByPol = indexRatesByPol(dedupeRates(eligibleRates))
     // The whole job is two batch POSTs — progress moves per phase, not per lane.
     const geo = createBatchGeo({
       onPhase: (kind, pairCount) => setProgress(kind === 'within'
@@ -139,6 +154,7 @@ export default function ApplyRates() {
     setResults(out)
     setGeoStats({ ...geo.stats })
     setProgress({ pct: 100, label: '' })
+    setRanWithMinDays(minValidDays)
     setPhase('review')
   }
 
@@ -251,6 +267,9 @@ export default function ApplyRates() {
     setResults([])
     setDiscarded(new Map())
     setGeoStats(null)
+    // The threshold itself survives — it is a preference, not part of the run. What it produced
+    // does not, or a fresh upload would inherit a stale "showing N" from the previous file.
+    setRanWithMinDays(null)
     setPhase('idle')
   }
 
@@ -372,7 +391,46 @@ export default function ApplyRates() {
         </button>
         <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" hidden onChange={handleFileUpload} />
 
+        {/* Minimum runway. The live count beside it is the point of the control — you can see what
+            a threshold costs you before spending a match on it. */}
+        <label className="inline-flex items-center gap-2 rounded-lg border border-fog-300 bg-white px-3 py-2 shadow-sm">
+          <span className="text-sm text-harbor-700">Valid at least</span>
+          <input
+            type="number"
+            min="0"
+            max="365"
+            value={minValidDays}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10)
+              setMinValidDays(Number.isFinite(n) && n >= 0 ? n : 0)
+            }}
+            disabled={phase === 'running'}
+            className="w-12 rounded border border-fog-200 bg-fog-50 px-1.5 py-0.5 text-center font-mono text-sm text-harbor-900 outline-none transition-colors focus:border-harbor-400 disabled:opacity-50"
+          />
+          <span className="text-sm text-harbor-700">days</span>
+          {!ratesLoading && !ratesError && (
+            <span className="font-mono text-[11px] text-fog-500">
+              · {eligibleRates.length} of {activeRates.length} rates
+            </span>
+          )}
+        </label>
+
         <div className="flex-1" />
+
+        {/* Changing the threshold after a run does NOT silently re-match: the match spends two
+            batch geo calls, and quietly burning quota because someone nudged a stepper is not a
+            decision the app should take. It also must not leave results computed at 4 days sitting
+            under a control that reads 7 — so the mismatch is stated, with the way to resolve it. */}
+        {phase === 'review' && ranWithMinDays !== null && ranWithMinDays !== minValidDays && (
+          <button
+            className="inline-flex items-center gap-1.5 rounded-lg border border-signal-300 bg-signal-50 px-3 py-2 text-sm font-medium text-signal-900 shadow-sm transition-all hover:bg-signal-100"
+            onClick={() => runMatching(deriveLanes(ofqs))}
+          >
+            <RotateCcw size={15} />
+            Re-match at {minValidDays} days
+            <span className="font-mono text-[11px] text-signal-700">(showing {ranWithMinDays})</span>
+          </button>
+        )}
 
         {phase === 'review' && (
           <>
