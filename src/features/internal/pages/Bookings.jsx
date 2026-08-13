@@ -196,6 +196,43 @@ function OfrHeader({ className = '' }) {
  * OFQ's (0 of 128 in the live snapshot), so including it would repeat a value already on screen
  * on every row. What varies between rates is the discharge port and the ramp.
  */
+/**
+ * The movement, reduced to a single glyph.
+ *
+ * The percentage moved into the tooltip because on a ten-column grid twenty-five numbers competing
+ * with the rates they annotate is noise — you read the board to compare PRICES, and a second set
+ * of figures in the same cell fights that.
+ *
+ * DIRECTION STAYS ON SCREEN, magnitude does not. A neutral mark would be quieter still, but then
+ * every movement looks alike and finding the +38.9% means hovering all twenty-five in turn — which
+ * is the scan this feature exists to provide. The glyph answers "where do I look"; the hover
+ * answers "how much". `cursor-help` is what advertises that there is more here.
+ *
+ * The slot is reserved at a fixed width even when empty, so rates stay aligned down the column
+ * whether or not a row has a baseline.
+ */
+function TrendMark({ trend }) {
+  if (!trend) return <span aria-hidden="true" className="inline-block w-2" />
+
+  const held = isHeld(trend.pct)
+  const detail = `was ${money(trend.prevRate)}${trend.prevValidUntil ? ` (valid to ${trend.prevValidUntil})` : ''}`
+
+  return (
+    <span
+      role="img"
+      /* The figure is now ONLY in the tooltip, and `title` alone is not reliably announced —
+         without this the movement would be invisible to a screen reader rather than merely quiet. */
+      aria-label={`rate movement: ${held ? 'held' : formatPct(trend.pct)}, ${detail}`}
+      title={`${held ? 'held' : formatPct(trend.pct)} · ${detail}`}
+      className={`inline-block w-2 cursor-help text-center text-[9px] leading-none ${
+        held ? 'text-fog-300' : trend.pct > 0 ? 'text-red-500' : 'text-sea-600'
+      }`}
+    >
+      {held ? '•' : trend.pct > 0 ? '▲' : '▼'}
+    </span>
+  )
+}
+
 function OfrRow({ ofr, rate, pick, trend, cheapest, active, onSelect }) {
   // A pinned sailing whose ETD has passed cannot carry the booking any more. Same derive-on-render
   // rule as everywhere else (schedulesService.hasSailed) — nothing stored, nothing to go stale.
@@ -257,28 +294,13 @@ function OfrRow({ ofr, rate, pick, trend, cheapest, active, onSelect }) {
         {pick?.transit_time_days != null ? `${pick.transit_time_days}d` : <span className="text-fog-300">—</span>}
       </span>
 
-      {/* The movement lives WITH the rate rather than in its own column: it is a fact about this
-          number, and the table is already ten columns wide. Two lines cost no width.
-
-          Increase reads coral because a buyer's cost went up; a decrease reads sea, the app's
-          existing positive tone. `held` is muted but present — a price that did not move across a
-          renewal is something you act on, so it is a result rather than a gap. */}
-      <span className="flex flex-col items-end leading-tight">
+      {/* Rate and its movement in one cell: the mark is a fact ABOUT this number, and the grid is
+          already ten columns wide. Baseline-aligned so the glyph sits with the digits, not below. */}
+      <span className="flex items-baseline justify-end gap-1">
         <span className="font-mono text-sm font-bold tabular-nums text-harbor-900">
           {rate == null ? '—' : money(rate)}
         </span>
-        {trend && (
-          <span
-            title={`was ${money(trend.prevRate)}${trend.prevValidUntil ? `, valid to ${trend.prevValidUntil}` : ''}`}
-            className={`font-mono text-[10px] tabular-nums ${
-              isHeld(trend.pct) ? 'text-fog-400'
-                : trend.pct > 0 ? 'font-semibold text-red-600'
-                : 'font-semibold text-sea-700'
-            }`}
-          >
-            {isHeld(trend.pct) ? 'held' : `${trend.pct > 0 ? '▲' : '▼'} ${formatPct(trend.pct).replace(/^[+−]/, '')}`}
-          </span>
-        )}
+        <TrendMark trend={trend} />
       </span>
     </button>
   )
