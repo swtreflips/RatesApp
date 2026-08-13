@@ -224,8 +224,17 @@ function TrendMark({ trend }) {
          without this the movement would be invisible to a screen reader rather than merely quiet. */
       aria-label={`rate movement: ${held ? 'held' : formatPct(trend.pct)}, ${detail}`}
       title={`${held ? 'held' : formatPct(trend.pct)} · ${detail}`}
+      /*
+        Raw red/green rather than the `sea` token: sea is the app's positive ramp but it is
+        teal-leaning in maritime (#178072) and atlas, and a teal down-arrow does not read as "this
+        got cheaper" — red/green is the one colour convention a rates buyer already has.
+
+        600/700 rather than 500/600: at 9px this glyph carries meaning, and red-500 measured
+        3.76:1 on white, under the 4.5:1 floor. These are 4.83:1 and 5.02:1 — close enough in
+        weight that neither direction shouts louder than the other.
+      */
       className={`inline-block w-2 cursor-help text-center text-[9px] leading-none ${
-        held ? 'text-fog-300' : trend.pct > 0 ? 'text-red-500' : 'text-sea-600'
+        held ? 'text-fog-400' : trend.pct > 0 ? 'text-red-600' : 'text-green-700'
       }`}
     >
       {held ? '•' : trend.pct > 0 ? '▲' : '▼'}
