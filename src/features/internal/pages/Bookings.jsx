@@ -10,6 +10,9 @@ import { fetchDrayageRates } from '../../drayage/services/drayageService'
 import { buildBookingsHeaderIndex, groupByOfqWithOptions } from '../bookings/inputCsv'
 import { laneKey, toNum, indexDrayageByLane, grandTotal } from '../bookings/matching'
 import { dateVal, startOfToday, applyValidity } from '../bookings/rateValidity'
+// Same operational rule as Apply Rates, same default — a rate you cannot book in time
+// is noise on a screen whose only job is deciding what to book.
+import { DEFAULT_MIN_VALID_DAYS } from '../applyRates/matcher'
 import {
   findSailings, fetchPicks, savePick, clearPick, pickKey, hasSailed, shortDate, tidyPlace,
 } from '../bookings/schedulesService'
@@ -104,6 +107,48 @@ const VIEWS = [
   { id: 'flat', label: 'Flat' },
   { id: 'cards', label: 'Cards' },
 ]
+
+/**
+ * Why an OFQ is showing fewer rates than the file holds.
+ *
+ * The two reasons are never merged. "Expired" is a fact about the rate and there is nothing to do
+ * about it; "under N days" is a consequence of a control the reader set and can unset. Reporting
+ * a single "5 hidden" would tell someone a lane is thin when what is actually true is that they
+ * asked not to see part of it — a decision they can only reverse if they know they made it.
+ *
+ * Returns '' when nothing was hidden, so call sites can append it unconditionally.
+ */
+function hiddenNote(ofq, minRunwayDays) {
+  const parts = []
+  if (ofq.expiredCount > 0) parts.push(`${ofq.expiredCount} expired`)
+  if (ofq.belowRunwayCount > 0) parts.push(`${ofq.belowRunwayCount} under ${minRunwayDays}d`)
+  return parts.length ? ` · ${parts.join(', ')} hidden` : ''
+}
+
+/**
+ * What to say when an OFQ has been emptied by filtering.
+ *
+ * Distinguishes the two dead ends, because the response differs. Everything expired means going
+ * back out for fresh rates. Everything hidden by the runway control means the rates exist and
+ * lowering the threshold brings them back — telling someone to chase new rates in that case sends
+ * them to do work they do not need to do.
+ */
+function emptiedMessage(ofq, minRunwayDays) {
+  const { expiredCount = 0, belowRunwayCount = 0 } = ofq
+  if (expiredCount > 0 && belowRunwayCount > 0) {
+    return `${expiredCount} rate${expiredCount === 1 ? '' : 's'} expired and ${belowRunwayCount} `
+      + `have under ${minRunwayDays} days left — lower the threshold to see those, or go back out for fresh rates.`
+  }
+  if (belowRunwayCount > 0) {
+    return `${belowRunwayCount} rate${belowRunwayCount === 1 ? '' : 's'} still live but with under `
+      + `${minRunwayDays} days left — lower the threshold to see them.`
+  }
+  return `All ${expiredCount} rate${expiredCount === 1 ? '' : 's'} expired — go back out for fresh ones.`
+}
+
+/** True when an OFQ has nothing left to show but did have rates before filtering. */
+const isEmptied = (ofq) =>
+  ofq.oceanOptions.length === 0 && (ofq.expiredCount > 0 || ofq.belowRunwayCount > 0)
 
 /** The rate table's header. One definition, so the views cannot disagree about a column. */
 function OfrHeader({ className = '' }) {
@@ -523,13 +568,16 @@ export default function Bookings() {
   // every render would make "is this expired" a different question each pass; a session left
   // open across midnight is the acceptable cost, and a reload settles it.
   const [asOf] = useState(() => startOfToday())
+  // Minimum days of validity a rate needs to stay on the board. Rates drop off day by day as
+  // their runway shrinks, which is the point: the board should show what is bookable now.
+  const [minRunwayDays, setMinRunwayDays] = useState(DEFAULT_MIN_VALID_DAYS)
 
   // What is on screen = the published snapshot MINUS anything past its Valid Until. The raw
   // snapshot is kept intact (`snapshot.ofqs`) — this is a view of it, not a replacement, so the
   // same stored file answers differently tomorrow without being re-uploaded.
-  const { ofqs, expiredTotal } = useMemo(
-    () => applyValidity(snapshot?.ofqs ?? [], asOf),
-    [snapshot, asOf],
+  const { ofqs, expiredTotal, belowRunwayTotal } = useMemo(
+    () => applyValidity(snapshot?.ofqs ?? [], asOf, minRunwayDays),
+    [snapshot, asOf, minRunwayDays],
   )
 
   const [query, setQuery] = useState('')
@@ -869,9 +917,12 @@ export default function Bookings() {
               icon={Ship}
               accent="sea"
               index={1}
-              hint={expiredTotal > 0
-                ? `${expiredTotal} expired, hidden`
-                : 'all rates in the file are still valid'}
+              hint={expiredTotal + belowRunwayTotal > 0
+                ? [
+                    expiredTotal > 0 ? `${expiredTotal} expired` : null,
+                    belowRunwayTotal > 0 ? `${belowRunwayTotal} under ${minRunwayDays}d` : null,
+                  ].filter(Boolean).join(' · ') + ' hidden'
+                : 'every rate in the file is bookable'}
             />
             <StatCard label="Best landed total" value={bestGrand != null ? money(bestGrand) : '—'} icon={Award} accent="signal" index={2} hint={selectedOfr ? 'cheapest drayage on this routing' : 'pick an ocean rate'} />
           </div>
@@ -890,6 +941,26 @@ export default function Bookings() {
                     className="w-full bg-transparent text-sm text-harbor-900 outline-none placeholder:text-fog-400"
                   />
                 </div>
+
+                {/* Minimum runway. This screen exists to decide what to book, so a rate that
+                    cannot be booked in time is noise — and it drops off on its own as the days
+                    pass rather than needing anyone to prune it. */}
+                <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-fog-200 bg-fog-50 px-2.5 py-1.5">
+                  <CalendarDays size={13} className="text-fog-400" />
+                  <span className="text-xs text-harbor-700">Valid at least</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="365"
+                    value={minRunwayDays}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10)
+                      setMinRunwayDays(Number.isFinite(n) && n >= 0 ? n : 0)
+                    }}
+                    className="w-10 rounded border border-fog-200 bg-white px-1 py-0.5 text-center font-mono text-xs text-harbor-900 outline-none transition-colors focus:border-harbor-400"
+                  />
+                  <span className="text-xs text-harbor-700">days</span>
+                </label>
 
                 {/* Two ways to read the same rates: one shipment at a time, or all of them at
                     once. Neither is right for every question — "what came back for this quote"
@@ -926,7 +997,7 @@ export default function Bookings() {
                       )}
 
                       {filteredOfqs.map((ofq) => {
-                        const lapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
+                        const lapsed = isEmptied(ofq)
                         const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
                         return (
                           <div key={ofq.ofqId} className="overflow-hidden rounded-xl border border-fog-200">
@@ -949,7 +1020,7 @@ export default function Bookings() {
                                 {ofq.containerType || ofq.containerCount
                                   ? ` · ${ofq.containerCount ? `${ofq.containerCount} × ` : ''}${ofq.containerType || 'container'}`
                                   : ''}
-                                {ofq.expiredCount > 0 ? ` · ${ofq.expiredCount} expired hidden` : ''}
+                                {hiddenNote(ofq, minRunwayDays)}
                               </p>
                             </div>
 
@@ -957,7 +1028,7 @@ export default function Bookings() {
                               {ofq.oceanOptions.length === 0 ? (
                                 <p className="px-2 py-1 text-[11px] text-fog-500">
                                   {lapsed
-                                    ? `All ${ofq.expiredCount} rate${ofq.expiredCount === 1 ? '' : 's'} expired — go back out for fresh ones.`
+                                    ? emptiedMessage(ofq, minRunwayDays)
                                     : 'No ocean rate applied to this OFQ yet.'}
                                 </p>
                               ) : (
@@ -980,7 +1051,7 @@ export default function Bookings() {
                       )}
 
                       {filteredOfqs.map((ofq) => {
-                        const lapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
+                        const lapsed = isEmptied(ofq)
                         // Drayage left the rate rows, so the band carries it here exactly as the
                         // other two views do — coverage is a property of the lane, said once.
                         const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
@@ -1004,8 +1075,7 @@ export default function Bookings() {
                                 {ofq.oceanOptions.length > 0
                                   ? `${ofq.oceanOptions.length} rate${ofq.oceanOptions.length === 1 ? '' : 's'} · ${covered} covered`
                                   : lapsed ? 'no valid rates' : 'none applied'}
-                                {ofq.expiredCount > 0 && ofq.oceanOptions.length > 0
-                                  ? ` · ${ofq.expiredCount} expired hidden` : ''}
+                                {ofq.oceanOptions.length > 0 ? hiddenNote(ofq, minRunwayDays) : ''}
                               </span>
                             </div>
 
@@ -1013,7 +1083,7 @@ export default function Bookings() {
                               {ofq.oceanOptions.length === 0 ? (
                                 <p className="px-2 py-1.5 text-[11px] text-fog-500">
                                   {lapsed
-                                    ? `All ${ofq.expiredCount} rate${ofq.expiredCount === 1 ? '' : 's'} expired — go back out for fresh ones.`
+                                    ? emptiedMessage(ofq, minRunwayDays)
                                     : 'No ocean rate applied to this OFQ yet.'}
                                 </p>
                               ) : renderOfrRows(ofq)}
@@ -1042,7 +1112,7 @@ export default function Bookings() {
                     const isOpen = ofq.ofqId === expandedOfqId
                     const covered = ofq.oceanOptions.filter((o) => drayageFor(ofq, o).length > 0).length
                     // had rates, all of them expired — real demand with nothing bookable on it
-                    const allLapsed = ofq.oceanOptions.length === 0 && ofq.expiredCount > 0
+                    const allLapsed = isEmptied(ofq)
                     // sorting + the cheapest marker live in renderOfrRows, so all three views
                     // agree about which row is cheapest
                     return (
@@ -1076,7 +1146,7 @@ export default function Bookings() {
                               <p className="flex items-center gap-1.5 py-1.5 text-xs text-fog-500">
                                 <Ship size={13} className="text-fog-400" />
                                 {allLapsed
-                                  ? `All ${ofq.expiredCount} ocean rate${ofq.expiredCount === 1 ? '' : 's'} on this OFQ have expired — go back out for fresh ones before planning delivery.`
+                                  ? emptiedMessage(ofq, minRunwayDays)
                                   : 'No ocean rate applied to this OFQ yet — apply one first, then plan the delivery here.'}
                               </p>
                             ) : (
@@ -1089,10 +1159,10 @@ export default function Bookings() {
                             {/* Says why the list is shorter than the file. Without this, a rate a
                                 colleague quoted yesterday simply is not there and nobody can tell
                                 whether it lapsed or was never applied. */}
-                            {ofq.oceanOptions.length > 0 && ofq.expiredCount > 0 && (
+                            {ofq.oceanOptions.length > 0 && hiddenNote(ofq, minRunwayDays) && (
                               <p className="flex items-center gap-1.5 pt-1 font-mono text-[10px] text-fog-400">
                                 <CalendarX2 size={11} className="shrink-0" />
-                                {ofq.expiredCount} expired rate{ofq.expiredCount === 1 ? '' : 's'} hidden
+                                {hiddenNote(ofq, minRunwayDays).replace(/^ · /, '')}
                               </p>
                             )}
                           </div>
