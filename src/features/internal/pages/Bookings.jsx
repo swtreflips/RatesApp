@@ -13,6 +13,7 @@ import { dateVal, startOfToday, applyValidity } from '../bookings/rateValidity'
 // Same operational rule as Apply Rates, same default — a rate you cannot book in time
 // is noise on a screen whose only job is deciding what to book.
 import { DEFAULT_MIN_VALID_DAYS } from '../applyRates/matcher'
+import { buildRateTrends, formatPct, isHeld } from '../bookings/rateTrend'
 import {
   findSailings, fetchPicks, savePick, clearPick, pickKey, hasSailed, shortDate, tidyPlace,
 } from '../bookings/schedulesService'
@@ -195,7 +196,7 @@ function OfrHeader({ className = '' }) {
  * OFQ's (0 of 128 in the live snapshot), so including it would repeat a value already on screen
  * on every row. What varies between rates is the discharge port and the ramp.
  */
-function OfrRow({ ofr, rate, pick, cheapest, active, onSelect }) {
+function OfrRow({ ofr, rate, pick, trend, cheapest, active, onSelect }) {
   // A pinned sailing whose ETD has passed cannot carry the booking any more. Same derive-on-render
   // rule as everywhere else (schedulesService.hasSailed) — nothing stored, nothing to go stale.
   const sailed = hasSailed(pick)
@@ -256,8 +257,28 @@ function OfrRow({ ofr, rate, pick, cheapest, active, onSelect }) {
         {pick?.transit_time_days != null ? `${pick.transit_time_days}d` : <span className="text-fog-300">—</span>}
       </span>
 
-      <span className="text-right font-mono text-sm font-bold tabular-nums text-harbor-900">
-        {rate == null ? '—' : money(rate)}
+      {/* The movement lives WITH the rate rather than in its own column: it is a fact about this
+          number, and the table is already ten columns wide. Two lines cost no width.
+
+          Increase reads coral because a buyer's cost went up; a decrease reads sea, the app's
+          existing positive tone. `held` is muted but present — a price that did not move across a
+          renewal is something you act on, so it is a result rather than a gap. */}
+      <span className="flex flex-col items-end leading-tight">
+        <span className="font-mono text-sm font-bold tabular-nums text-harbor-900">
+          {rate == null ? '—' : money(rate)}
+        </span>
+        {trend && (
+          <span
+            title={`was ${money(trend.prevRate)}${trend.prevValidUntil ? `, valid to ${trend.prevValidUntil}` : ''}`}
+            className={`font-mono text-[10px] tabular-nums ${
+              isHeld(trend.pct) ? 'text-fog-400'
+                : trend.pct > 0 ? 'font-semibold text-red-600'
+                : 'font-semibold text-sea-700'
+            }`}
+          >
+            {isHeld(trend.pct) ? 'held' : `${trend.pct > 0 ? '▲' : '▼'} ${formatPct(trend.pct).replace(/^[+−]/, '')}`}
+          </span>
+        )}
       </span>
     </button>
   )
@@ -599,6 +620,17 @@ export default function Bookings() {
     [snapshot, asOf, minRunwayDays],
   )
 
+  /*
+    Movement against the rate each one replaced, from the RAW snapshot — deliberately NOT from
+    `ofqs` above. The baseline is by definition the older rate, so building this from the filtered
+    list would delete exactly what it needs, and silently: the result would just be a smaller Map.
+    It also depends only on the snapshot, so changing the runway control does not recompute it.
+  */
+  const trends = useMemo(
+    () => buildRateTrends(snapshot?.ofqs ?? []),
+    [snapshot],
+  )
+
   const [query, setQuery] = useState('')
   // 'shipment' — one OFQ at a time, expanded on click.  'flat' — every rate at once.
   // Same columns either way; only the grouping changes.
@@ -808,12 +840,13 @@ export default function Bookings() {
         ofr={ofr}
         rate={toNum(ofr.rate)}
         pick={picks.get(pickKey(ofq.ofqId, ofr.ofrId))}
+        trend={trends.get(ofr.ofrId)}
         cheapest={ofr.ofrId === cheapestId}
         active={ofr.ofrId === selectedOfrId}
         onSelect={() => selectOfr(ofq, ofr)}
       />
     ))
-  }, [drayageFor, picks, selectedOfrId, rankFor]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [drayageFor, picks, trends, selectedOfrId, rankFor]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const bestGrand = ranked.length ? grandTotal(selectedOfr?.rate, ranked[0]) : null
   const totalOfrs = useMemo(() => ofqs.reduce((n, o) => n + o.oceanOptions.length, 0), [ofqs])
