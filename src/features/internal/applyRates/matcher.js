@@ -153,14 +153,15 @@ export function indexRatesByPol(rates) {
   first. Mid-period there are rates expiring tomorrow: technically live, and applying one commits
   a customer to a price that dies before the booking can realistically be made.
 
-  Four days is the default because that is roughly what booking against a rate takes once the
-  quote goes out, is read, and comes back. It is a judgement, not a law — hence the control.
+  Three days is the default: roughly what booking against a rate takes once the quote goes out, is
+  read, and comes back. It is a judgement, not a law — hence the control. Shared by Apply Rates and
+  Bookings, so the two screens cannot disagree about what "too soon to book" means.
 
   OPEN-ENDED RATES ALWAYS PASS. A null valid_until means no stated expiry, so it has infinite
   runway, not zero. Filtering those out would remove the most durable rates in the pool, which is
   the exact opposite of what a minimum-runway filter is for.
 */
-export const DEFAULT_MIN_VALID_DAYS = 4
+export const DEFAULT_MIN_VALID_DAYS = 3
 
 /** Days of validity left; null for open-ended (never expires). */
 export const runwayOf = (rate, from) =>

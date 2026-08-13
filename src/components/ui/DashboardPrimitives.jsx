@@ -45,7 +45,15 @@ export function PageHeader({ kicker, title, subtitle, actions }) {
 
 /* ─── Stat card ───────────────────────────────────────────────────────── */
 
-export function StatCard({ label, value, icon: Icon, accent = 'harbor', index = 0, hint }) {
+/**
+ * `control` puts an input INSIDE the card that changes the number above it.
+ *
+ * Unusual for a stat card, and deliberate where the card's value is the direct result of a
+ * setting: cause and effect belong in one place, so pressing the control moves the figure you are
+ * looking at. Rendered in its own div rather than through `hint`, which is a <p> — interactive
+ * elements do not belong inside a paragraph.
+ */
+export function StatCard({ label, value, icon: Icon, accent = 'harbor', index = 0, hint, control }) {
   const a = ACCENT[accent] ?? ACCENT.harbor
   return (
     <div
@@ -70,6 +78,7 @@ export function StatCard({ label, value, icon: Icon, accent = 'harbor', index = 
       {hint && (
         <p className="mt-1.5 text-xs text-fog-500">{hint}</p>
       )}
+      {control && <div className="mt-2.5">{control}</div>}
     </div>
   )
 }

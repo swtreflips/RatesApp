@@ -108,6 +108,25 @@ const VIEWS = [
   { id: 'cards', label: 'Cards' },
 ]
 
+/*
+  Runway presets, not a number field.
+
+  The field asked you to read a sentence, click into a box and type — three steps for a setting
+  with maybe three sensible answers. These are one tap each, and the labels say what they mean
+  rather than needing "valid at least … days" wrapped around them.
+
+  The values are not arbitrary. Rates cluster hard at a period boundary — in the current pool 33
+  sit at one day and nothing else is under seventeen — so anything between about 2 and 14 selects
+  the same set. Presets lose no real precision, and if a number in between ever matters the array
+  is one line.
+*/
+const RUNWAY_PRESETS = [
+  { days: 0, label: 'All' },
+  { days: 3, label: '3d' },
+  { days: 7, label: '7d' },
+  { days: 14, label: '14d' },
+]
+
 /**
  * Why an OFQ is showing fewer rates than the file holds.
  *
@@ -923,6 +942,32 @@ export default function Bookings() {
                     belowRunwayTotal > 0 ? `${belowRunwayTotal} under ${minRunwayDays}d` : null,
                   ].filter(Boolean).join(' · ') + ' hidden'
                 : 'every rate in the file is bookable'}
+              /*
+                The control lives on the card whose number it changes, rather than in the toolbar
+                where it sat between the search box and the view toggle competing with both. Press
+                a preset and the figure above moves — cause and effect in one glance, which the
+                toolbar could never give because the count was three elements away.
+              */
+              control={
+                <div className="inline-flex rounded-lg bg-fog-100 p-0.5" role="group" aria-label="Minimum days of validity">
+                  {RUNWAY_PRESETS.map((p) => (
+                    <button
+                      key={p.days}
+                      onClick={() => setMinRunwayDays(p.days)}
+                      title={p.days === 0
+                        ? 'Show every unexpired rate'
+                        : `Only rates with at least ${p.days} days left`}
+                      className={`rounded-md px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] transition-all ${
+                        minRunwayDays === p.days
+                          ? 'bg-white text-harbor-900 shadow-sm'
+                          : 'text-fog-500 hover:text-harbor-700'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              }
             />
             <StatCard label="Best landed total" value={bestGrand != null ? money(bestGrand) : '—'} icon={Award} accent="signal" index={2} hint={selectedOfr ? 'cheapest drayage on this routing' : 'pick an ocean rate'} />
           </div>
@@ -941,26 +986,6 @@ export default function Bookings() {
                     className="w-full bg-transparent text-sm text-harbor-900 outline-none placeholder:text-fog-400"
                   />
                 </div>
-
-                {/* Minimum runway. This screen exists to decide what to book, so a rate that
-                    cannot be booked in time is noise — and it drops off on its own as the days
-                    pass rather than needing anyone to prune it. */}
-                <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-fog-200 bg-fog-50 px-2.5 py-1.5">
-                  <CalendarDays size={13} className="text-fog-400" />
-                  <span className="text-xs text-harbor-700">Valid at least</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="365"
-                    value={minRunwayDays}
-                    onChange={(e) => {
-                      const n = parseInt(e.target.value, 10)
-                      setMinRunwayDays(Number.isFinite(n) && n >= 0 ? n : 0)
-                    }}
-                    className="w-10 rounded border border-fog-200 bg-white px-1 py-0.5 text-center font-mono text-xs text-harbor-900 outline-none transition-colors focus:border-harbor-400"
-                  />
-                  <span className="text-xs text-harbor-700">days</span>
-                </label>
 
                 {/* Two ways to read the same rates: one shipment at a time, or all of them at
                     once. Neither is right for every question — "what came back for this quote"
