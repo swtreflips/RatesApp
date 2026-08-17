@@ -1,7 +1,7 @@
 import React from 'react'
 import { NavLink } from 'react-router-dom'
+import { BrandMark } from './BrandMark'
 import {
-  Anchor,
   LayoutDashboard,
   FilePlus,
   ClipboardList,
@@ -146,23 +146,9 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
       {/* Faint nautical grid wash */}
       <div className="pointer-events-none absolute inset-0 bg-chart-grid bg-[size:22px_22px] opacity-60" />
 
-      {/* Logo area */}
+      {/* Brand lockup — icon slot stays reserved; see BrandMark */}
       <div className="relative flex h-16 items-center border-b border-white/5 px-4">
-        <div className="flex items-center gap-2.5 overflow-hidden">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-signal-500 text-harbor-950 shadow-signal">
-            <Anchor size={18} strokeWidth={2.25} />
-          </span>
-          {open && (
-            <span className="flex flex-col leading-none">
-              <span className="font-display text-base font-extrabold tracking-tightest text-white">
-                Rates<span className="text-signal-400">App</span>
-              </span>
-              <span className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-harbor-300">
-                Freight Rates
-              </span>
-            </span>
-          )}
-        </div>
+        <BrandMark showText={open} />
       </div>
 
       {/* Role badge */}

@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { Anchor, LogIn } from 'lucide-react'
+import { BrandMark } from '../components/shell/BrandMark'
+import { LogIn } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 /**
@@ -35,18 +36,8 @@ export default function LoginPage() {
 
       <div className="relative w-full max-w-sm">
         {/* Brand lockup */}
-        <div className="mb-8 flex items-center justify-center gap-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-signal-500 text-harbor-950 shadow-signal">
-            <Anchor size={24} strokeWidth={2.25} />
-          </span>
-          <span className="flex flex-col leading-none">
-            <span className="font-display text-3xl font-extrabold tracking-tightest text-white">
-              Rates<span className="text-signal-400">App</span>
-            </span>
-            <span className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-harbor-300">
-              Freight Rate Platform
-            </span>
-          </span>
+        <div className="mb-8 flex items-center justify-center">
+          <BrandMark size="lg" />
         </div>
 
         {/* Card */}

@@ -1,5 +1,5 @@
 import React from 'react'
-import { Anchor } from 'lucide-react'
+import { BrandMark } from './BrandMark'
 
 export default function LoadingScreen() {
   return (
@@ -8,18 +8,8 @@ export default function LoadingScreen() {
       <div className="pointer-events-none absolute inset-0 bg-chart-grid bg-[size:28px_28px] opacity-50" />
 
       <div className="relative flex flex-col items-center gap-6">
-        <div className="flex items-center gap-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-signal-500 text-harbor-950 shadow-signal animate-pulse-soft">
-            <Anchor size={24} strokeWidth={2.25} />
-          </span>
-          <span className="flex flex-col leading-none">
-            <span className="font-display text-3xl font-extrabold tracking-tightest text-white">
-              Rates<span className="text-signal-400">App</span>
-            </span>
-            <span className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-harbor-300">
-              Freight Rate Platform
-            </span>
-          </span>
+        <div className="flex items-center">
+          <BrandMark size="lg" />
         </div>
 
         {/* Sweeping progress rail */}
