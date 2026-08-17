@@ -39,6 +39,8 @@ export default {
         display: 'var(--font-display)',
         sans: 'var(--font-sans)',
         mono: 'var(--font-mono)',
+        // The logotype only. Skin-independent by design — see src/index.css.
+        logo: 'var(--font-logo)',
       },
       letterSpacing: {
         tightest: 'var(--tracking-display)',

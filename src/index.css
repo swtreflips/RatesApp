@@ -8,6 +8,19 @@
    in index.html. Nothing token-shaped belongs in this file: a value defined here cannot be
    varied by a skin, which is exactly the coupling the skin system exists to remove. */
 
+/* ONE EXCEPTION, and it proves the rule by inverting it.
+
+   The logotype face must NOT vary by skin. It is the mark shared with Schedules and Planner, and
+   an identity that changes typeface when you switch theme is not an identity. `--font-display`
+   cannot serve: the skins redefine it as Bricolage Grotesque, IBM Plex, Newsreader and Fraunces
+   depending on which is loaded.
+
+   So this token lives here precisely BECAUSE a skin cannot reach it. Same name in all three apps,
+   so the lockup stays copy-paste portable between them. */
+:root {
+  --font-logo: 'Fraunces', ui-serif, Georgia, serif;
+}
+
 @layer base {
   html {
     @apply antialiased;
