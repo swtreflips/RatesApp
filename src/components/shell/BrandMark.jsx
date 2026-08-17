@@ -1,5 +1,4 @@
 import React from 'react'
-import { Link } from 'react-router-dom'
 
 /**
  * The app's identity lockup — icon slot and wordmark.
@@ -60,18 +59,32 @@ const SIZES = {
   },
 }
 
+/*
+  THE LOCKUP IS A MARK, NOT A CONTROL.
+
+  It used to be a link home. That made it clickable here and in Planner while Schedules — a single
+  screen with no router — stayed plain text, so the cursor told you three different stories: a hand
+  in two apps and a text I-beam in the third. A logo only earns a link when there is somewhere to
+  go, and faking one in Schedules would have meant a full reload that discards the loaded search.
+
+  So it is inert everywhere: default arrow, nothing selectable, nothing to click. `select-none`
+  matters as much as the cursor — dragging across a wordmark and highlighting it is the tell that
+  something is text rather than a mark.
+*/
+
 /**
  * @param {object} props
  * @param {React.ReactNode} [props.icon]  fills the slot and replaces the monogram
  * @param {'sm'|'lg'} [props.size]
  * @param {boolean} [props.showText]      false collapses to the slot alone (collapsed rail)
- * @param {string}  [props.to]            when set, the lockup links home
  */
-export function BrandMark({ icon = null, size = 'sm', showText = true, to, className = '' }) {
+export function BrandMark({ icon = null, size = 'sm', showText = true, className = '' }) {
   const s = SIZES[size] ?? SIZES.sm
 
-  const inner = (
-    <>
+  return (
+    <div
+      className={`flex cursor-default select-none items-center ${s.gap} overflow-hidden ${className}`}
+    >
       <span
         className={[
           'flex shrink-0 items-center justify-center overflow-hidden',
@@ -96,18 +109,6 @@ export function BrandMark({ icon = null, size = 'sm', showText = true, to, class
           <span className="text-signal-400">.</span>
         </span>
       )}
-    </>
-  )
-
-  const shell = `flex items-center ${s.gap} overflow-hidden ${className}`
-
-  // A brand that goes home is the convention; without `to` it stays inert rather than
-  // pretending to be clickable.
-  if (!to) return <div className={shell}>{inner}</div>
-
-  return (
-    <Link to={to} aria-label={`${APP_NAME} — home`} className={`${shell} group`}>
-      {inner}
-    </Link>
+    </div>
   )
 }

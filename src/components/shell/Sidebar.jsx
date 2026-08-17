@@ -148,7 +148,7 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
 
       {/* Brand lockup — icon slot stays reserved; see BrandMark */}
       <div className="relative flex h-16 items-center border-b border-white/5 px-4">
-        <BrandMark showText={open} to={isForwarder ? '/forwarder' : '/internal'} />
+        <BrandMark showText={open} />
       </div>
 
       {/* Role badge */}
