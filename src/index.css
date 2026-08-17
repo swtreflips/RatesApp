@@ -17,9 +17,19 @@
     @apply bg-fog-100 text-harbor-900 font-sans;
   }
 
-  /* Display headings inherit the grotesque + tight tracking by default */
+  /*
+    Headings inherit the body sans and take the tight display tracking.
+
+    They used `font-display`, which on the linen skin is Fraunces — a serif. That made every
+    heading in this app read differently from Schedules and Planner, which are DM Sans throughout,
+    and the three are meant to be modules of one system rather than three products. Body text
+    already matched; the headings were the whole difference in feel.
+
+    Tracking stays on the skin token: it is -0.025em here against -0.02em in the other two, which
+    is imperceptible at heading sizes and keeps the skins able to tune it.
+  */
   h1, h2, h3 {
-    @apply font-display tracking-tightest text-harbor-950;
+    @apply tracking-tightest text-harbor-950;
   }
 
   /* Tabular figures everywhere numbers matter */

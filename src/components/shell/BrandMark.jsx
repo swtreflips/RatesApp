@@ -64,7 +64,16 @@ export function BrandMark({ icon = null, size = 'sm', showText = true, className
 
       {showText && (
         <span className="flex flex-col leading-none">
-          <span className={`font-display font-extrabold tracking-tightest text-white ${s.name}`}>
+          {/*
+            DM Sans at 600, tracked -0.02em — the same three values in all three apps, so the
+            lockups are interchangeable. Deliberately NOT the skin's `tracking-tightest`: that
+            varies from -0.01em to -0.04em across skins, and the one element meant to look
+            identical everywhere should not move when a skin changes.
+
+            Was `font-extrabold` (800), which DM Sans does not ship here — only 400-700 load, so
+            the browser was synthesising it.
+          */}
+          <span className={`font-sans font-semibold tracking-[-0.02em] text-white ${s.name}`}>
             {APP_NAME}
             <span className="text-signal-400">.</span>
           </span>
