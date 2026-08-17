@@ -60,6 +60,20 @@
 /* ── reusable surface + texture utilities ──────────────────────────────── */
 
 @layer utilities {
+  /* A bar shuttling forever, and a mark pulsing forever, are exactly what this setting exists to
+     stop. Both stay VISIBLE and still: the screen should still read as busy rather than as broken,
+     which a disappearing indicator would. Matches the guard in Schedules and Planner. */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-sweep {
+      animation: none;
+      transform: translateX(150%);
+      width: 100%;
+    }
+    .animate-pulse-soft {
+      animation: none;
+    }
+  }
+
   /* Fine grain — layer over dark surfaces for tactile depth */
   .grain::before {
     content: '';
