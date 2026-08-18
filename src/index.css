@@ -19,6 +19,19 @@
    so the lockup stays copy-paste portable between them. */
 :root {
   --font-logo: 'Fraunces', ui-serif, Georgia, serif;
+
+  /* The paper the brand icon sits on, and it belongs to the ARTWORK rather than the theme.
+
+     The icon is a watercolour painted on warm paper, and its own ground is semi-transparent — a
+     vignette that fades out rather than a filled rectangle. Dropped straight onto the dark rail,
+     roughly a fifth of the painting falls below luminance 90 and those shadowed container faces
+     sink into a ground at 71 and below. It read muddy.
+
+     A warm plate lifts the whole thing and, more to the point, is what the painting was made to
+     sit on. It is pinned here rather than taken from `fog-50` because fog is a UI neutral that
+     runs cool in three of the five skins, while the artwork is fixed whichever skin is loaded —
+     same reasoning as `--font-logo` above. */
+  --brand-plate: #f7f0e0;
 }
 
 @layer base {

@@ -106,8 +106,10 @@ export function BrandMark({ icon = null, size = 'sm', showText = true, className
         className={[
           'flex shrink-0 items-center justify-center overflow-hidden',
           s.slot,
-          // Accent wash — no shadow, no solid fill. Doubled against the dark rail.
-          'bg-signal-400/[0.16]',
+          /* Paper, not a wash. The accent tint was right when the slot held a monogram, but the
+             watercolour needs a ground to sit on: a fifth of it falls below luminance 90 and sank
+             into the dark rail. See --brand-plate. */
+          'bg-plate',
         ].join(' ')}
       >
         {icon ?? (
