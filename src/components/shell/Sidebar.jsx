@@ -131,7 +131,18 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
         : internalServiceNav(slug, serviceConfig[slug]),
     }))
 
-  const desktopClasses = open ? 'w-60' : 'w-16'
+  /*
+    THE COLLAPSED RAIL IS SIZED BY THE BRAND SLOT, not the nav icons.
+
+    It was w-16 (64px) with a 16px-padded brand row, which left 32px of usable width. That was fine
+    for a 36px slot only because the slot overflowed quietly into the padding; at 51.84px the aside's
+    `overflow-hidden` started cutting the mark in half.
+
+    72px is not arbitrary: the nav below insets 10px from each rail edge (nav px-2.5), so a 51.84px
+    slot centred in 72px lands at 10.08px and lines up with the icons under it. Sizing the rail to
+    the brand rather than cramming the brand into the rail is what keeps that column straight.
+  */
+  const desktopClasses = open ? 'w-60' : 'w-[4.5rem]'
   const mobileClasses = open
     ? 'fixed inset-y-0 left-0 z-40 w-60 shadow-2xl'
     : 'fixed inset-y-0 left-0 z-40 w-60 -translate-x-full'
@@ -146,8 +157,18 @@ export default function Sidebar({ open, onToggle, isMobile, onNavClick }) {
       {/* Faint nautical grid wash */}
       <div className="pointer-events-none absolute inset-0 bg-chart-grid bg-[size:22px_22px] opacity-60" />
 
-      {/* Brand lockup — icon slot stays reserved; see BrandMark */}
-      <div className="relative flex h-16 items-center border-b border-white/5 px-4">
+      {/*
+        Brand lockup. Open, it keeps the 16px inset that pins the mark to the same spot as
+        Schedules and Planner. Collapsed, the padding goes and the slot centres itself in the
+        narrow rail — 16px of padding either side cannot coexist with a 51.84px slot in a 72px
+        column, and it was the padding, not the width, that did the clipping.
+      */}
+      <div
+        className={[
+          'relative flex h-16 items-center border-b border-white/5',
+          open ? 'px-4' : 'justify-center px-0',
+        ].join(' ')}
+      >
         <BrandMark showText={open} />
       </div>
 
