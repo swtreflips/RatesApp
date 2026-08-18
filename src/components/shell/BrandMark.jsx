@@ -1,4 +1,5 @@
 import React from 'react'
+import freightIcon from '../../assets/freightIcon.png'
 
 /**
  * The app's identity lockup — icon slot and wordmark.
@@ -30,11 +31,13 @@ import React from 'react'
  * The wash is heavier here than in the other two apps: this lockup sits on a dark rail, and an 8%
  * tint that reads clearly on white disappears on #112424.
  *
- * ── The monogram ─────────────────────────────────────────────────────────────────────────────
- * Until real icons exist the slot shows the app's initial, in the logotype face. It stops the
- * reserved space from reading as a gap, gives the collapsed rail something to be, and lets the
- * three apps look like a family before any art is drawn. Pass `icon` and it disappears — that is
- * the whole of its lifecycle, and deleting it later is one conditional.
+ * ── The icon ─────────────────────────────────────────────────────────────────────────────────
+ * The slot held a monogram until the artwork existed; it now holds the container stack. The
+ * reserved space was sized for exactly this, so nothing around it moved when the icon landed.
+ *
+ * This source already carried a real alpha channel, unlike the Schedules artwork, so it needed no
+ * background removal — only a square crop around its content (it was 742x674 with the stack
+ * off-centre) and a resize to 192px, 4x the largest slot.
  */
 
 /** Single source of truth for what this app is called. */
@@ -48,14 +51,12 @@ const SIZES = {
     slot: 'h-9 w-9 rounded-2xl',
     gap: 'gap-2.5',
     name: 'text-base tracking-[-0.005em]',
-    monogram: 'text-[15px]',
   },
   // login and loading, where the lockup is the only thing on screen
   lg: {
     slot: 'h-12 w-12 rounded-[1.15rem]',
     gap: 'gap-3',
     name: 'text-3xl tracking-[-0.02em]',
-    monogram: 'text-xl',
   },
 }
 
@@ -74,7 +75,7 @@ const SIZES = {
 
 /**
  * @param {object} props
- * @param {React.ReactNode} [props.icon]  fills the slot and replaces the monogram
+ * @param {React.ReactNode} [props.icon]  overrides the container artwork in the slot
  * @param {'sm'|'lg'} [props.size]
  * @param {boolean} [props.showText]      false collapses to the slot alone (collapsed rail)
  */
@@ -94,12 +95,9 @@ export function BrandMark({ icon = null, size = 'sm', showText = true, className
         ].join(' ')}
       >
         {icon ?? (
-          <span
-            aria-hidden="true"
-            className={`font-logo font-medium leading-none text-signal-300 ${s.monogram}`}
-          >
-            {APP_NAME.charAt(0)}
-          </span>
+          /* alt="" — the name sits right beside it, so announcing the containers twice adds
+             nothing to a screen reader. */
+          <img src={freightIcon} alt="" className="h-full w-full object-contain" />
         )}
       </span>
 

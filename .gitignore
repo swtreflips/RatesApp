@@ -20,3 +20,7 @@ out.xlsx
 .vercel
 .env*
 .skins-out/
+
+# Design masters. The optimised copies live in src/assets/; the originals are
+# large and only ever needed when re-exporting.
+art/
