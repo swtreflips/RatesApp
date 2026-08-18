@@ -1,5 +1,4 @@
 import React from 'react'
-import freightIcon from '../../assets/freightIcon.png'
 
 /**
  * The app's identity lockup — icon slot and wordmark.
@@ -31,13 +30,14 @@ import freightIcon from '../../assets/freightIcon.png'
  * The wash is heavier here than in the other two apps: this lockup sits on a dark rail, and an 8%
  * tint that reads clearly on white disappears on #112424.
  *
- * ── The icon ─────────────────────────────────────────────────────────────────────────────────
- * The slot held a monogram until the artwork existed; it now holds the container stack. The
- * reserved space was sized for exactly this, so nothing around it moved when the icon landed.
+ * ── The monogram ─────────────────────────────────────────────────────────────────────────────
+ * The slot holds the app's initial in the logotype face while there is no artwork. It stops the
+ * reserved space reading as a gap, gives the collapsed rail something to be, and lets the three
+ * apps look like a family before any icon is drawn. Pass `icon` and it disappears.
  *
- * This source already carried a real alpha channel, unlike the Schedules artwork, so it needed no
- * background removal — only a square crop around its content (it was 742x674 with the stack
- * off-centre) and a resize to 192px, 4x the largest slot.
+ * The container stack lived here and has been withdrawn pending a rethink — which is what this
+ * placeholder is for, and why removing the artwork cost one import and one branch rather than a
+ * redesign.
  */
 
 /** Single source of truth for what this app is called. */
@@ -46,20 +46,17 @@ export const APP_NAME = 'Freight'
 export const APP_DESCRIPTOR = 'Rates & Bookings'
 
 /*
-  SIZE TEST — Freight only, now +44% on the original (two 20% steps).
+  THE AGREED SLOT SIZE — 51.84px in chrome, 69.12px on the gate screens.
 
-  36px -> 43.2 -> 51.84 in the rail; 48 -> 57.6 -> 69.12 on the login and loading screens.
+  Arrived at by two 20% steps from the original 36 / 48, and now shared by all three apps so the
+  mark stays pinned when you switch tabs.
 
-  THE BAR IS THE LIMIT, AND IT IS CLOSE. The brand row is 64px, so a 51.84px slot leaves 6.1px
-  above and below. One more 20% step lands at 62.2px and effectively fills the bar edge to edge,
-  which stops reading as an icon in a header and starts reading as a header made of icon. Going
-  beyond this means raising the bar height too, not just the slot.
+  THE BAR IS THE LIMIT AND IT IS CLOSE. The brand row is 64px, so 51.84 leaves 6.1px above and
+  below. A further 20% lands at 62.2px and fills the bar edge to edge — that stops reading as an
+  icon in a header and starts reading as a header made of icon, so going bigger means raising the
+  bar in all three apps, not just the slot.
 
-  Schedules and Planner are still on 36 / 48, so the three no longer line up across tabs. That is
-  expected while the number is being chosen; whichever value wins gets copied into the other two.
-
-  The radius scales with the box, so the corners keep their proportion — holding a fixed radius
-  while the square grows reads as a shape change rather than a size change.
+  The radius scales with the box; a fixed radius on a growing square reads as a shape change.
 */
 const SIZES = {
   // sidebar / top chrome — originally h-9 w-9 (36px), rounded-2xl
@@ -67,12 +64,14 @@ const SIZES = {
     slot: 'h-[3.24rem] w-[3.24rem] rounded-[1.44rem]',
     gap: 'gap-2.5',
     name: 'text-base tracking-[-0.005em]',
+    monogram: 'text-[1.35rem]',
   },
   // login and loading, where the lockup is the only thing on screen — originally h-12 w-12 (48px)
   lg: {
     slot: 'h-[4.32rem] w-[4.32rem] rounded-[1.66rem]',
     gap: 'gap-3',
     name: 'text-3xl tracking-[-0.02em]',
+    monogram: 'text-[1.8rem]',
   },
 }
 
@@ -91,7 +90,7 @@ const SIZES = {
 
 /**
  * @param {object} props
- * @param {React.ReactNode} [props.icon]  overrides the container artwork in the slot
+ * @param {React.ReactNode} [props.icon]  fills the slot and replaces the monogram
  * @param {'sm'|'lg'} [props.size]
  * @param {boolean} [props.showText]      false collapses to the slot alone (collapsed rail)
  */
@@ -106,16 +105,19 @@ export function BrandMark({ icon = null, size = 'sm', showText = true, className
         className={[
           'flex shrink-0 items-center justify-center overflow-hidden',
           s.slot,
-          /* Paper, not a wash. The accent tint was right when the slot held a monogram, but the
-             watercolour needs a ground to sit on: a fifth of it falls below luminance 90 and sank
-             into the dark rail. See --brand-plate. */
-          'bg-plate',
+          /* Accent wash — no shadow, no solid fill. Doubled against the dark rail, where an 8%
+             tint that reads on white disappears. The warm plate that replaced this belonged to the
+             watercolour; a monogram wants the wash. */
+          'bg-signal-400/[0.16]',
         ].join(' ')}
       >
         {icon ?? (
-          /* alt="" — the name sits right beside it, so announcing the containers twice adds
-             nothing to a screen reader. */
-          <img src={freightIcon} alt="" className="h-full w-full object-contain" />
+          <span
+            aria-hidden="true"
+            className={`font-logo font-medium leading-none text-signal-300 ${s.monogram}`}
+          >
+            {APP_NAME.charAt(0)}
+          </span>
         )}
       </span>
 

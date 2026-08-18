@@ -34,8 +34,6 @@ export default {
         fog: ramp('fog'),
         /* Back-compat alias so any lingering brand-* class keeps working */
         brand: ramp('brand'),
-        /* The paper the brand icon sits on. Skin-independent by design — see src/index.css. */
-        plate: 'var(--brand-plate)',
       },
       fontFamily: {
         display: 'var(--font-display)',
