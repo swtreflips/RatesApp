@@ -46,27 +46,31 @@ export const APP_NAME = 'Freight'
 export const APP_DESCRIPTOR = 'Rates & Bookings'
 
 /*
-  SIZE TEST — Freight only, +20% on the slot.
+  SIZE TEST — Freight only, now +44% on the original (two 20% steps).
 
-  Schedules and Planner are still on the original 36 / 48, so the three lockups no longer line up
-  across tabs: a 43.2px slot centred in the same 64px bar puts its top edge at 10.4px rather than
-  14px, and pushes the wordmark 7.2px right. That is expected while the number is being chosen, and
-  the fix is to copy whichever value wins into the other two.
+  36px -> 43.2 -> 51.84 in the rail; 48 -> 57.6 -> 69.12 on the login and loading screens.
 
-  The radius scales with the box. Holding rounded-2xl while the square grows would quietly make the
-  slot read squarer, which would look like a shape change rather than a size change and muddy the
-  comparison.
+  THE BAR IS THE LIMIT, AND IT IS CLOSE. The brand row is 64px, so a 51.84px slot leaves 6.1px
+  above and below. One more 20% step lands at 62.2px and effectively fills the bar edge to edge,
+  which stops reading as an icon in a header and starts reading as a header made of icon. Going
+  beyond this means raising the bar height too, not just the slot.
+
+  Schedules and Planner are still on 36 / 48, so the three no longer line up across tabs. That is
+  expected while the number is being chosen; whichever value wins gets copied into the other two.
+
+  The radius scales with the box, so the corners keep their proportion — holding a fixed radius
+  while the square grows reads as a shape change rather than a size change.
 */
 const SIZES = {
-  // sidebar / top chrome — was h-9 w-9 (36px), rounded-2xl
+  // sidebar / top chrome — originally h-9 w-9 (36px), rounded-2xl
   sm: {
-    slot: 'h-[2.7rem] w-[2.7rem] rounded-[1.2rem]',
+    slot: 'h-[3.24rem] w-[3.24rem] rounded-[1.44rem]',
     gap: 'gap-2.5',
     name: 'text-base tracking-[-0.005em]',
   },
-  // login and loading, where the lockup is the only thing on screen — was h-12 w-12 (48px)
+  // login and loading, where the lockup is the only thing on screen — originally h-12 w-12 (48px)
   lg: {
-    slot: 'h-[3.6rem] w-[3.6rem] rounded-[1.38rem]',
+    slot: 'h-[4.32rem] w-[4.32rem] rounded-[1.66rem]',
     gap: 'gap-3',
     name: 'text-3xl tracking-[-0.02em]',
   },
